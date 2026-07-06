@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "millsaathi",
+  "main": "src/index.ts",
+  "account_id": "ef20ae515dd30180aeeebf45259f03a5",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    { "pattern": "millsaathi.com", "custom_domain": true },
+    { "pattern": "www.millsaathi.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "millsaathi",
+      "database_id": "dcf0d1b1-0d59-44c2-936b-9e0e76df6aa6",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": { "head_sampling_rate": 1 }
+  }
+}

@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MillSaathi — Operations &amp; ERP for India's mills</title>
+<meta name="description" content="Your mill runs on paper, WhatsApp, and trust in your munshi. MillSaathi tells you where every quintal actually went — gate, weighbridge, lab, saudas, stock and the owner's nightly digest.">
+<meta property="og:title" content="MillSaathi — Operations & ERP for India's mills">
+<meta property="og:description" content="One system that captures reality at the source and reconciles every lot. It doesn't replace Tally. It feeds it the truth.">
+<meta property="og:url" content="https://millsaathi.com/">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23211F1A'/%3E%3Cpath d='M5 19V9.5L12 5l7 4.5V19' stroke='%23E8B93B' stroke-width='2' fill='none' stroke-linejoin='round'/%3E%3Cpath d='M9.5 19v-4h5v4' stroke='%23E8B93B' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  html { scroll-behavior: smooth; }
+  ::selection { background: #211F1A; color: #F6F1E6; }
+  @keyframes ms-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+</style>
+</head>
+<body>
+<div style="--accent: #C0451C; --accent-ink: #9E3714; background: #F6F1E6; color: #211F1A; font-family: 'IBM Plex Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden;">
+
+  <!-- ===================== NAV ===================== -->
+  <header style="position: sticky; top: 0; z-index: 50; background: rgba(246,241,230,.92); backdrop-filter: blur(8px); border-bottom: 1px solid #E2D9C4;">
+    <nav style="max-width: 1220px; margin: 0 auto; padding: 14px clamp(18px,4vw,44px); display: flex; align-items: center; justify-content: space-between; gap: 20px;">
+      <a href="#top" style="display: flex; align-items: center; gap: 11px; text-decoration: none; color: inherit;">
+        <span style="display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; background: #211F1A; border-radius: 7px;">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#E8B93B" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#E8B93B" stroke-width="2" stroke-linecap="round"/><path d="M12 4v3" stroke="#C0451C" stroke-width="2" stroke-linecap="round"/></svg>
+        </span>
+        <span style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -.02em;">MillSaathi</span>
+      </a>
+      <div style="display: flex; align-items: center; gap: clamp(14px,2.4vw,30px); font-weight: 600; font-size: 15px;">
+        <a href="#how" style="text-decoration: none; color: #4A453B;">How it works</a>
+        <a href="#modules" style="text-decoration: none; color: #4A453B;">Modules</a>
+        <a href="#pricing" style="text-decoration: none; color: #4A453B;">Pricing</a>
+        <a href="/app" style="text-decoration: none; color: #4A453B;">Log in</a>
+        <a href="#demo" style="text-decoration: none; color: #F6F1E6; background: var(--accent); padding: 10px 18px; border-radius: 7px; font-weight: 700; box-shadow: 0 1px 0 var(--accent-ink);">Book a demo</a>
+      </div>
+    </nav>
+  </header>
+
+  <div id="top"></div>
+
+  <!-- ===================== HERO ===================== -->
+  <section style="position: relative; background: #211F1A; color: #F6F1E6; padding: clamp(48px,7vw,88px) clamp(18px,4vw,44px) clamp(56px,7vw,96px);">
+    <div style="position: absolute; inset: 0; background-image: linear-gradient(#2C2A24 1px, transparent 1px), linear-gradient(90deg, #2C2A24 1px, transparent 1px); background-size: 46px 46px; opacity: .5; pointer-events: none;"></div>
+    <div style="position: relative; max-width: 1220px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: clamp(32px,5vw,64px); align-items: center;">
+
+      <div style="flex: 1 1 440px; min-width: 300px;">
+        <div style="display: inline-flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #E8B93B; border: 1px solid #4A4436; border-radius: 999px; padding: 7px 15px;">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: #6FA85B; display: inline-block;"></span>
+          Operations &amp; ERP for India's mills
+        </div>
+        <h1 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(34px,5.4vw,60px); line-height: 1.04; letter-spacing: -.025em; margin: 22px 0 0;">
+          Your mill runs on paper, WhatsApp, and trust in your munshi.
+          <span style="color: #E8B93B;">MillSaathi tells you where every quintal actually went.</span>
+        </h1>
+        <p style="font-family: 'Noto Sans Devanagari', sans-serif; font-weight: 600; font-size: clamp(19px,2.6vw,26px); color: #F6F1E6; margin: 20px 0 0; line-height: 1.5;">पता चलेगा माल कहाँ जा रहा है।</p>
+        <p style="font-size: clamp(16px,1.9vw,19px); line-height: 1.6; color: #C8C1B2; max-width: 540px; margin: 18px 0 0; font-weight: 500;">
+          One system that captures reality at the source — weighbridge, lab, gate, production — and reconciles every lot. It doesn't replace Tally. It feeds it the truth.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 14px; margin-top: 30px;">
+          <a href="#demo" style="text-decoration: none; background: var(--accent); color: #F6F1E6; font-weight: 700; font-size: 17px; padding: 15px 26px; border-radius: 8px; box-shadow: 0 2px 0 var(--accent-ink); display: inline-flex; align-items: center; gap: 9px;">
+            Book a demo
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#F6F1E6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a href="/demo" style="text-decoration: none; background: transparent; color: #F6F1E6; font-weight: 700; font-size: 17px; padding: 15px 26px; border-radius: 8px; border: 1.5px solid #55503F;">See a demo mill</a>
+        </div>
+        <p style="font-size: 14px; color: #9A9384; margin: 22px 0 0; font-weight: 500;">Built for rice mills first · Works on any device · Hindi, Telugu &amp; Tamil coming to the mill floor</p>
+      </div>
+
+      <!-- Mass-balance card -->
+      <div style="flex: 1 1 380px; min-width: 300px;">
+        <div style="background: #F6F1E6; color: #211F1A; border-radius: 14px; padding: clamp(20px,2.6vw,28px); box-shadow: 0 24px 60px rgba(0,0,0,.4); border: 1px solid #000;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid #E2D9C4; padding-bottom: 14px;">
+            <div>
+              <div style="font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #8A8272;">Today's mass balance</div>
+              <div style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin-top: 3px;">Sri Venkatesh Rice Mill</div>
+            </div>
+            <div style="font-size: 12px; font-weight: 700; color: #2E5B39; background: #E4EDDF; padding: 5px 9px; border-radius: 6px; white-space: nowrap;">● Live</div>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 16px;">
+            <div>
+              <div style="font-size: 13px; font-weight: 600; color: #6B655A;">Paddy in</div>
+              <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 32px; letter-spacing: -.02em;">1,000 <span style="font-size: 16px; color: #8A8272; font-weight: 600;">qtl</span></div>
+            </div>
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" style="opacity:.4;"><path d="M5 12h14M13 6l6 6-6 6" stroke="#211F1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div style="text-align: right;">
+              <div style="font-size: 13px; font-weight: 600; color: #6B655A;">Accounted out</div>
+              <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 32px; letter-spacing: -.02em;">950 <span style="font-size: 16px; color: #8A8272; font-weight: 600;">qtl</span></div>
+            </div>
+          </div>
+
+          <div style="display: flex; height: 14px; border-radius: 5px; overflow: hidden; margin-top: 16px; border: 1px solid #E2D9C4;">
+            <div style="width: 67%; background: #BE8A16;"></div>
+            <div style="width: 8%; background: #8C6B3F;"></div>
+            <div style="width: 20%; background: #C7BCA0;"></div>
+            <div style="width: 5%; background: #C0451C; animation: ms-pulse 1.8s ease-in-out infinite;"></div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 9px; margin-top: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 15px;">
+              <span style="display: flex; align-items: center; gap: 8px; font-weight: 600;"><span style="width:10px;height:10px;border-radius:2px;background:#BE8A16;"></span>Rice</span>
+              <span style="font-weight: 700;">670 qtl · 67%</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 15px;">
+              <span style="display: flex; align-items: center; gap: 8px; font-weight: 600;"><span style="width:10px;height:10px;border-radius:2px;background:#8C6B3F;"></span>Bran</span>
+              <span style="font-weight: 700;">80 qtl · 8%</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 15px;">
+              <span style="display: flex; align-items: center; gap: 8px; font-weight: 600;"><span style="width:10px;height:10px;border-radius:2px;background:#C7BCA0;"></span>Husk</span>
+              <span style="font-weight: 700;">200 qtl · 20%</span>
+            </div>
+          </div>
+
+          <div style="margin-top: 16px; background: #FBEDE7; border: 1px solid #E6BBAA; border-left: 4px solid #C0451C; border-radius: 8px; padding: 13px 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #8F2E12; font-size: 15px;">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 8v5M12 16.5v.5" stroke="#C0451C" stroke-width="2.2" stroke-linecap="round"/><path d="M10.3 3.9 2.5 18a1.9 1.9 0 0 0 1.7 2.9h15.6a1.9 1.9 0 0 0 1.7-2.9L13.7 3.9a1.9 1.9 0 0 0-3.4 0Z" stroke="#C0451C" stroke-width="1.8"/></svg>
+                Unexplained
+              </span>
+              <span style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 20px; color: #C0451C;">50 qtl · 5.0%</span>
+            </div>
+            <div style="font-size: 13px; color: #8F2E12; font-weight: 600; margin-top: 6px;">≈ ₹1.15 lakh today at ₹2,300/qtl. Flagged for the owner before the shift closes.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ===================== PROBLEM ===================== -->
+  <section id="problem" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #F6F1E6;">
+    <div style="max-width: 1220px; margin: 0 auto;">
+      <div style="max-width: 720px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #C0451C;">The problem</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">The leaks you can't see from the register.</h2>
+        <p style="font-size: clamp(16px,1.8vw,19px); line-height: 1.6; color: #57513F; margin: 16px 0 0; font-weight: 500;">On 2–6% margins, the loss isn't dramatic — it's quiet. A little every lot, every shift, until the season's profit is gone and no one can say where.</p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 40px;">
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em; color: #C0451C;">₹25+ lakh</div>
+          <div style="font-weight: 700; font-size: 17px; margin-top: 10px;">Invisible losses</div>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 7px 0 0; font-weight: 500;">A 3% loss on 1,000 tonnes of paddy a season. It never appears in Tally as a line — it just isn't there.</p>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em; color: #211F1A;">40–60 days</div>
+          <div style="font-weight: 700; font-size: 17px; margin-top: 10px;">Working capital locked</div>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 7px 0 0; font-weight: 500;">Cash tied up in stock and unreconciled lots you can't track godown-by-godown or lot-by-lot.</p>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em; color: #211F1A;">0.5–2%</div>
+          <div style="font-weight: 700; font-size: 17px; margin-top: 10px;">Moisture gamed at the gate</div>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 7px 0 0; font-weight: 500;">Wet paddy weighed and paid for as dry. You're buying water, one truck at a time.</p>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em; color: #211F1A;">Every night</div>
+          <div style="font-weight: 700; font-size: 17px; margin-top: 10px;">Disputes on memory</div>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 7px 0 0; font-weight: 500;">Bag-count and weight arguments settled over WhatsApp and a phone call — never against a record.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== HOW IT WORKS ===================== -->
+  <section id="how" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #EDE5D2; border-top: 1px solid #E2D9C4; border-bottom: 1px solid #E2D9C4;">
+    <div style="max-width: 1220px; margin: 0 auto;">
+      <div style="max-width: 720px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #C0451C;">How it works</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">Captured once, at the source. Never re-typed.</h2>
+        <p style="font-size: clamp(16px,1.8vw,19px); line-height: 1.6; color: #57513F; margin: 16px 0 0; font-weight: 500;">The weight recorded at the bridge is the weight in the purchase, the stock, and the balance sheet. No parallel registers. No end-of-day re-entry into Tally from memory.</p>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin-top: 40px;">
+        <div style="flex: 1 1 150px; min-width: 150px; background: #FFFFFF; border: 1px solid #DCD2BC; border-radius: 11px; padding: 20px 18px; position: relative;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 14px; color: #B5AB92;">01</div>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style="margin: 10px 0 8px;"><path d="M4 21V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v15" stroke="#211F1A" stroke-width="1.8"/><path d="M4 12h16M9 21v-5h6v5" stroke="#211F1A" stroke-width="1.8"/></svg>
+          <div style="font-weight: 700; font-size: 16px;">Gate</div>
+          <p style="font-size: 13.5px; line-height: 1.45; color: #57513F; margin: 5px 0 0; font-weight: 500;">Truck, driver, and lot logged on entry. Nothing enters unrecorded.</p>
+        </div>
+        <div style="flex: 1 1 150px; min-width: 150px; background: #FFFFFF; border: 1px solid #DCD2BC; border-radius: 11px; padding: 20px 18px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 14px; color: #B5AB92;">02</div>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style="margin: 10px 0 8px;"><path d="M12 3v3M5 9h14l-2 7H7L5 9Z" stroke="#211F1A" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 20h16" stroke="#211F1A" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <div style="font-weight: 700; font-size: 16px;">Weighbridge</div>
+          <p style="font-size: 13.5px; line-height: 1.45; color: #57513F; margin: 5px 0 0; font-weight: 500;">Gross and tare read straight off the indicator. No manual slip.</p>
+        </div>
+        <div style="flex: 1 1 150px; min-width: 150px; background: #FFFFFF; border: 1px solid #DCD2BC; border-radius: 11px; padding: 20px 18px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 14px; color: #B5AB92;">03</div>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style="margin: 10px 0 8px;"><path d="M9 3v6l-5 9a2 2 0 0 0 1.8 3h12.4a2 2 0 0 0 1.8-3l-5-9V3" stroke="#211F1A" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 3h8" stroke="#211F1A" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <div style="font-weight: 700; font-size: 16px;">Lab</div>
+          <p style="font-size: 13.5px; line-height: 1.45; color: #57513F; margin: 5px 0 0; font-weight: 500;">Moisture and quality recorded against the lot — before you pay.</p>
+        </div>
+        <div style="flex: 1 1 150px; min-width: 150px; background: #FFFFFF; border: 1px solid #DCD2BC; border-radius: 11px; padding: 20px 18px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 14px; color: #B5AB92;">04</div>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style="margin: 10px 0 8px;"><path d="M4 7h16v12H4z" stroke="#211F1A" stroke-width="1.8"/><path d="M4 7l2-3h12l2 3M9 12h6" stroke="#211F1A" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <div style="font-weight: 700; font-size: 16px;">Purchase</div>
+          <p style="font-size: 13.5px; line-height: 1.45; color: #57513F; margin: 5px 0 0; font-weight: 500;">Rate applied on net dry weight. The sauda closes itself, correctly.</p>
+        </div>
+        <div style="flex: 1 1 150px; min-width: 150px; background: #FFFFFF; border: 1px solid #DCD2BC; border-radius: 11px; padding: 20px 18px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 14px; color: #B5AB92;">05</div>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style="margin: 10px 0 8px;"><path d="M3 8l9-5 9 5v8l-9 5-9-5V8Z" stroke="#211F1A" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 8l9 5 9-5M12 13v8" stroke="#211F1A" stroke-width="1.8"/></svg>
+          <div style="font-weight: 700; font-size: 16px;">Stock</div>
+          <p style="font-size: 13.5px; line-height: 1.45; color: #57513F; margin: 5px 0 0; font-weight: 500;">Every lot in the right godown. Live quintals, not a monthly guess.</p>
+        </div>
+        <div style="flex: 1 1 150px; min-width: 150px; background: #211F1A; color: #F6F1E6; border: 1px solid #211F1A; border-radius: 11px; padding: 20px 18px;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 14px; color: #E8B93B;">06</div>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" style="margin: 10px 0 8px;"><rect x="7" y="2" width="10" height="20" rx="2" stroke="#E8B93B" stroke-width="1.8"/><path d="M10 5h4" stroke="#E8B93B" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <div style="font-weight: 700; font-size: 16px;">Owner's phone</div>
+          <p style="font-size: 13.5px; line-height: 1.45; color: #CFC8B8; margin: 5px 0 0; font-weight: 500;">One WhatsApp digest each night. The real summary, not the munshi's.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== MODULES ===================== -->
+  <section id="modules" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #F6F1E6;">
+    <div style="max-width: 1220px; margin: 0 auto;">
+      <div style="max-width: 720px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #C0451C;">Core modules</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">One platform. The whole mill, connected.</h2>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 40px;">
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="width: 46px; height: 46px; border-radius: 9px; background: #F0E7D3; display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 3v3M5 9h14l-2 7H7L5 9Z" stroke="#211F1A" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 20h16" stroke="#211F1A" stroke-width="1.9" stroke-linecap="round"/></svg>
+          </div>
+          <h3 style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin: 16px 0 0;">Gate &amp; Weighbridge</h3>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 8px 0 0; font-weight: 500;">Truck in, truck out — gross, tare and net captured direct from the bridge indicator.</p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="width: 46px; height: 46px; border-radius: 9px; background: #F0E7D3; display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 3v6l-5 9a2 2 0 0 0 1.8 3h12.4a2 2 0 0 0 1.8-3l-5-9V3" stroke="#211F1A" stroke-width="1.9" stroke-linejoin="round"/><path d="M8 3h8M7.5 14h9" stroke="#211F1A" stroke-width="1.9" stroke-linecap="round"/></svg>
+          </div>
+          <h3 style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin: 16px 0 0;">Lab &amp; Quality</h3>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 8px 0 0; font-weight: 500;">Moisture, broken %, grade — logged per lot and priced in, not argued about later.</p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="width: 46px; height: 46px; border-radius: 9px; background: #F0E7D3; display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M5 4h14v16H5z" stroke="#211F1A" stroke-width="1.9"/><path d="M8 9h8M8 13h8M8 17h5" stroke="#211F1A" stroke-width="1.9" stroke-linecap="round"/></svg>
+          </div>
+          <h3 style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin: 16px 0 0;">Purchase &amp; Saudas</h3>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 8px 0 0; font-weight: 500;">Broker deals, advances and rate agreements tracked to settlement, lot by lot.</p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="width: 46px; height: 46px; border-radius: 9px; background: #F0E7D3; display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 8l9-5 9 5v8l-9 5-9-5V8Z" stroke="#211F1A" stroke-width="1.9" stroke-linejoin="round"/><path d="M3 8l9 5 9-5M12 13v8" stroke="#211F1A" stroke-width="1.9"/></svg>
+          </div>
+          <h3 style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin: 16px 0 0;">Inventory &amp; Lots</h3>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 8px 0 0; font-weight: 500;">Live godown-wise stock by lot and variety — traceable from purchase to dispatch.</p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="width: 46px; height: 46px; border-radius: 9px; background: #FBEDE7; display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 19V5M20 19V5M4 12h16" stroke="#C0451C" stroke-width="1.9" stroke-linecap="round"/><circle cx="9" cy="8" r="1.6" fill="#C0451C"/><circle cx="15" cy="16" r="1.6" fill="#C0451C"/></svg>
+          </div>
+          <h3 style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin: 16px 0 0;">Production &amp; Mass Balance</h3>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 8px 0 0; font-weight: 500;">Paddy in vs. rice, bran and husk out — with the unexplained gap flagged automatically.</p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 12px; padding: 26px 24px;">
+          <div style="width: 46px; height: 46px; border-radius: 9px; background: #E4EDDF; display: flex; align-items: center; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.7-1.2A9 9 0 1 0 12 3Z" stroke="#2E5B39" stroke-width="1.9" stroke-linejoin="round"/><path d="M8.5 12h7M8.5 9h5" stroke="#2E5B39" stroke-width="1.9" stroke-linecap="round"/></svg>
+          </div>
+          <h3 style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 19px; margin: 16px 0 0;">WhatsApp Owner Digest</h3>
+          <p style="font-size: 15px; line-height: 1.5; color: #57513F; margin: 8px 0 0; font-weight: 500;">The night summary the owner already asks for — automatic, accurate, on the phone he checks.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== MILL FLOOR ===================== -->
+  <section style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #211F1A; color: #F6F1E6;">
+    <div style="max-width: 1220px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: clamp(32px,5vw,72px); align-items: center;">
+      <div style="flex: 1 1 380px; min-width: 300px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #E8B93B;">Built for the mill floor</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">Built for the mill floor, not the boardroom.</h2>
+        <p style="font-size: clamp(16px,1.8vw,19px); line-height: 1.6; color: #C8C1B2; margin: 16px 0 0; font-weight: 500;">The people entering data stand at a dusty gate on a mid-range Android with two bars of signal. MillSaathi is built for exactly that.</p>
+
+        <div style="display: flex; flex-direction: column; gap: 2px; margin-top: 30px;">
+          <div style="display: flex; gap: 15px; padding: 18px 0; border-top: 1px solid #38352C;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;margin-top:1px;"><path d="M2 12a10 10 0 0 1 20 0" stroke="#6FA85B" stroke-width="1.9" stroke-linecap="round"/><path d="M6 12a6 6 0 0 1 12 0M10 12a2 2 0 0 1 4 0" stroke="#6FA85B" stroke-width="1.9" stroke-linecap="round"/><path d="M12 19v.5" stroke="#C0451C" stroke-width="2.4" stroke-linecap="round"/></svg>
+            <div><div style="font-weight: 700; font-size: 17px;">Works on the phone you have</div><p style="font-size: 15px; color: #A9A293; margin: 4px 0 0; line-height: 1.5; font-weight: 500;">No install, no IT. Opens in the browser on any mid-range Android. Offline-first app coming next.</p></div>
+          </div>
+          <div style="display: flex; gap: 15px; padding: 18px 0; border-top: 1px solid #38352C;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;margin-top:1px;"><path d="M5 8h14M5 12h9M5 16h6" stroke="#E8B93B" stroke-width="1.9" stroke-linecap="round"/><path d="M17 15l2 2 3-3.5" stroke="#E8B93B" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div><div style="font-weight: 700; font-size: 17px;">In the language they speak</div><p style="font-size: 15px; color: #A9A293; margin: 4px 0 0; line-height: 1.5; font-weight: 500;">Hindi, Telugu and Tamil UI on the roadmap. The operator reads his own screen, not English he half-guesses.</p></div>
+          </div>
+          <div style="display: flex; gap: 15px; padding: 18px 0; border-top: 1px solid #38352C;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;margin-top:1px;"><rect x="4" y="9" width="16" height="8" rx="1.5" stroke="#E8B93B" stroke-width="1.9"/><path d="M7 9V5h10v4M7 17v2h10v-2" stroke="#E8B93B" stroke-width="1.9" stroke-linejoin="round"/><path d="M8 13h4" stroke="#C0451C" stroke-width="2" stroke-linecap="round"/></svg>
+            <div><div style="font-weight: 700; font-size: 17px;">Slips the driver still wants</div><p style="font-size: 15px; color: #A9A293; margin: 4px 0 0; line-height: 1.5; font-weight: 500;">Weighment slip and lot receipt from the gate in seconds — Bluetooth thermal printing on the roadmap.</p></div>
+          </div>
+          <div style="display: flex; gap: 15px; padding: 18px 0; border-top: 1px solid #38352C; border-bottom: 1px solid #38352C;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;margin-top:1px;"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z" stroke="#6FA85B" stroke-width="1.9" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="#6FA85B" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div><div style="font-weight: 700; font-size: 17px;">Role-locked entry</div><p style="font-size: 15px; color: #A9A293; margin: 4px 0 0; line-height: 1.5; font-weight: 500;">Operator, manager, accountant and owner each see and change only what they should. A record no one can quietly rewrite.</p></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- phone mock -->
+      <div style="flex: 0 1 300px; min-width: 260px; display: flex; justify-content: center;">
+        <div style="width: 268px; background: #0F0E0C; border-radius: 34px; padding: 12px; border: 1px solid #3A362C; box-shadow: 0 30px 60px rgba(0,0,0,.5);">
+          <div style="background: #F6F1E6; border-radius: 24px; overflow: hidden;">
+            <div style="background: #211F1A; padding: 14px 16px 16px; color: #F6F1E6;">
+              <div style="display: flex; justify-content: space-between; font-size: 11px; color: #A9A293; font-weight: 600;"><span>9:14 PM</span><span>● offline · will sync</span></div>
+              <div style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 16px; margin-top: 12px;">Night Digest · 12 Nov</div>
+              <div style="font-size: 12px; color: #CFC8B8; font-weight: 500;">Sri Venkatesh Rice Mill</div>
+            </div>
+            <div style="padding: 14px 15px; display: flex; flex-direction: column; gap: 9px;">
+              <div style="display: flex; justify-content: space-between; font-size: 13.5px; font-weight: 600;"><span style="color:#6B655A;">Paddy in today</span><span style="font-weight:700;">42 trucks · 1,040 qtl</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 13.5px; font-weight: 600;"><span style="color:#6B655A;">Rice dispatched</span><span style="font-weight:700;">690 qtl</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 13.5px; font-weight: 600;"><span style="color:#6B655A;">Cash paid</span><span style="font-weight:700;">₹23.9 lakh</span></div>
+              <div style="background: #FBEDE7; border: 1px solid #E6BBAA; border-radius: 9px; padding: 11px 12px; margin-top: 3px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;"><span style="font-size:12.5px;font-weight:700;color:#8F2E12;">⚠ Unexplained loss</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:16px;color:#C0451C;">5.0%</span></div>
+                <div style="font-size: 11.5px; color: #8F2E12; font-weight: 600; margin-top: 3px;">Above your 3% limit. Tap to see the 3 lots.</div>
+              </div>
+              <div style="font-family: 'Noto Sans Devanagari', sans-serif; font-size: 12.5px; color: #57513F; font-weight: 500; text-align: center; margin-top: 4px;">पता चलेगा माल कहाँ जा रहा है।</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== MULTI-INDUSTRY ===================== -->
+  <section style="padding: clamp(40px,5vw,60px) clamp(18px,4vw,44px); background: #EDE5D2; border-bottom: 1px solid #E2D9C4;">
+    <div style="max-width: 1220px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 24px 40px; justify-content: space-between;">
+      <div style="flex: 1 1 300px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #8A8272;">One core, many mills</div>
+        <p style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: clamp(19px,2.4vw,26px); line-height: 1.3; margin: 8px 0 0; letter-spacing: -.01em; max-width: 520px;">Procurement → processing → by-products → sales is the same everywhere. We start with rice.</p>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        <div style="background: #211F1A; color: #F6F1E6; padding: 12px 18px; border-radius: 9px; font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 9px;"><span style="width:8px;height:8px;border-radius:50%;background:#6FA85B;"></span>Rice mills · Live</div>
+        <div style="background: #FFFFFF; color: #57513F; padding: 12px 18px; border-radius: 9px; font-weight: 700; font-size: 15px; border: 1px solid #DCD2BC;">Sugar · Coming</div>
+        <div style="background: #FFFFFF; color: #57513F; padding: 12px 18px; border-radius: 9px; font-weight: 700; font-size: 15px; border: 1px solid #DCD2BC;">Flour · Coming</div>
+        <div style="background: #FFFFFF; color: #57513F; padding: 12px 18px; border-radius: 9px; font-weight: 700; font-size: 15px; border: 1px solid #DCD2BC;">Oil · Coming</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== PRICING ===================== -->
+  <section id="pricing" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #F6F1E6;">
+    <div style="max-width: 1220px; margin: 0 auto;">
+      <div style="max-width: 720px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #C0451C;">Pricing</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">Priced against one loss you'll catch.</h2>
+        <p style="font-size: clamp(16px,1.8vw,19px); line-height: 1.6; color: #57513F; margin: 16px 0 0; font-weight: 500;">Flat monthly per mill. No per-user creep, no setup surprises. Catch one gamed truck and it's paid for the month.</p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 40px; align-items: stretch;">
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 14px; padding: 30px 26px; display: flex; flex-direction: column;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 20px;">Starter</div>
+          <p style="font-size: 14.5px; color: #57513F; margin: 6px 0 0; font-weight: 500; min-height: 42px;">A single mill getting the gate, bridge and stock onto one record.</p>
+          <div style="margin: 20px 0 4px;"><span style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em;">₹9,999</span><span style="font-size: 16px; color: #8A8272; font-weight: 600;"> / month</span></div>
+          <div style="font-size: 13px; color: #8A8272; font-weight: 500;">billed annually · 1 location</div>
+          <div style="height: 1px; background: #E2D9C4; margin: 22px 0;"></div>
+          <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 11px; font-size: 15px; font-weight: 500;">
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Gate &amp; Weighbridge</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Inventory &amp; Lots</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Suppliers &amp; buyers khata</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Up to 3 users</li>
+          </ul>
+          <a href="#demo" style="margin-top: auto; text-decoration: none; text-align: center; margin-top: 26px; padding: 14px; border-radius: 8px; border: 1.5px solid #211F1A; color: #211F1A; font-weight: 700; font-size: 16px;">Book a demo</a>
+        </div>
+
+        <div style="background: #211F1A; color: #F6F1E6; border: 1px solid #211F1A; border-radius: 14px; padding: 30px 26px; display: flex; flex-direction: column;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 20px;">Professional</div>
+          <p style="font-size: 14.5px; color: #CFC8B8; margin: 6px 0 0; font-weight: 500; min-height: 42px;">The full loop — lab, production mass balance and the owner's digest.</p>
+          <div style="margin: 20px 0 4px;"><span style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em;">₹24,999</span><span style="font-size: 16px; color: #A9A293; font-weight: 600;"> / month</span></div>
+          <div style="font-size: 13px; color: #A9A293; font-weight: 500;">billed annually · 1 location</div>
+          <div style="height: 1px; background: #38352C; margin: 22px 0;"></div>
+          <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 11px; font-size: 15px; font-weight: 500;">
+            <li style="display:flex;gap:10px;"><span style="color:#E8B93B;font-weight:800;">✓</span>Everything in Starter</li>
+            <li style="display:flex;gap:10px;"><span style="color:#E8B93B;font-weight:800;">✓</span>Lab &amp; Quality</li>
+            <li style="display:flex;gap:10px;"><span style="color:#E8B93B;font-weight:800;">✓</span>Purchase &amp; Saudas</li>
+            <li style="display:flex;gap:10px;"><span style="color:#E8B93B;font-weight:800;">✓</span>Production &amp; Mass Balance</li>
+            <li style="display:flex;gap:10px;"><span style="color:#E8B93B;font-weight:800;">✓</span>WhatsApp Owner Digest</li>
+            <li style="display:flex;gap:10px;"><span style="color:#E8B93B;font-weight:800;">✓</span>Unlimited users</li>
+          </ul>
+          <a href="#demo" style="margin-top: auto; text-decoration: none; text-align: center; margin-top: 26px; padding: 14px; border-radius: 8px; background: var(--accent); color: #F6F1E6; font-weight: 700; font-size: 16px; box-shadow: 0 2px 0 var(--accent-ink);">Book a demo</a>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 14px; padding: 30px 26px; display: flex; flex-direction: column;">
+          <div style="font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 20px;">Enterprise</div>
+          <p style="font-size: 14.5px; color: #57513F; margin: 6px 0 0; font-weight: 500; min-height: 42px;">Multiple plants, group-level view and your accountant's Tally sync.</p>
+          <div style="margin: 20px 0 4px;"><span style="font-family: 'Archivo', sans-serif; font-weight: 900; font-size: 40px; letter-spacing: -.03em;">Let's talk</span></div>
+          <div style="font-size: 13px; color: #8A8272; font-weight: 500;">custom · multi-location</div>
+          <div style="height: 1px; background: #E2D9C4; margin: 22px 0;"></div>
+          <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 11px; font-size: 15px; font-weight: 500;">
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Everything in Professional</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Multi-plant group dashboard</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Tally export &amp; accountant sync</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>On-site setup &amp; training</li>
+            <li style="display:flex;gap:10px;"><span style="color:#2E5B39;font-weight:800;">✓</span>Priority phone support</li>
+          </ul>
+          <a href="#demo" style="margin-top: auto; text-decoration: none; text-align: center; margin-top: 26px; padding: 14px; border-radius: 8px; border: 1.5px solid #211F1A; color: #211F1A; font-weight: 700; font-size: 16px;">Talk to us</a>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FINAL CTA ===================== -->
+  <section id="demo" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #211F1A; color: #F6F1E6;">
+    <div style="max-width: 900px; margin: 0 auto; text-align: center;">
+      <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(30px,4.4vw,50px); line-height: 1.06; letter-spacing: -.025em; margin: 0;">See it on your own numbers. Book a site visit.</h2>
+      <p style="font-size: clamp(16px,1.9vw,20px); line-height: 1.55; color: #C8C1B2; margin: 18px auto 0; max-width: 620px; font-weight: 500;">We'll come to your mill, run one day's paddy through MillSaathi, and show you the balance. No slides, no jargon — just your grain, accounted for.</p>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: center; margin-top: 34px;">
+        <a href="https://wa.me/919876543210?text=Namaste%2C%20I%20want%20a%20MillSaathi%20demo%20for%20my%20mill." style="text-decoration: none; background: var(--accent); color: #F6F1E6; font-weight: 700; font-size: 18px; padding: 17px 30px; border-radius: 9px; box-shadow: 0 2px 0 var(--accent-ink); display: inline-flex; align-items: center; gap: 11px;">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.7-1.2A9 9 0 1 0 12 3Z" stroke="#F6F1E6" stroke-width="1.9" stroke-linejoin="round"/></svg>
+          WhatsApp us
+        </a>
+        <a href="/demo" style="text-decoration: none; background: transparent; color: #F6F1E6; font-weight: 700; font-size: 18px; padding: 17px 30px; border-radius: 9px; border: 1.5px solid #55503F; display: inline-flex; align-items: center; gap: 11px;">
+          Explore the demo mill
+        </a>
+      </div>
+      <p style="font-size: 14px; color: #9A9384; margin: 22px 0 0; font-weight: 500;">Mon–Sat · 9 AM–8 PM · Hindi, Telugu, Tamil &amp; English</p>
+    </div>
+  </section>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer style="background: #191713; color: #C8C1B2; padding: clamp(40px,5vw,56px) clamp(18px,4vw,44px) 30px;">
+    <div style="max-width: 1220px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 32px; justify-content: space-between; align-items: flex-start;">
+      <div style="flex: 1 1 260px;">
+        <div style="display: flex; align-items: center; gap: 11px;">
+          <span style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; background: #F6F1E6; border-radius: 6px;">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#211F1A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#211F1A" stroke-width="2" stroke-linecap="round"/></svg>
+          </span>
+          <span style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 19px; color: #F6F1E6;">MillSaathi</span>
+        </div>
+        <p style="font-size: 14.5px; line-height: 1.55; margin: 14px 0 0; max-width: 300px; font-weight: 500;">Operations &amp; ERP for India's mills. We tell you where every quintal actually went.</p>
+        <p style="font-family: 'Noto Sans Devanagari', sans-serif; font-size: 14px; color: #8A8272; margin: 10px 0 0; font-weight: 500;">पता चलेगा माल कहाँ जा रहा है।</p>
+      </div>
+
+      <div style="flex: 0 1 auto;">
+        <div style="font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #7A7364;">Talk to us</div>
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 14px;">
+          <a href="https://wa.me/919876543210" style="text-decoration: none; color: #F6F1E6; font-weight: 700; font-size: 18px; display: flex; align-items: center; gap: 10px;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 3a9 9 0 0 0-7.8 13.5L3 21l4.7-1.2A9 9 0 1 0 12 3Z" stroke="#6FA85B" stroke-width="1.9" stroke-linejoin="round"/></svg>
+            WhatsApp
+          </a>
+          <div style="font-size: 14.5px; color: #A9A293; font-weight: 500; margin-top: 2px;">hello@millsaathi.com</div>
+        </div>
+      </div>
+
+      <div style="flex: 0 1 auto;">
+        <div style="font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #7A7364;">Platform</div>
+        <div style="display: flex; flex-direction: column; gap: 9px; margin-top: 14px; font-size: 14.5px; font-weight: 500;">
+          <a href="#problem" style="text-decoration: none; color: #C8C1B2;">The problem</a>
+          <a href="#how" style="text-decoration: none; color: #C8C1B2;">How it works</a>
+          <a href="#modules" style="text-decoration: none; color: #C8C1B2;">Modules</a>
+          <a href="#pricing" style="text-decoration: none; color: #C8C1B2;">Pricing</a>
+          <a href="/demo" style="text-decoration: none; color: #C8C1B2;">Demo mill</a>
+          <a href="/app" style="text-decoration: none; color: #C8C1B2;">Log in</a>
+        </div>
+      </div>
+    </div>
+    <div style="max-width: 1220px; margin: 34px auto 0; padding-top: 22px; border-top: 1px solid #2C2A24; display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; font-size: 13px; color: #7A7364; font-weight: 500;">
+      <span>© 2026 MillSaathi · millsaathi.com</span>
+      <span>Made for the mill floor.</span>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>
