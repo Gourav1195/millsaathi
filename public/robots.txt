@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Login and demo app are intentionally noindex (see meta robots on those pages).
+# We do NOT block them here so crawlers can read the noindex directive.
+
+Sitemap: https://millsaathi.com/sitemap.xml

@@ -5,10 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MillSaathi — Operations &amp; ERP for India's mills</title>
 <meta name="description" content="Your mill runs on paper, WhatsApp, and trust in your munshi. MillSaathi tells you where every quintal actually went — gate, weighbridge, lab, saudas, stock and the owner's nightly digest.">
+<link rel="canonical" href="https://millsaathi.com/">
+<meta property="og:site_name" content="MillSaathi">
+<meta property="og:locale" content="en_IN">
 <meta property="og:title" content="MillSaathi — Operations & ERP for India's mills">
 <meta property="og:description" content="One system that captures reality at the source and reconciles every lot. It doesn't replace Tally. It feeds it the truth.">
 <meta property="og:url" content="https://millsaathi.com/">
 <meta property="og:type" content="website">
+<meta property="og:image" content="https://millsaathi.com/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="MillSaathi — where every quintal actually went.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MillSaathi — Operations & ERP for India's mills">
+<meta name="twitter:description" content="Captures reality at the source — weighbridge, lab, gate, production — and reconciles every lot. It doesn't replace Tally. It feeds it the truth.">
+<meta name="twitter:image" content="https://millsaathi.com/assets/og-image.png">
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-WHW588NPD2"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-WHW588NPD2');
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@500;600;700&display=swap" rel="stylesheet">
@@ -19,7 +38,73 @@
   html { scroll-behavior: smooth; }
   ::selection { background: #211F1A; color: #F6F1E6; }
   @keyframes ms-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  summary::-webkit-details-marker { display: none; }
+  summary > span { transition: transform .18s ease; }
+  details[open] summary > span { transform: rotate(45deg); }
 </style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://millsaathi.com/#org",
+      "name": "MillSaathi",
+      "url": "https://millsaathi.com/",
+      "logo": "https://millsaathi.com/assets/og-image.png",
+      "description": "Operations and ERP software for India's mills. Captures reality at the source and reconciles every lot.",
+      "areaServed": "IN",
+      "email": "hello@millsaathi.com"
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://millsaathi.com/#website",
+      "url": "https://millsaathi.com/",
+      "name": "MillSaathi",
+      "publisher": { "@id": "https://millsaathi.com/#org" }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "MillSaathi",
+      "operatingSystem": "Web, Android, iOS",
+      "applicationCategory": "BusinessApplication",
+      "url": "https://millsaathi.com/",
+      "description": "Mill operations and ERP that captures the weighbridge, lab, gate, production and saudas at the source, runs a mass balance on every lot, and feeds verified numbers to Tally.",
+      "offers": { "@type": "Offer", "priceCurrency": "INR", "price": "0", "description": "Book a demo for pricing based on your mill's size and volume." }
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Does MillSaathi replace Tally?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. MillSaathi captures what actually happens on the mill floor — weighbridge, lab, gate, production and sauda — and reconciles every lot. It then feeds clean, verified numbers into Tally instead of replacing your accounting." }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I track where every quintal of paddy goes in my mill?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Every lot is captured once at the source — gate entry, weighbridge, lab quality, production and dispatch — and MillSaathi runs a mass balance so you can see exactly where each quintal went and where it leaked." }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I stop stock leakage and weighbridge losses in a rice mill?",
+          "acceptedAnswer": { "@type": "Answer", "text": "MillSaathi records every weighment and quality reading at the point it happens, so the gap between paddy in and rice out shows up immediately in the owner's nightly digest instead of hiding in the register." }
+        },
+        {
+          "@type": "Question",
+          "name": "Can my staff use MillSaathi in Hindi on a phone?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. It works on any phone or computer with nothing to install, and Hindi, Telugu and Tamil are coming to the mill floor so your operators, munshi and weighbridge staff can use it in their own language." }
+        },
+        {
+          "@type": "Question",
+          "name": "How much does mill management software like MillSaathi cost?",
+          "acceptedAnswer": { "@type": "Answer", "text": "MillSaathi is priced against a single loss you'll catch. Book a demo and we price it for your mill's size and volume — see the pricing section for how it works." }
+        }
+      ]
+    }
+  ]
+}
+</script>
 </head>
 <body>
 <div style="--accent: #C0451C; --accent-ink: #9E3714; background: #F6F1E6; color: #211F1A; font-family: 'IBM Plex Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden;">
@@ -37,6 +122,7 @@
         <a href="#how" style="text-decoration: none; color: #4A453B;">How it works</a>
         <a href="#modules" style="text-decoration: none; color: #4A453B;">Modules</a>
         <a href="#pricing" style="text-decoration: none; color: #4A453B;">Pricing</a>
+        <a href="#faq" style="text-decoration: none; color: #4A453B;">FAQ</a>
         <a href="/app" style="text-decoration: none; color: #4A453B;">Log in</a>
         <a href="#demo" style="text-decoration: none; color: #F6F1E6; background: var(--accent); padding: 10px 18px; border-radius: 7px; font-weight: 700; box-shadow: 0 1px 0 var(--accent-ink);">Book a demo</a>
       </div>
@@ -412,6 +498,60 @@
     </div>
   </section>
 
+  <!-- ===================== FAQ ===================== -->
+  <section id="faq" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #EDE5D2; border-top: 1px solid #E2D9C4; border-bottom: 1px solid #E2D9C4;">
+    <div style="max-width: 860px; margin: 0 auto;">
+      <div style="text-align: center;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #9E3714;">Questions mill owners ask</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">Straight answers, before the demo.</h2>
+      </div>
+
+      <div style="margin-top: clamp(32px,4vw,48px); display: flex; flex-direction: column; gap: 12px;">
+
+        <details style="background: #F6F1E6; border: 1px solid #E2D9C4; border-radius: 12px; padding: 4px 22px;">
+          <summary style="cursor: pointer; list-style: none; font-family: 'Archivo', sans-serif; font-weight: 700; font-size: clamp(17px,2.2vw,20px); padding: 18px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+            Does MillSaathi replace Tally?
+            <span style="flex: 0 0 auto; color: #C0451C; font-size: 24px; line-height: 1;">+</span>
+          </summary>
+          <p style="font-size: 16px; line-height: 1.6; color: #4A453B; margin: 0 0 20px; font-weight: 500;">No. MillSaathi captures what actually happens on the mill floor — weighbridge, lab, gate, production and sauda — and reconciles every lot. It then feeds clean, verified numbers into Tally instead of replacing your accounting.</p>
+        </details>
+
+        <details style="background: #F6F1E6; border: 1px solid #E2D9C4; border-radius: 12px; padding: 4px 22px;">
+          <summary style="cursor: pointer; list-style: none; font-family: 'Archivo', sans-serif; font-weight: 700; font-size: clamp(17px,2.2vw,20px); padding: 18px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+            How do I track where every quintal of paddy goes in my mill?
+            <span style="flex: 0 0 auto; color: #C0451C; font-size: 24px; line-height: 1;">+</span>
+          </summary>
+          <p style="font-size: 16px; line-height: 1.6; color: #4A453B; margin: 0 0 20px; font-weight: 500;">Every lot is captured once at the source — gate entry, weighbridge, lab quality, production and dispatch — and MillSaathi runs a mass balance so you can see exactly where each quintal went and where it leaked.</p>
+        </details>
+
+        <details style="background: #F6F1E6; border: 1px solid #E2D9C4; border-radius: 12px; padding: 4px 22px;">
+          <summary style="cursor: pointer; list-style: none; font-family: 'Archivo', sans-serif; font-weight: 700; font-size: clamp(17px,2.2vw,20px); padding: 18px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+            How do I stop stock leakage and weighbridge losses in a rice mill?
+            <span style="flex: 0 0 auto; color: #C0451C; font-size: 24px; line-height: 1;">+</span>
+          </summary>
+          <p style="font-size: 16px; line-height: 1.6; color: #4A453B; margin: 0 0 20px; font-weight: 500;">MillSaathi records every weighment and quality reading at the point it happens, so the gap between paddy in and rice out shows up immediately in the owner's nightly digest instead of hiding in the register.</p>
+        </details>
+
+        <details style="background: #F6F1E6; border: 1px solid #E2D9C4; border-radius: 12px; padding: 4px 22px;">
+          <summary style="cursor: pointer; list-style: none; font-family: 'Archivo', sans-serif; font-weight: 700; font-size: clamp(17px,2.2vw,20px); padding: 18px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+            Can my staff use MillSaathi in Hindi on a phone?
+            <span style="flex: 0 0 auto; color: #C0451C; font-size: 24px; line-height: 1;">+</span>
+          </summary>
+          <p style="font-size: 16px; line-height: 1.6; color: #4A453B; margin: 0 0 20px; font-weight: 500;">Yes. It works on any phone or computer with nothing to install, and Hindi, Telugu and Tamil are coming to the mill floor so your operators, munshi and weighbridge staff can use it in their own language.</p>
+        </details>
+
+        <details style="background: #F6F1E6; border: 1px solid #E2D9C4; border-radius: 12px; padding: 4px 22px;">
+          <summary style="cursor: pointer; list-style: none; font-family: 'Archivo', sans-serif; font-weight: 700; font-size: clamp(17px,2.2vw,20px); padding: 18px 0; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+            How much does mill management software like MillSaathi cost?
+            <span style="flex: 0 0 auto; color: #C0451C; font-size: 24px; line-height: 1;">+</span>
+          </summary>
+          <p style="font-size: 16px; line-height: 1.6; color: #4A453B; margin: 0 0 20px; font-weight: 500;">MillSaathi is priced against a single loss you'll catch. Book a demo and we price it for your mill's size and volume — see the <a href="#pricing" style="color: #9E3714; font-weight: 700;">pricing section</a> for how it works.</p>
+        </details>
+
+      </div>
+    </div>
+  </section>
+
   <!-- ===================== FINAL CTA ===================== -->
   <section id="demo" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #211F1A; color: #F6F1E6;">
     <div style="max-width: 900px; margin: 0 auto; text-align: center;">
@@ -463,6 +603,7 @@
           <a href="#how" style="text-decoration: none; color: #C8C1B2;">How it works</a>
           <a href="#modules" style="text-decoration: none; color: #C8C1B2;">Modules</a>
           <a href="#pricing" style="text-decoration: none; color: #C8C1B2;">Pricing</a>
+          <a href="#faq" style="text-decoration: none; color: #C8C1B2;">FAQ</a>
           <a href="/demo" style="text-decoration: none; color: #C8C1B2;">Demo mill</a>
           <a href="/app" style="text-decoration: none; color: #C8C1B2;">Log in</a>
         </div>
