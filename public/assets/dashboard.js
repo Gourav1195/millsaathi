@@ -415,7 +415,7 @@
         '</div></div></div>' +
         '<div style="flex:1 1 320px;min-width:280px">' +
         '<div class="arch" style="font-weight:800;font-size:24px;letter-spacing:-.02em">The owner’s whole day, on one screen.</div>' +
-        '<p style="font-size:15.5px;line-height:1.6;color:var(--muted2);font-weight:500;margin:14px 0 0">The same summary you call your manager for every night — automatic and accurate. Share it on WhatsApp in one tap; automated delivery to your phone comes with the Professional plan.</p>' +
+        '<p style="font-size:15.5px;line-height:1.6;color:var(--muted2);font-weight:500;margin:14px 0 0">The same summary you call your manager for every night — automatic and accurate. Share it on WhatsApp in one tap. Free, like everything else here.</p>' +
         (d.wa_share_url ? '<a class="btn acc" style="margin-top:22px;text-decoration:none" href="' + esc(d.wa_share_url) + '" target="_blank" rel="noopener">Share on WhatsApp</a>' : '') +
         '</div></div>';
     }
@@ -637,7 +637,7 @@
       '<span style="display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;background:#E8B93B;border-radius:9px">' +
       '<svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#1B2431" stroke-width="2.1" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#1B2431" stroke-width="2.1" stroke-linecap="round"/></svg></span>' +
       '<h1>' + (signup ? 'Start your mill on MillSaathi' : 'Log in to your mill') + '</h1>' +
-      '<p class="auth-sub">' + (signup ? 'Free trial — no card needed.' : 'Welcome back.') + '</p>' +
+      '<p class="auth-sub">' + (signup ? 'Free forever — no card needed.' : 'Welcome back.') + '</p>' +
       '<form id="auth-form" style="display:flex;flex-direction:column;gap:12px">' +
       (signup ? '<div class="fld"><label>Mill name</label><input name="mill_name" required placeholder="Sri Venkatesh Rice Mill"></div>' +
         '<div class="fld"><label>Your name</label><input name="name" required placeholder="Ramesh Reddy"></div>' : '') +

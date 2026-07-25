@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "build:seo": "node scripts/build-seo.mjs",
+    "deploy": "npm run build:seo && wrangler deploy",
     "types": "wrangler types",
     "check": "tsc --noEmit",
     "db:migrate:local": "wrangler d1 migrations apply millsaathi --local",

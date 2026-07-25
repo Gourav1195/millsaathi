@@ -32,15 +32,24 @@ on 2–6% margins.
 - Capture once at the source (gate → weighbridge → lab → purchase → stock → owner's phone), never re-typed.
 - Sell against the loss: "Catch one gamed truck and it's paid for the month."
 
-### Pricing (as designed)
+### Pricing — **free** (current, Jul 2026)
+
+MillSaathi is **free for every mill**: all modules, unlimited users, no card. There is no payment
+integration in this repo, so the site must not quote a price it cannot collect. The public pricing
+section says ₹0; the paid tiers below are parked in an HTML comment in `public/index.html`.
+
+Free is also the wedge. Competitors sell one-time at ₹8.5k–20k and every one of them makes the mill
+owner sit through a demo before hearing a number. "Free, poora ka poora" removes the only objection
+that matters at first contact, and distribution — not ARPU — is the constraint right now.
+
+### Pricing (parked — restore only when billing exists)
 
 - **Starter** ₹9,999/mo (annual): Gate & Weighbridge, Inventory & Lots, slip printing, 3 users.
 - **Professional** ₹24,999/mo (annual): + Lab, Saudas, Mass Balance, WhatsApp digest, unlimited users.
 - **Enterprise**: custom — multi-plant, Tally export, on-site training.
 
-Competitors sell one-time at ₹8.5k–20k, so the monthly price must be justified by *found money*
-(the loss report), not by features. Consider a paid pilot ("₹0 first season, we show you the leak")
-as GTM rather than lowering list price.
+Any future monetisation must be justified by *found money* (the loss report), not by features, and
+must honour the public promise that what a mill uses today stays free.
 
 ## 2. V1 scope (this repo, Cloudflare free tier)
 
@@ -52,7 +61,9 @@ as GTM rather than lowering list price.
    stock & lots by godown, suppliers, buyers, items, dashboard with **daily mass balance and
    unexplained-loss alert** vs the owner's set limit. Money fields hidden from Manager role.
 4. **Digest V1 (free):** in-app night digest + one-tap `wa.me` share (zero cost).
-   WhatsApp Business API push (₹0.145/msg utility + GST) is a Professional-plan feature for V2.
+   This is the free WhatsApp path — a `wa.me` deep link the owner taps, not a billed API call, so it
+   costs us nothing and ships to everyone. WhatsApp Business API push (₹0.145/msg utility + GST) is
+   the only genuinely metered thing on the roadmap; it stays V2 and behind a hard usage cap.
 
 ## 3. Out of scope for V1 (V2 roadmap)
 

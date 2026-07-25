@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paddy Moisture Deduction Calculator — Free Tool</title>
+<meta name="description" content="Free paddy moisture deduction calculator for Indian rice mills. Convert wet weight to dry-weight equivalent, see the deduction in quintals, and the rupees you would overpay by paying on gross weight.">
+<link rel="canonical" href="https://millsaathi.com/calculators/paddy-moisture-deduction">
+<meta property="og:site_name" content="MillSaathi">
+<meta property="og:locale" content="en_IN">
+<meta property="og:title" content="Paddy Moisture Deduction Calculator — Free Tool">
+<meta property="og:description" content="Free paddy moisture deduction calculator for Indian rice mills. Convert wet weight to dry-weight equivalent, see the deduction in quintals, and the rupees you would overpay by paying on gross weight.">
+<meta property="og:url" content="https://millsaathi.com/calculators/paddy-moisture-deduction">
+<meta property="og:type" content="article">
+<meta property="og:image" content="https://millsaathi.com/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Paddy Moisture Deduction Calculator — Free Tool">
+<meta name="twitter:description" content="Free paddy moisture deduction calculator for Indian rice mills. Convert wet weight to dry-weight equivalent, see the deduction in quintals, and the rupees you would overpay by paying on gross weight.">
+<meta name="twitter:image" content="https://millsaathi.com/assets/og-image.png">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-WHW588NPD2"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-WHW588NPD2');
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/pages.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23211F1A'/%3E%3Cpath d='M5 19V9.5L12 5l7 4.5V19' stroke='%23E8B93B' stroke-width='2' fill='none' stroke-linejoin='round'/%3E%3Cpath d='M9.5 19v-4h5v4' stroke='%23E8B93B' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://millsaathi.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Calculators",
+          "item": "https://millsaathi.com/calculators"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Moisture deduction",
+          "item": "https://millsaathi.com/calculators/paddy-moisture-deduction"
+        }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How is moisture deduction calculated for paddy?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Dry-weight equivalent = weighed quantity × (100 − measured moisture) ÷ (100 − accepted moisture). The deduction is the difference between the weighed quantity and that equivalent. It converts a wet lot into what it is worth at your accepted moisture level so every supplier is paid on the same basis."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What moisture level is paddy accepted at?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "It is set by the specification you are buying against rather than by the mill, and it can change between seasons and between procurement and open-market purchases. Confirm the current figure for your own state and season, then use it consistently — the number matters less than applying the same one to everybody."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Should I use a flat percentage cut instead?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "You can, and many mills do because it is faster. It is also the reason moisture becomes a negotiation: a flat cut is a position, while the dry-weight formula is arithmetic that both sides can check. If you use a flat cut, at least record the meter reading so the two can be reconciled later."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Where should moisture be measured?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "At the gate, against the lot, before unloading and before the paddy is mixed with anything already in the godown. Once it is unloaded the reading belongs to a heap rather than to a supplier, and you have lost the ability to price that specific purchase correctly."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it replace Tally?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. MillSaathi captures what physically happens on the mill floor and reconciles every lot; Tally stays your accounting. The point is to feed Tally verified numbers instead of end-of-day re-entry from memory."
+          }
+        }
+      ]
+    },
+    {
+      "@type": "WebApplication",
+      "name": "Paddy Moisture Deduction Calculator",
+      "url": "https://millsaathi.com/calculators/paddy-moisture-deduction",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web",
+      "browserRequirements": "Requires JavaScript",
+      "offers": {
+        "@type": "Offer",
+        "priceCurrency": "INR",
+        "price": "0"
+      }
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="nav">
+  <nav class="nav-in">
+    <a class="brand" href="/">
+      <span class="brand-mark"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#E8B93B" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#E8B93B" stroke-width="2" stroke-linecap="round"/><path d="M12 4v3" stroke="#C0451C" stroke-width="2" stroke-linecap="round"/></svg></span>
+      <span class="brand-name">MillSaathi</span>
+    </a>
+    <div class="nav-links">
+      <a class="nav-hide" href="/calculators">Calculators</a>
+      <a class="nav-hide" href="/#modules">Modules</a>
+      <a class="nav-hide" href="/#pricing">Pricing</a>
+      <a href="/demo">Demo mill</a>
+      <a class="nav-cta" href="/app">Start free</a>
+    </div>
+  </nav>
+</header>
+
+<div class="wrap-narrow">
+  <div class="crumb">
+    <a href="/">Home</a><span>›</span><a href="/calculators">Calculators</a><span>›</span>Moisture deduction
+  </div>
+</div>
+
+
+  <section class="wrap-narrow hero">
+    <div class="eyebrow">Free calculator · no signup</div>
+    <h1>Paddy moisture deduction calculator</h1>
+    <p class="lede">A truck arrives at 21% moisture and gets paid at gross weight. You just bought water at the price of paddy. This works out the dry-weight equivalent, the deduction, and what the difference is worth.</p>
+  </section>
+  <section class="wrap-narrow prose">
+    <h2>The calculator</h2>
+
+    <div class="calc">
+      <div class="calc-inputs">
+        <div class="calc-label">The lot at the gate</div>
+        <div class="fld">
+          <label for="gross">Weighed quantity (qtl)</label>
+          <input id="gross" type="number" min="0" step="0.01" value="250">
+        </div>
+        <div class="fld">
+          <label for="obs">Moisture measured (%)</label>
+          <input id="obs" type="number" min="0" max="40" step="0.1" value="21">
+          <div class="hint">What your lab meter actually read for this lot.</div>
+        </div>
+        <div class="fld">
+          <label for="base">Accepted moisture (%)</label>
+          <input id="base" type="number" min="0" max="30" step="0.1" value="17">
+          <div class="hint">The specification you buy against. Confirm the current figure for your procurement or your own purchase terms.</div>
+        </div>
+        <div class="fld">
+          <label for="prate">Rate (₹ per qtl)</label>
+          <input id="prate" type="number" min="0" step="1" value="2300">
+        </div>
+      </div>
+
+      <div class="calc-out">
+        <div class="calc-label">What you should pay</div>
+        <div class="res-hero" id="overBox">
+          <div class="k">Overpayment if you ignore it</div>
+          <div class="v" id="over">—</div>
+          <div class="sub" id="overLine">—</div>
+        </div>
+        <div class="res">
+          <div class="res-row"><span class="k">Dry-weight equivalent</span><span class="v" id="dry">—</span></div>
+          <div class="res-row"><span class="k">Deduction</span><span class="v" id="ded">—</span></div>
+          <div class="res-row"><span class="k">Deduction %</span><span class="v" id="dedPct">—</span></div>
+          <div class="res-row"><span class="k">Pay on dry weight</span><span class="v" id="payDry">—</span></div>
+          <div class="res-row"><span class="k">Pay on gross weight</span><span class="v" id="payGross">—</span></div>
+        </div>
+        <p class="calc-note">Runs in your browser. Nothing is stored or sent.</p>
+      </div>
+    </div>
+
+    <h2>The formula</h2>
+    <div class="callout">
+      <p><strong>Dry-weight equivalent = weighed qty × (100 − measured moisture) ÷ (100 − accepted moisture)</strong></p>
+      <p><strong>Deduction = weighed qty − dry-weight equivalent</strong></p>
+    </div>
+    <p>The logic is simply that you pay for grain, not for water. If a lot reads above your accepted moisture, part of what the weighbridge recorded is moisture that will evaporate in drying and never become rice. The formula converts the wet weight into the equivalent weight at your accepted moisture level, so two lots at different moistures can be compared and paid on the same basis.</p>
+    <p>Some mills instead apply a flat percentage cut per point of excess moisture. That is quicker but crude, and it is usually the thing suppliers argue about, because a flat cut is a negotiating position while the formula above is arithmetic.</p>
+
+    <h2>Why this is the most-argued number at the gate</h2>
+    <p>Moisture deduction is the one point in the day where a small judgement call, repeated across every truck of the season, becomes a very large number. A point or two of moisture waved through because the supplier is a regular, or because the queue is long and the meter is in the other room, costs real money — and because it is a decision rather than a transaction, it never leaves a trace anyone can audit later.</p>
+    <ul>
+      <li>Measure at the gate, before the lot is unloaded and mixed</li>
+      <li>Record the reading against the lot, not on a loose slip</li>
+      <li>Apply the same basis to every supplier, and let them see it</li>
+      <li>Reconcile at the end of the day against what actually got dried</li>
+    </ul>
+    <p>The argument stops being an argument the moment there is a record. In MillSaathi the lab reading is captured against the lot before the purchase is priced, so the deduction is computed rather than negotiated — and the owner sees it that night.</p>
+  </section>
+<script src="/assets/calc.js"></script>
+
+  <section class="wrap-narrow">
+    <h2>Common questions</h2>
+    <details>
+      <summary>How is moisture deduction calculated for paddy?<span class="plus">+</span></summary>
+      <p>Dry-weight equivalent = weighed quantity × (100 − measured moisture) ÷ (100 − accepted moisture). The deduction is the difference between the weighed quantity and that equivalent. It converts a wet lot into what it is worth at your accepted moisture level so every supplier is paid on the same basis.</p>
+    </details>
+    <details>
+      <summary>What moisture level is paddy accepted at?<span class="plus">+</span></summary>
+      <p>It is set by the specification you are buying against rather than by the mill, and it can change between seasons and between procurement and open-market purchases. Confirm the current figure for your own state and season, then use it consistently — the number matters less than applying the same one to everybody.</p>
+    </details>
+    <details>
+      <summary>Should I use a flat percentage cut instead?<span class="plus">+</span></summary>
+      <p>You can, and many mills do because it is faster. It is also the reason moisture becomes a negotiation: a flat cut is a position, while the dry-weight formula is arithmetic that both sides can check. If you use a flat cut, at least record the meter reading so the two can be reconciled later.</p>
+    </details>
+    <details>
+      <summary>Where should moisture be measured?<span class="plus">+</span></summary>
+      <p>At the gate, against the lot, before unloading and before the paddy is mixed with anything already in the godown. Once it is unloaded the reading belongs to a heap rather than to a supplier, and you have lost the ability to price that specific purchase correctly.</p>
+    </details>
+    <details>
+      <summary>Does it replace Tally?<span class="plus">+</span></summary>
+      <p>No. MillSaathi captures what physically happens on the mill floor and reconciles every lot; Tally stays your accounting. The point is to feed Tally verified numbers instead of end-of-day re-entry from memory.</p>
+    </details>
+  </section>
+
+<section class="wrap-narrow">
+  <div class="cta">
+    <h2>See where your own quintals go.</h2>
+    <p>MillSaathi is free — every module, unlimited users, no card. Open the demo mill and click through a real day, or start your own mill in a few minutes.</p>
+    <div class="btn-row">
+      <a class="btn btn-acc" href="/app">Start free — no card
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#F6F1E6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a class="btn btn-out" href="/demo">See the demo mill</a>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="foot-in">
+    <div style="flex:1 1 260px;max-width:320px;">
+      <div class="brand" style="color:#F6F1E6;">
+        <span class="brand-mark" style="background:#F6F1E6;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#211F1A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#211F1A" stroke-width="2" stroke-linecap="round"/><path d="M12 4v3" stroke="#C0451C" stroke-width="2" stroke-linecap="round"/></svg></span>
+        <span class="brand-name">MillSaathi</span>
+      </div>
+      <p>Free operations &amp; ERP for India's mills. We tell you where every quintal actually went.</p>
+      <p class="deva" style="color:#8A8272;">पता चलेगा माल कहाँ जा रहा है।</p>
+    </div>
+    <div>
+      <h4>Talk to us</h4>
+      <div class="col">
+        <a href="https://wa.me/918709575693">WhatsApp</a>
+        <a href="tel:+918709575693">+91 87095 75693</a>
+        <a href="mailto:connect@equaseed.com">connect@equaseed.com</a>
+      </div>
+    </div>
+    <div>
+      <h4>Free tools</h4>
+      <div class="col">
+        <a href="/calculators">All calculators</a>
+        <a href="/calculators/rice-mill-outturn">Outturn &amp; loss</a>
+        <a href="/calculators/paddy-moisture-deduction">Moisture deduction</a>
+        <a href="/calculators/rice-cost-per-quintal">Cost per quintal</a>
+      </div>
+    </div>
+    <div>
+      <h4>Platform</h4>
+      <div class="col">
+        <a href="/#how">How it works</a>
+        <a href="/#modules">Modules</a>
+        <a href="/#pricing">Pricing (free)</a>
+        <a href="/mill-software">Mill types</a>
+        <a href="/demo">Demo mill</a>
+        <a href="/app">Log in</a>
+      </div>
+    </div>
+  </div>
+  <div class="foot-bar">
+    <span>© 2026 MillSaathi · millsaathi.com</span>
+    <span>Free for every mill.</span>
+  </div>
+</footer>
+<script>
+(function(){
+  var C = window.MSCalc;
+  C.bind(function(){
+    var g = C.n('gross'), obs = C.n('obs'), base = C.n('base'), r = C.n('prate');
+    if (g <= 0 || base >= 100) {
+      ['dry','ded','dedPct','payDry','payGross','over'].forEach(function(id){ C.set(id,'—'); });
+      C.set('overLine','Enter a quantity to see the deduction.');
+      C.tone('overBox', null);
+      return;
+    }
+    // A lot at or below the accepted moisture attracts no deduction — mills do
+    // not pay a bonus for dry paddy, so clamp instead of showing a negative.
+    var wet = obs > base;
+    var dry = wet ? g * (100 - obs) / (100 - base) : g;
+    var ded = g - dry;
+    var payDry = dry * r, payGross = g * r, over = payGross - payDry;
+    C.set('dry', C.qtl(dry));
+    C.set('ded', C.qtl(ded));
+    C.set('dedPct', C.pct(ded / g * 100));
+    C.set('payDry', C.inrBig(payDry));
+    C.set('payGross', C.inrBig(payGross));
+    C.set('over', C.inrBig(over));
+    if (!wet) {
+      C.set('overLine', 'This lot is at or below your accepted moisture — no deduction is due, pay on the weighed quantity.');
+      C.tone('overBox', 'good');
+    } else {
+      C.set('overLine', 'On this one lot, at ' + obs.toFixed(1) + '% against an accepted ' + base.toFixed(1) + '%. Multiply by a season of trucks.');
+      C.tone('overBox', 'bad');
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -46,7 +46,8 @@ npm run deploy              # wrangler deploy → millsaathi.com
 
 ## Before launch (TODO)
 
-- Replace placeholder WhatsApp number `+91 98765 43210` in `public/index.html`.
+- ~~Replace placeholder WhatsApp number~~ — done, contact is `+91 87095 75693` / `connect@equaseed.com`.
 - Add Turnstile to login/signup.
 - Rate-limit auth endpoints.
-- Set up `hello@millsaathi.com` (Cloudflare Email Routing, free).
+- Pricing is **free** (₹0, all modules). The paid tiers are parked in an HTML comment in
+  `public/index.html` — do not re-enable them until a payment gateway is actually wired up.

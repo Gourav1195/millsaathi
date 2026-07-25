@@ -61,10 +61,15 @@ precomputes the digest row per mill (cheap: one pass per mill per day).
 
 ## Plan gating & bill safety (V2-ready)
 
-- `mills.plan`: `trial | starter | professional | enterprise`.
+**Today there is no billing and no plan gating.** Every mill gets every module free; `mills.plan` is
+retained as internal metadata only and is never rendered in the UI. Do not gate a feature on it
+without also restoring the parked pricing section in `public/index.html`.
+
+- `mills.plan`: `trial | starter | professional | enterprise` (unused for entitlement).
 - Pay-per-use features (WhatsApp API digest, SMS) live behind a per-mill **monthly usage counter
   in D1 with a hard cap**; when the cap is hit the feature degrades to the free path
   (in-app digest + wa.me link). We never call a paid API without decrementing an allowance first.
+  The shipped digest already *is* the free path, so V1 has no metered API calls at all.
 
 ## Scale-up path (V2, funded by revenue)
 

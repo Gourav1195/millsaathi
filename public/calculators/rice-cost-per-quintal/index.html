@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rice Cost Per Quintal Calculator — Free Mill Tool</title>
+<meta name="description" content="Free calculator for the true cost of a quintal of rice: paddy rate, outturn percentage, bran and husk credit, milling and transport cost. Shows break-even selling rate and margin per quintal.">
+<link rel="canonical" href="https://millsaathi.com/calculators/rice-cost-per-quintal">
+<meta property="og:site_name" content="MillSaathi">
+<meta property="og:locale" content="en_IN">
+<meta property="og:title" content="Rice Cost Per Quintal Calculator — Free Mill Tool">
+<meta property="og:description" content="Free calculator for the true cost of a quintal of rice: paddy rate, outturn percentage, bran and husk credit, milling and transport cost. Shows break-even selling rate and margin per quintal.">
+<meta property="og:url" content="https://millsaathi.com/calculators/rice-cost-per-quintal">
+<meta property="og:type" content="article">
+<meta property="og:image" content="https://millsaathi.com/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Rice Cost Per Quintal Calculator — Free Mill Tool">
+<meta name="twitter:description" content="Free calculator for the true cost of a quintal of rice: paddy rate, outturn percentage, bran and husk credit, milling and transport cost. Shows break-even selling rate and margin per quintal.">
+<meta name="twitter:image" content="https://millsaathi.com/assets/og-image.png">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-WHW588NPD2"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-WHW588NPD2');
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/pages.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23211F1A'/%3E%3Cpath d='M5 19V9.5L12 5l7 4.5V19' stroke='%23E8B93B' stroke-width='2' fill='none' stroke-linejoin='round'/%3E%3Cpath d='M9.5 19v-4h5v4' stroke='%23E8B93B' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://millsaathi.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Calculators",
+          "item": "https://millsaathi.com/calculators"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Cost per quintal of rice",
+          "item": "https://millsaathi.com/calculators/rice-cost-per-quintal"
+        }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How do I calculate the cost of one quintal of rice?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Add paddy rate, milling cost and transport per quintal of paddy, subtract the bran and husk credit, then divide by your outturn expressed as a fraction. Dividing by outturn is the step that is usually skipped, and it is the step that turns a paddy rate into a rice cost."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why does one point of outturn matter so much?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Because cost per quintal of rice is net paddy cost divided by outturn. At around two-thirds recovery, every rupee of paddy cost becomes roughly one and a half rupees of rice cost, so a point lost on recovery raises your cost by more than a point — on every lot, all season."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Should by-products be counted as income or as a cost reduction?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Either works arithmetically, as long as you do it consistently and actually record the sale. The real risk is not the accounting treatment — it is bran and husk leaving the mill without ever being tied to the lot that produced them, which makes your rice look more expensive than it is and hides a genuine leak."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is MillSaathi free to use for this?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. This calculator needs no signup, and MillSaathi itself is free — all modules, unlimited users, no card. The difference is that the product runs this calculation on your real captured weights every day instead of on the assumptions you typed here."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does it replace Tally?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. MillSaathi captures what physically happens on the mill floor and reconciles every lot; Tally stays your accounting. The point is to feed Tally verified numbers instead of end-of-day re-entry from memory."
+          }
+        }
+      ]
+    },
+    {
+      "@type": "WebApplication",
+      "name": "Rice Cost Per Quintal Calculator",
+      "url": "https://millsaathi.com/calculators/rice-cost-per-quintal",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web",
+      "browserRequirements": "Requires JavaScript",
+      "offers": {
+        "@type": "Offer",
+        "priceCurrency": "INR",
+        "price": "0"
+      }
+    }
+  ]
+}
+</script>
+</head>
+<body>
+
+<header class="nav">
+  <nav class="nav-in">
+    <a class="brand" href="/">
+      <span class="brand-mark"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#E8B93B" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#E8B93B" stroke-width="2" stroke-linecap="round"/><path d="M12 4v3" stroke="#C0451C" stroke-width="2" stroke-linecap="round"/></svg></span>
+      <span class="brand-name">MillSaathi</span>
+    </a>
+    <div class="nav-links">
+      <a class="nav-hide" href="/calculators">Calculators</a>
+      <a class="nav-hide" href="/#modules">Modules</a>
+      <a class="nav-hide" href="/#pricing">Pricing</a>
+      <a href="/demo">Demo mill</a>
+      <a class="nav-cta" href="/app">Start free</a>
+    </div>
+  </nav>
+</header>
+
+<div class="wrap-narrow">
+  <div class="crumb">
+    <a href="/">Home</a><span>›</span><a href="/calculators">Calculators</a><span>›</span>Cost per quintal of rice
+  </div>
+</div>
+
+
+  <section class="wrap-narrow hero">
+    <div class="eyebrow">Free calculator · no signup</div>
+    <h1>What a quintal of rice actually costs you</h1>
+    <p class="lede">The paddy rate is the number everyone quotes, and it is never the cost. Outturn, by-product credit and milling cost decide what a quintal of rice really costs — and therefore the rate below which a sale loses money.</p>
+  </section>
+  <section class="wrap-narrow prose">
+    <h2>The calculator</h2>
+    <p>Everything here is per quintal of <em>paddy</em>, except the results, which are per quintal of <em>rice</em>. That conversion is the part most back-of-the-envelope sums get wrong.</p>
+
+    <div class="calc">
+      <div class="calc-inputs">
+        <div class="calc-label">Cost side (per qtl of paddy)</div>
+        <div class="fld">
+          <label for="prate2">Paddy rate (₹ per qtl)</label>
+          <input id="prate2" type="number" min="0" step="1" value="2300">
+        </div>
+        <div class="fld">
+          <label for="mill">Milling &amp; labour cost (₹ per qtl of paddy)</label>
+          <input id="mill" type="number" min="0" step="1" value="120">
+          <div class="hint">Power, labour, consumables, maintenance — your own figure.</div>
+        </div>
+        <div class="fld">
+          <label for="trans">Transport &amp; handling (₹ per qtl of paddy)</label>
+          <input id="trans" type="number" min="0" step="1" value="40">
+        </div>
+
+        <div class="calc-label" style="margin-top:24px;">Recovery &amp; by-product credit</div>
+        <div class="fld">
+          <label for="ot">Rice outturn (%)</label>
+          <input id="ot" type="number" min="1" max="100" step="0.1" value="67">
+        </div>
+        <div class="fld">
+          <label for="branPc">Bran recovery (%) and rate (₹ per qtl)</label>
+          <div style="display:flex;gap:10px;">
+            <input id="branPc" type="number" min="0" max="100" step="0.1" value="8">
+            <input id="branRt" type="number" min="0" step="1" value="1800">
+          </div>
+        </div>
+        <div class="fld">
+          <label for="huskPc">Husk recovery (%) and rate (₹ per qtl)</label>
+          <div style="display:flex;gap:10px;">
+            <input id="huskPc" type="number" min="0" max="100" step="0.1" value="20">
+            <input id="huskRt" type="number" min="0" step="1" value="180">
+          </div>
+        </div>
+        <div class="fld">
+          <label for="sell">Your rice selling rate (₹ per qtl)</label>
+          <input id="sell" type="number" min="0" step="1" value="4200">
+        </div>
+      </div>
+
+      <div class="calc-out">
+        <div class="calc-label">What it really costs</div>
+        <div class="res-hero" id="costBox">
+          <div class="k">Cost per qtl of rice</div>
+          <div class="v" id="cost">—</div>
+          <div class="sub" id="costLine">—</div>
+        </div>
+        <div class="res">
+          <div class="res-row"><span class="k">Total cost per qtl paddy</span><span class="v" id="tot">—</span></div>
+          <div class="res-row"><span class="k">By-product credit</span><span class="v" id="cred">—</span></div>
+          <div class="res-row"><span class="k">Net cost per qtl paddy</span><span class="v" id="net">—</span></div>
+          <div class="res-row"><span class="k">Break-even rice rate</span><span class="v" id="be">—</span></div>
+          <div class="res-row"><span class="k">Margin per qtl of rice</span><span class="v" id="marg">—</span></div>
+          <div class="res-row"><span class="k">Margin %</span><span class="v" id="margPct">—</span></div>
+        </div>
+        <p class="calc-note">Runs in your browser. Nothing is stored or sent.</p>
+      </div>
+    </div>
+
+    <h2>How the conversion works</h2>
+    <div class="callout">
+      <p><strong>Net cost per qtl of paddy = paddy rate + milling + transport − by-product credit</strong></p>
+      <p><strong>Cost per qtl of rice = net cost per qtl of paddy ÷ (outturn ÷ 100)</strong></p>
+    </div>
+    <p>That division is where the money is. At a 67% outturn every quintal of paddy yields roughly two-thirds of a quintal of rice, so every rupee of net paddy cost becomes about one and a half rupees of rice cost. It also means a single point of outturn is worth far more than it looks — losing one point does not cost you one percent, it raises your rice cost by roughly one and a half percent of itself, every single lot.</p>
+    <p>By-product credit works in the other direction and is routinely undercounted. Bran in particular carries a real price, and mills that sell it casually — without it ever appearing against the lot it came from — are giving away margin they have already earned.</p>
+
+    <h2>Why break-even is the number to know before you sell</h2>
+    <p>Most rate decisions get made on the phone, against a memory of what paddy cost. Break-even is what actually protects a sale: below it you are converting working capital into losses at speed, and because rice moves in large lots, one badly-priced sale can undo a good month.</p>
+    <ul class="leak">
+      <li>Outturn drifting down quietly raises your break-even without anyone announcing it</li>
+      <li>By-products sold off the books make your true cost look higher than it is</li>
+      <li>Milling cost per quintal rises as throughput falls — a slow season is a more expensive one</li>
+      <li>Paddy bought wet and paid as dry inflates every number on this page</li>
+    </ul>
+    <p>This calculator gives you the figure for one set of assumptions. MillSaathi keeps the same sum running on your real lots, every day, from the weights actually captured at the bridge — and it is free.</p>
+  </section>
+<script src="/assets/calc.js"></script>
+
+  <section class="wrap-narrow">
+    <h2>Common questions</h2>
+    <details>
+      <summary>How do I calculate the cost of one quintal of rice?<span class="plus">+</span></summary>
+      <p>Add paddy rate, milling cost and transport per quintal of paddy, subtract the bran and husk credit, then divide by your outturn expressed as a fraction. Dividing by outturn is the step that is usually skipped, and it is the step that turns a paddy rate into a rice cost.</p>
+    </details>
+    <details>
+      <summary>Why does one point of outturn matter so much?<span class="plus">+</span></summary>
+      <p>Because cost per quintal of rice is net paddy cost divided by outturn. At around two-thirds recovery, every rupee of paddy cost becomes roughly one and a half rupees of rice cost, so a point lost on recovery raises your cost by more than a point — on every lot, all season.</p>
+    </details>
+    <details>
+      <summary>Should by-products be counted as income or as a cost reduction?<span class="plus">+</span></summary>
+      <p>Either works arithmetically, as long as you do it consistently and actually record the sale. The real risk is not the accounting treatment — it is bran and husk leaving the mill without ever being tied to the lot that produced them, which makes your rice look more expensive than it is and hides a genuine leak.</p>
+    </details>
+    <details>
+      <summary>Is MillSaathi free to use for this?<span class="plus">+</span></summary>
+      <p>Yes. This calculator needs no signup, and MillSaathi itself is free — all modules, unlimited users, no card. The difference is that the product runs this calculation on your real captured weights every day instead of on the assumptions you typed here.</p>
+    </details>
+    <details>
+      <summary>Does it replace Tally?<span class="plus">+</span></summary>
+      <p>No. MillSaathi captures what physically happens on the mill floor and reconciles every lot; Tally stays your accounting. The point is to feed Tally verified numbers instead of end-of-day re-entry from memory.</p>
+    </details>
+  </section>
+
+<section class="wrap-narrow">
+  <div class="cta">
+    <h2>See where your own quintals go.</h2>
+    <p>MillSaathi is free — every module, unlimited users, no card. Open the demo mill and click through a real day, or start your own mill in a few minutes.</p>
+    <div class="btn-row">
+      <a class="btn btn-acc" href="/app">Start free — no card
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#F6F1E6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a class="btn btn-out" href="/demo">See the demo mill</a>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="foot-in">
+    <div style="flex:1 1 260px;max-width:320px;">
+      <div class="brand" style="color:#F6F1E6;">
+        <span class="brand-mark" style="background:#F6F1E6;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11" stroke="#211F1A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 20v-5h6v5" stroke="#211F1A" stroke-width="2" stroke-linecap="round"/><path d="M12 4v3" stroke="#C0451C" stroke-width="2" stroke-linecap="round"/></svg></span>
+        <span class="brand-name">MillSaathi</span>
+      </div>
+      <p>Free operations &amp; ERP for India's mills. We tell you where every quintal actually went.</p>
+      <p class="deva" style="color:#8A8272;">पता चलेगा माल कहाँ जा रहा है।</p>
+    </div>
+    <div>
+      <h4>Talk to us</h4>
+      <div class="col">
+        <a href="https://wa.me/918709575693">WhatsApp</a>
+        <a href="tel:+918709575693">+91 87095 75693</a>
+        <a href="mailto:connect@equaseed.com">connect@equaseed.com</a>
+      </div>
+    </div>
+    <div>
+      <h4>Free tools</h4>
+      <div class="col">
+        <a href="/calculators">All calculators</a>
+        <a href="/calculators/rice-mill-outturn">Outturn &amp; loss</a>
+        <a href="/calculators/paddy-moisture-deduction">Moisture deduction</a>
+        <a href="/calculators/rice-cost-per-quintal">Cost per quintal</a>
+      </div>
+    </div>
+    <div>
+      <h4>Platform</h4>
+      <div class="col">
+        <a href="/#how">How it works</a>
+        <a href="/#modules">Modules</a>
+        <a href="/#pricing">Pricing (free)</a>
+        <a href="/mill-software">Mill types</a>
+        <a href="/demo">Demo mill</a>
+        <a href="/app">Log in</a>
+      </div>
+    </div>
+  </div>
+  <div class="foot-bar">
+    <span>© 2026 MillSaathi · millsaathi.com</span>
+    <span>Free for every mill.</span>
+  </div>
+</footer>
+<script>
+(function(){
+  var C = window.MSCalc;
+  C.bind(function(){
+    var pr = C.n('prate2'), mc = C.n('mill'), tr = C.n('trans'), ot = C.n('ot');
+    var bp = C.n('branPc'), br = C.n('branRt'), hp = C.n('huskPc'), hr = C.n('huskRt'), sell = C.n('sell');
+    if (ot <= 0) {
+      ['tot','cred','net','cost','be','marg','margPct'].forEach(function(id){ C.set(id,'—'); });
+      C.set('costLine','Enter an outturn percentage above zero.');
+      C.tone('costBox', null);
+      return;
+    }
+    var tot = pr + mc + tr;
+    var cred = (bp / 100) * br + (hp / 100) * hr;
+    var net = tot - cred;
+    var cost = net / (ot / 100);
+    var marg = sell - cost;
+    C.set('tot', C.inr(tot));
+    C.set('cred', C.inr(cred));
+    C.set('net', C.inr(net));
+    C.set('cost', C.inr(cost));
+    C.set('be', C.inr(cost));
+    C.set('marg', C.inr(marg));
+    C.set('margPct', sell > 0 ? C.pct(marg / sell * 100) : '—');
+    if (sell <= 0) {
+      C.set('costLine', 'Add your rice selling rate to see the margin.');
+      C.tone('costBox', null);
+    } else if (marg < 0) {
+      C.set('costLine', 'You are selling ' + C.inr(-marg) + '/qtl below cost at ₹' + Math.round(sell).toLocaleString('en-IN') + '.');
+      C.tone('costBox', 'bad');
+    } else {
+      C.set('costLine', 'At ₹' + Math.round(sell).toLocaleString('en-IN') + '/qtl you keep ' + C.inr(marg) + ' per qtl of rice.');
+      C.tone('costBox', marg / sell < 0.02 ? null : 'good');
+    }
+  });
+})();
+</script>
+</body>
+</html>
