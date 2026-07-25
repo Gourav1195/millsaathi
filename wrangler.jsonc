@@ -13,6 +13,10 @@
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
+    // Serve /calculators, not /calculators/. The canonical tags and sitemap
+    // emitted by scripts/build-seo.mjs use the no-trailing-slash form, so the
+    // default "auto-trailing-slash" would make every canonical point at a 307.
+    "html_handling": "drop-trailing-slash",
     "run_worker_first": ["/api/*"]
   },
   "d1_databases": [
