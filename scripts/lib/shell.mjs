@@ -9,6 +9,23 @@ export const EMAIL = 'connect@equaseed.com';
 export const GA_ID = 'G-WHW588NPD2';
 export const OG_IMAGE = `${SITE}/assets/og-image.png`;
 
+// The Devanagari lines are a trust signal for an Indian mill owner and noise to
+// anyone else, so they are hidden outside India. This runs in <head>, before the
+// body paints, so there is no flash of Hindi. It only ever HIDES: if Intl is
+// missing or throws, the Indian visitor still gets the full page. Append
+// ?region=intl (or ?region=in) to any URL to force either view for testing.
+// Keep this byte-identical to the copies in public/index.html, /app and /demo.
+export const REGION_SCRIPT = `<script>
+(function(){try{
+var q=/[?&]region=(in|intl)\\b/i.exec(location.search);
+if(q){if(q[1].toLowerCase()==='intl')document.documentElement.setAttribute('data-region','intl');return;}
+var t=Intl.DateTimeFormat().resolvedOptions().timeZone||'',
+    l=(navigator.languages||[navigator.language||'']).join(',');
+if(!/Asia\\/(Kolkata|Calcutta)/i.test(t)&&!/-IN\\b/i.test(l)&&!/\\b(hi|bn|mr|ta|te|gu|kn|ml|pa|or|as)\\b/i.test(l))
+  document.documentElement.setAttribute('data-region','intl');
+}catch(e){}})();
+</script>`;
+
 export function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -87,6 +104,7 @@ export function page(p) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+${REGION_SCRIPT}
 <title>${esc(p.title)}</title>
 <meta name="description" content="${esc(p.description)}">
 <link rel="canonical" href="${url}">

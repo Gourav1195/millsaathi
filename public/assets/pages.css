@@ -83,6 +83,8 @@ h1 {
 }
 .lede { font-size: clamp(16px, 1.8vw, 19px); line-height: 1.6; color: var(--muted); margin: 15px 0 0; font-weight: 500; max-width: 700px; }
 .deva { font-family: 'Noto Sans Devanagari', sans-serif; font-weight: 600; }
+/* Set by the inline <head> script for visitors outside India — see shell.mjs. */
+html[data-region="intl"] .deva { display: none; }
 
 h2 {
   font-family: 'Archivo', sans-serif; font-weight: 800;

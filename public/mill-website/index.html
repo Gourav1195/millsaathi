@@ -3,6 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+(function(){try{
+var q=/[?&]region=(in|intl)\b/i.exec(location.search);
+if(q){if(q[1].toLowerCase()==='intl')document.documentElement.setAttribute('data-region','intl');return;}
+var t=Intl.DateTimeFormat().resolvedOptions().timeZone||'',
+    l=(navigator.languages||[navigator.language||'']).join(',');
+if(!/Asia\/(Kolkata|Calcutta)/i.test(t)&&!/-IN\b/i.test(l)&&!/\b(hi|bn|mr|ta|te|gu|kn|ml|pa|or|as)\b/i.test(l))
+  document.documentElement.setAttribute('data-region','intl');
+}catch(e){}})();
+</script>
 <title>Rice Mill Website Design — MillSaathi</title>
 <meta name="description" content="We build simple, fast websites for Indian mills — your mill's name, what you mill, capacity, godowns and a WhatsApp button, in Hindi or English. Separate from the free MillSaathi software.">
 <link rel="canonical" href="https://millsaathi.com/mill-website">

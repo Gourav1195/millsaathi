@@ -3,6 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+(function(){try{
+var q=/[?&]region=(in|intl)\b/i.exec(location.search);
+if(q){if(q[1].toLowerCase()==='intl')document.documentElement.setAttribute('data-region','intl');return;}
+var t=Intl.DateTimeFormat().resolvedOptions().timeZone||'',
+    l=(navigator.languages||[navigator.language||'']).join(',');
+if(!/Asia\/(Kolkata|Calcutta)/i.test(t)&&!/-IN\b/i.test(l)&&!/\b(hi|bn|mr|ta|te|gu|kn|ml|pa|or|as)\b/i.test(l))
+  document.documentElement.setAttribute('data-region','intl');
+}catch(e){}})();
+</script>
 <title>Free Mill Software in India — Rice, Flour, Oil, Dal</title>
 <meta name="description" content="Free mill management software for Indian mills. Rice is live today; flour, oil, dal and sugar mills can use the gate, weighbridge, stock and khata modules now. No cost, no card.">
 <link rel="canonical" href="https://millsaathi.com/mill-software">

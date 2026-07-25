@@ -3,6 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+(function(){try{
+var q=/[?&]region=(in|intl)\b/i.exec(location.search);
+if(q){if(q[1].toLowerCase()==='intl')document.documentElement.setAttribute('data-region','intl');return;}
+var t=Intl.DateTimeFormat().resolvedOptions().timeZone||'',
+    l=(navigator.languages||[navigator.language||'']).join(',');
+if(!/Asia\/(Kolkata|Calcutta)/i.test(t)&&!/-IN\b/i.test(l)&&!/\b(hi|bn|mr|ta|te|gu|kn|ml|pa|or|as)\b/i.test(l))
+  document.documentElement.setAttribute('data-region','intl');
+}catch(e){}})();
+</script>
 <title>MillSaathi — Free Rice Mill Software &amp; ERP for India</title>
 <meta name="description" content="Free mill management software for India's rice mills. Gate, weighbridge, lab, saudas, stock and the owner's nightly WhatsApp digest — every module, no cost, no card. It doesn't replace Tally, it feeds it the truth.">
 <link rel="canonical" href="https://millsaathi.com/">
@@ -39,6 +49,9 @@
   ::selection { background: #211F1A; color: #F6F1E6; }
   @keyframes ms-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   summary::-webkit-details-marker { display: none; }
+  /* The Devanagari lines read as trust to a mill owner and as noise to everyone
+     else, so the inline <head> script above hides them outside India. */
+  html[data-region="intl"] .deva { display: none; }
   summary > span { transition: transform .18s ease; }
   details[open] summary > span { transform: rotate(45deg); }
   /* Secondary nav links. On a phone there is only room for the brand, Log in
@@ -150,7 +163,7 @@
           Your mill runs on paper, WhatsApp, and trust in your munshi.
           <span style="color: #E8B93B;">MillSaathi tells you where every quintal actually went.</span>
         </h1>
-        <p style="font-family: 'Noto Sans Devanagari', sans-serif; font-weight: 600; font-size: clamp(19px,2.6vw,26px); color: #F6F1E6; margin: 20px 0 0; line-height: 1.5;">पता चलेगा माल कहाँ जा रहा है।</p>
+        <p class="deva" style="font-family: 'Noto Sans Devanagari', sans-serif; font-weight: 600; font-size: clamp(19px,2.6vw,26px); color: #F6F1E6; margin: 20px 0 0; line-height: 1.5;">पता चलेगा माल कहाँ जा रहा है।</p>
         <p style="font-size: clamp(16px,1.9vw,19px); line-height: 1.6; color: #C8C1B2; max-width: 540px; margin: 18px 0 0; font-weight: 500;">
           One system that captures reality at the source — weighbridge, lab, gate, production — and reconciles every lot. It doesn't replace Tally. It feeds it the truth.
         </p>
@@ -416,7 +429,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center;"><span style="font-size:12.5px;font-weight:700;color:#8F2E12;">⚠ Unexplained loss</span><span style="font-family:'Archivo',sans-serif;font-weight:800;font-size:16px;color:#C0451C;">5.0%</span></div>
                 <div style="font-size: 11.5px; color: #8F2E12; font-weight: 600; margin-top: 3px;">Above your 3% limit. Tap to see the 3 lots.</div>
               </div>
-              <div style="font-family: 'Noto Sans Devanagari', sans-serif; font-size: 12.5px; color: #57513F; font-weight: 500; text-align: center; margin-top: 4px;">पता चलेगा माल कहाँ जा रहा है।</div>
+              <div class="deva" style="font-family: 'Noto Sans Devanagari', sans-serif; font-size: 12.5px; color: #57513F; font-weight: 500; text-align: center; margin-top: 4px;">पता चलेगा माल कहाँ जा रहा है।</div>
             </div>
           </div>
         </div>
@@ -463,7 +476,7 @@
       <div style="max-width: 760px;">
         <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #C0451C;">Pricing</div>
         <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(28px,4vw,44px); line-height: 1.08; letter-spacing: -.02em; margin: 12px 0 0;">It's free. Poora ka poora.</h2>
-        <p style="font-family: 'Noto Sans Devanagari', sans-serif; font-weight: 600; font-size: clamp(18px,2.3vw,23px); color: #211F1A; margin: 14px 0 0; line-height: 1.5;">पूरा सॉफ़्टवेयर, बिलकुल मुफ़्त। कोई छुपा हुआ चार्ज नहीं।</p>
+        <p class="deva" style="font-family: 'Noto Sans Devanagari', sans-serif; font-weight: 600; font-size: clamp(18px,2.3vw,23px); color: #211F1A; margin: 14px 0 0; line-height: 1.5;">पूरा सॉफ़्टवेयर, बिलकुल मुफ़्त। कोई छुपा हुआ चार्ज नहीं।</p>
         <p style="font-size: clamp(16px,1.8vw,19px); line-height: 1.6; color: #57513F; margin: 16px 0 0; font-weight: 500;">Every module, every user, every truck. No card, no setup fee, no per-user creep, no "demo pe baat karenge" price. We'd rather learn the mill floor with a hundred mills than bill ten.</p>
       </div>
 
@@ -650,7 +663,7 @@
           <span style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 19px; color: #F6F1E6;">MillSaathi</span>
         </div>
         <p style="font-size: 14.5px; line-height: 1.55; margin: 14px 0 0; max-width: 300px; font-weight: 500;">Operations &amp; ERP for India's mills. We tell you where every quintal actually went.</p>
-        <p style="font-family: 'Noto Sans Devanagari', sans-serif; font-size: 14px; color: #8A8272; margin: 10px 0 0; font-weight: 500;">पता चलेगा माल कहाँ जा रहा है।</p>
+        <p class="deva" style="font-family: 'Noto Sans Devanagari', sans-serif; font-size: 14px; color: #8A8272; margin: 10px 0 0; font-weight: 500;">पता चलेगा माल कहाँ जा रहा है।</p>
       </div>
 
       <div style="flex: 0 1 auto;">

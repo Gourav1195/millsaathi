@@ -125,6 +125,8 @@ dialog.modal::backdrop { background: rgba(27,36,49,.45); }
 .phone .bd { padding: 15px 16px; display: flex; flex-direction: column; gap: 10px; }
 .phone .row { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; }
 .deva { font-family: 'Noto Sans Devanagari', sans-serif; }
+/* Set by the inline <head> script for visitors outside India — see shell.mjs. */
+html[data-region="intl"] .deva { display: none; }
 
 .note-locked { padding: 12px 22px; background: #FAFBFC; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .empty { padding: 34px 22px; text-align: center; color: var(--muted); font-weight: 600; font-size: 14px; }

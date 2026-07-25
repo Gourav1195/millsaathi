@@ -98,8 +98,14 @@
     cash_paid_paise: 239000000,
     mass_balance: window.DEMO_OVERVIEW.mass_balance,
     text: '',
+    // Sign-off drops the Devanagari tagline outside India, matching the .deva
+    // lines the <head> region script hides — this string is plain text, so CSS
+    // cannot reach it.
     wa_share_url: 'https://wa.me/?text=' + encodeURIComponent(
-      '*Sri Venkatesh Rice Mill* — Night Digest\nPaddy in: 42 trucks · 1,040 qtl\nDispatched: 690 qtl\nCash paid: ₹23.9 L\nUnexplained loss: 5.0% ⚠ above your 3% limit\n— MillSaathi · पता चलेगा माल कहाँ जा रहा है।'
+      '*Sri Venkatesh Rice Mill* — Night Digest\nPaddy in: 42 trucks · 1,040 qtl\nDispatched: 690 qtl\nCash paid: ₹23.9 L\nUnexplained loss: 5.0% ⚠ above your 3% limit\n' +
+      (document.documentElement.getAttribute('data-region') === 'intl'
+        ? '— MillSaathi'
+        : '— MillSaathi · पता चलेगा माल कहाँ जा रहा है।')
     ),
   };
 })();
