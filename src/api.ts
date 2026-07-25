@@ -10,7 +10,7 @@ export function istToday(offsetDays = 0): string {
 
 function uuid(): string {
   return crypto.randomUUID();
-}
+} 
 
 async function nextCode(db: D1Database, millId: string, key: string, prefix: string): Promise<string> {
   const row = await db
