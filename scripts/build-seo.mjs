@@ -360,6 +360,98 @@ ${FREE_BLOCK}
 }
 
 /* ------------------------------------------------------------------ */
+/* mill website service                                                */
+/* ------------------------------------------------------------------ */
+
+// A separate paid-or-negotiated service, NOT part of the free software. Two
+// rules for this page: (1) never quote a price — there is still no way to
+// collect one; (2) never blur it into the "poora ka poora free" promise, or the
+// free positioning reads as bait. Keep the separation explicit.
+async function buildMillWebsite() {
+  const path = '/mill-website';
+  await emit(
+    path,
+    page({
+      path,
+      title: 'Rice Mill Website Design — MillSaathi',
+      description:
+        "We build simple, fast websites for Indian mills — your mill's name, what you mill, capacity, godowns and a WhatsApp button, in Hindi or English. Separate from the free MillSaathi software.",
+      crumbs: [{ name: 'Mill website' }],
+      body:
+        hero(
+          'A separate service',
+          'A simple website for your mill',
+          'Buyers, brokers and procurement officers look you up before they call. If nothing comes up, or a Justdial listing from 2015 does, that is the impression you are making. We build small, fast mill websites — and we build them the same way we built this one.'
+        ) +
+        `
+  <section class="wrap-narrow prose">
+    <div class="callout">
+      <p><strong>First, the important bit:</strong> the MillSaathi software is free and always will be — gate, weighbridge, lab, saudas, stock, mass balance, unlimited users, no card. This page is about something else entirely: a website for your own mill. It is a separate service and it is not required to use the software. Nothing here changes what you get for free.</p>
+    </div>
+
+    <h2>Why a mill needs one at all</h2>
+    <p>Milling is still a trade run on relationships, and that is not changing. But the first check has quietly moved online. A buyer in another state, a broker you have not dealt with before, an exporter deciding whom to shortlist — they search your mill's name before they pick up the phone, and what they find decides whether they bother.</p>
+    <ul>
+      <li>Buyers and brokers verify you exist, at the scale you claim, before the first call</li>
+      <li>Procurement and tender paperwork increasingly expects a web presence against your GST and registration details</li>
+      <li>The next generation running family mills checks online first — including your own buyers' sons</li>
+      <li>A page you control beats a stale directory listing you have no way to correct</li>
+    </ul>
+
+    <h2>What you get</h2>
+    <p>Deliberately small. A mill does not need a ten-page website with a blog — it needs one page that loads instantly on a phone with two bars of signal and answers what a buyer actually asks.</p>
+    <ul>
+      <li>Your mill's name, location, and how long you have been running</li>
+      <li>What you mill, which varieties, and your capacity — the questions every buyer opens with</li>
+      <li>Godowns and storage, weighbridge, and your certifications or registrations</li>
+      <li>Photos of the actual mill, not stock images of somebody else's plant</li>
+      <li>A WhatsApp button and a phone number that work on one tap</li>
+      <li>Hindi or English, or both — your buyer's language, not ours</li>
+      <li>Your own domain, and a site fast enough to open on a rural connection</li>
+    </ul>
+
+    <h2>How it works</h2>
+    <p>Message us on WhatsApp with your mill's name and what you mill. We will tell you plainly what we would build, what it involves, and what it costs — before you commit to anything. If it is not worth it for your mill, we will say so; a website is not going to fix a business that does not need one.</p>
+    <div class="btn-row" style="justify-content:flex-start;margin-top:22px;">
+      <a class="btn btn-acc" href="https://wa.me/${WA}?text=${encodeURIComponent(
+        'Namaste, I want a website for my mill. My mill is:'
+      )}">Ask about a mill website
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#F6F1E6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+
+    <h2>Why trust us with it</h2>
+    <p>You are on the thing we would build. This site, the demo mill, the free calculators and the whole MillSaathi application are ours — built for Indian mills, on Indian connections, for people working on mid-range Android phones at a dusty gate. We are not a web agency that happened to take a mill enquiry. We already know what a sauda is, why moisture matters at the gate, and what your buyer is going to ask you.</p>
+  </section>`,
+      faqs: [
+        {
+          q: 'Is the mill website free like the software?',
+          a: 'No, and we would rather be straight about that than surprise you later. The MillSaathi software is genuinely free with no card and no limits. A website for your own mill is a separate service with real work behind it — message us and we will tell you what it involves and what it costs before you commit to anything.',
+        },
+        {
+          q: 'Do I have to use MillSaathi to get a website?',
+          a: 'No. They are independent. You can use the free software and never ask about a website, or ask about a website without using the software at all.',
+        },
+        {
+          q: 'Can the website be in Hindi?',
+          a: 'Yes — Hindi, English, or both. Your buyers and brokers should read it in whatever language they actually use, which for most mills is not English.',
+        },
+        {
+          q: 'How long does it take?',
+          a: "It depends on how quickly you can send photos and your mill's details, which is usually the slow part rather than the building. Message us and we will give you a realistic timeline for your mill rather than a number off a price list.",
+        },
+        ...SHARED_FAQS,
+      ],
+      cta: {
+        title: 'The software stays free either way.',
+        body: 'A website is optional and separate. The mill software — gate, weighbridge, lab, saudas, stock and the nightly mass balance — costs nothing, needs no card, and has no user limit.',
+      },
+    }),
+    { priority: '0.6' }
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* sitemap                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -389,6 +481,7 @@ ${urls
 await buildCalculators();
 await buildStates();
 await buildMillTypes();
+await buildMillWebsite();
 const count = await buildSitemap();
 
 console.log(`Generated ${written.length} pages, sitemap with ${count} URLs.`);

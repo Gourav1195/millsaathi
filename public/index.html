@@ -41,6 +41,9 @@
   summary::-webkit-details-marker { display: none; }
   summary > span { transition: transform .18s ease; }
   details[open] summary > span { transform: rotate(45deg); }
+  /* Secondary nav links. On a phone there is only room for the brand, Log in
+     and the CTA — without this the CTA gets pushed off-screen entirely. */
+  @media (max-width: 780px) { .nv { display: none; } }
 </style>
 <script type="application/ld+json">
 {
@@ -120,11 +123,11 @@
         <span style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -.02em;">MillSaathi</span>
       </a>
       <div style="display: flex; align-items: center; gap: clamp(14px,2.4vw,30px); font-weight: 600; font-size: 15px;">
-        <a href="#how" style="text-decoration: none; color: #4A453B;">How it works</a>
-        <a href="#modules" style="text-decoration: none; color: #4A453B;">Modules</a>
-        <a href="/calculators" style="text-decoration: none; color: #4A453B;">Calculators</a>
-        <a href="#pricing" style="text-decoration: none; color: #4A453B;">Pricing</a>
-        <a href="#faq" style="text-decoration: none; color: #4A453B;">FAQ</a>
+        <a class="nv" href="#how" style="text-decoration: none; color: #4A453B;">How it works</a>
+        <a class="nv" href="#modules" style="text-decoration: none; color: #4A453B;">Modules</a>
+        <a class="nv" href="/calculators" style="text-decoration: none; color: #4A453B;">Calculators</a>
+        <a class="nv" href="#pricing" style="text-decoration: none; color: #4A453B;">Pricing</a>
+        <a class="nv" href="#faq" style="text-decoration: none; color: #4A453B;">FAQ</a>
         <a href="/app" style="text-decoration: none; color: #4A453B;">Log in</a>
         <a href="/app" style="text-decoration: none; color: #F6F1E6; background: var(--accent); padding: 10px 18px; border-radius: 7px; font-weight: 700; box-shadow: 0 1px 0 var(--accent-ink);">Start free</a>
       </div>
@@ -438,6 +441,22 @@
     </div>
   </section>
 
+  <!-- ===================== MILL WEBSITE (separate service) ===================== -->
+  <section style="padding: clamp(40px,5vw,60px) clamp(18px,4vw,44px); background: #F6F1E6;">
+    <div style="max-width: 1220px; margin: 0 auto; background: #FFFFFF; border: 1px solid #E2D9C4; border-radius: 14px; padding: clamp(24px,3.2vw,36px); display: flex; flex-wrap: wrap; align-items: center; gap: 24px 40px; justify-content: space-between;">
+      <div style="flex: 1 1 380px;">
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: #8A8272;">A separate service</div>
+        <h2 style="font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(21px,2.6vw,29px); line-height: 1.2; letter-spacing: -.02em; margin: 9px 0 0;">Want a website for your mill too?</h2>
+        <p style="font-size: 16px; line-height: 1.6; color: #57513F; margin: 11px 0 0; font-weight: 500; max-width: 620px;">Buyers and brokers look you up before they call. We build small, fast mill websites — your name, capacity, godowns, photos and a WhatsApp button, in Hindi or English. Built the same way we built this site.</p>
+        <p style="font-size: 14px; line-height: 1.55; color: #8A8272; margin: 11px 0 0; font-weight: 500;">This one is separate from the software and is not free — the mill software stays ₹0 either way.</p>
+      </div>
+      <a href="/mill-website" style="text-decoration: none; background: transparent; color: #211F1A; font-weight: 700; font-size: 16.5px; padding: 14px 25px; border-radius: 8px; border: 1.5px solid #211F1A; display: inline-flex; align-items: center; gap: 9px; white-space: nowrap;">
+        See what we build
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#211F1A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+  </section>
+
   <!-- ===================== PRICING (FREE) ===================== -->
   <section id="pricing" style="padding: clamp(56px,8vw,104px) clamp(18px,4vw,44px); background: #F6F1E6;">
     <div style="max-width: 1220px; margin: 0 auto;">
@@ -664,6 +683,7 @@
           <a href="/oil-mill-software" style="text-decoration: none; color: #C8C1B2;">Oil mill software</a>
           <a href="/dal-mill-software" style="text-decoration: none; color: #C8C1B2;">Dal mill software</a>
           <a href="/sugar-mill-software" style="text-decoration: none; color: #C8C1B2;">Sugar mill software</a>
+          <a href="/mill-website" style="text-decoration: none; color: #C8C1B2;">Website for your mill</a>
         </div>
       </div>
 

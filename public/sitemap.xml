@@ -50,6 +50,12 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://millsaathi.com/mill-website</loc>
+    <lastmod>2026-07-25</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
     <loc>https://millsaathi.com/oil-mill-software</loc>
     <lastmod>2026-07-25</lastmod>
     <changefreq>monthly</changefreq>
