@@ -1,26 +1,56 @@
 # MillSaathi
 
-Operations & ERP SaaS for India's mills (rice first; sugar/flour/oil later). Live at
-**https://millsaathi.com** — running 100% on the Cloudflare free tier.
+Operations and ERP SaaS for India's rice mills — track every quintal from gate entry through
+weighbridge, lab, and production, so the 2–6% that silently disappears becomes visible.
+Sugar, flour, oil and dal mills to follow.
+
+**Live → https://millsaathi.com** · **Try it with no signup → https://millsaathi.com/demo**
+
+Multi-tenant, deployed, and running entirely on the Cloudflare free tier — one Worker, one D1
+database, no other services and no secrets.
 
 | Surface | URL | What it is |
 |---|---|---|
-| Marketing site | `/` | Landing page (Claude Design handoff, pixel-faithful) |
+| Marketing site | `/` | Landing page |
 | Demo mill | `/demo` | Full interactive dashboard, client-side data, no login — the sales tool |
 | Real app | `/app` | Multi-tenant ERP: signup/login, gate & weighbridge, saudas, stock & lots, suppliers/buyers/items, mass balance, night digest |
 | API | `/api/*` | Hono JSON API on Workers + D1 |
 
-## Demo logins (seeded mill "Sri Venkatesh Rice Mill", password `demo1234`)
+## Demo logins
+
+Seeded mill "Sri Venkatesh Rice Mill", password `demo1234`:
 
 - `owner@demo.millsaathi.com` — sees everything
 - `manager@demo.millsaathi.com` — money fields stripped server-side
 - `accounts@demo.millsaathi.com` — payables/receivables view
 
-## Stack
+Signing in as each shows the same screens with different data, which is the quickest way to see
+how the permission model works.
 
-One Worker (`wrangler.jsonc`): static assets from `public/`, API in `src/` (Hono + D1).
-No other services, no secrets. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for free-tier
-math and [docs/PRODUCT.md](docs/PRODUCT.md) for market research, positioning and roadmap.
+## Architecture
+
+A single Cloudflare Worker serves static assets from `public/` and the Hono API from `src/`,
+backed by D1 (SQLite). The whole product — marketing site, demo, multi-tenant app, and API —
+is one deployable unit. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the free-tier
+capacity math; [docs/PRODUCT.md](docs/PRODUCT.md) has the market research and positioning.
+
+### Decisions worth explaining
+
+**Role-based redaction happens server-side.** Any API field whose name contains `paise` is
+stripped from the response for the Manager role before it leaves the Worker. Hiding money in
+the UI would still ship it over the wire; a mill manager opening devtools would see purchase
+rates they're not meant to see.
+
+**Integers only for weights and money.** Weights are stored as integer **kg** and rendered as
+quintals (kg ÷ 100); money is integer **paise**. Float rounding on a 40-tonne consignment is
+a real reconciliation problem, so the ambiguity is removed at the schema level.
+
+**The business day is IST, always.** `istToday()` in `src/api.ts` pins the mill day regardless
+of which Cloudflare edge location the Worker happens to execute in. A shift that starts at 6am
+in Andhra Pradesh must not roll over because the request landed in a different timezone.
+
+**`/demo` needs no backend.** The demo mill runs on client-side data, so a prospect (or an
+interviewer) always sees a working product — no login, no cold start, nothing to break.
 
 ## Develop
 
@@ -38,16 +68,12 @@ npm run db:migrate:remote   # only when migrations change
 npm run deploy              # wrangler deploy → millsaathi.com
 ```
 
-## Conventions
+## Status
 
-- Weights: integer **kg** in DB/API; UI shows quintals (kg/100).
-- Money: integer **paise**; any API field containing `paise` is auto-stripped for the Manager role.
-- The mill business day is **IST** (`istToday()` in `src/api.ts`), regardless of where the Worker runs.
+Currently **free** — ₹0, all modules, unlimited users. Paid tiers are written but parked in an
+HTML comment in `public/index.html`, and stay parked until a payment gateway is actually wired up.
 
-## Before launch (TODO)
+Known gaps:
 
-- ~~Replace placeholder WhatsApp number~~ — done, contact is `+91 87095 75693` / `connect@equaseed.com`.
-- Add Turnstile to login/signup.
-- Rate-limit auth endpoints.
-- Pricing is **free** (₹0, all modules). The paid tiers are parked in an HTML comment in
-  `public/index.html` — do not re-enable them until a payment gateway is actually wired up.
+- Turnstile not yet added to login/signup.
+- Auth endpoints are not rate-limited.
