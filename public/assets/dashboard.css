@@ -79,9 +79,31 @@ table.ms th:first-child, table.ms td:first-child { padding-left: 22px; }
 table.ms th:last-child, table.ms td:last-child { padding-right: 22px; }
 .tok { font-weight: 700; font-family: 'Archivo', sans-serif; }
 .b6 { font-weight: 600; } .b7 { font-weight: 700; } .mut { color: var(--muted2); }
+.gate-row.gate-in td { background: #F5FBF7; }
+.gate-row.gate-out td { background: #F5F8FC; }
+.gate-row.gate-in .dir { background: #E6F0E9; color: #256238; }
+.gate-row.gate-out .dir { background: #E7EEF8; color: #2A5CA8; }
 
 .pill { font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; font-weight: 700; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* ---- early flow / receipts ---- */
+.guide-card { margin-bottom: 18px; }
+.guide-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 16px; }
+.guide-step { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--border); background: #FAFBFC; border-radius: 8px; padding: 11px 12px; min-width: 0; }
+.guide-step.done { background: #F5FBF7; border-color: #BCD8C4; }
+.guide-num { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); color: #fff; font-size: 12px; font-weight: 800; }
+.guide-step.done .guide-num { background: var(--green); }
+.receipt-card, .receipt-empty { margin-bottom: 18px; }
+.receipt-list { display: flex; flex-direction: column; }
+.receipt-row { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(360px, 1.5fr); gap: 14px; align-items: center; padding: 14px 22px; border-top: 1px solid var(--line); }
+.receipt-controls { display: grid; grid-template-columns: minmax(120px, 1fr) 90px minmax(150px, 1fr) auto auto; gap: 8px; align-items: center; }
+.receipt-controls select, .receipt-controls input { width: 100%; font-family: inherit; font-size: 13.5px; font-weight: 500; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; outline: none; }
+@media (max-width: 900px) {
+  .receipt-row { grid-template-columns: 1fr; }
+  .receipt-controls { grid-template-columns: 1fr 1fr; }
+  .receipt-controls input[data-r-note] { grid-column: 1 / -1; }
+}
 
 /* ---- mass balance / bars ---- */
 .mb-bar { display: flex; height: 13px; border-radius: 4px; overflow: hidden; margin-top: 18px; border: 1px solid var(--border); }
@@ -104,10 +126,13 @@ dialog.modal::backdrop { background: rgba(27,36,49,.45); }
 .modal-h { padding: 18px 22px 0; font-family: 'Archivo', sans-serif; font-weight: 800; font-size: 19px; }
 .modal-b { padding: 14px 22px 22px; display: flex; flex-direction: column; gap: 12px; }
 .fld label { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted2); margin-bottom: 5px; }
-.fld input, .fld select { width: 100%; font-family: inherit; font-size: 14.5px; font-weight: 500; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; outline: none; }
-.fld input:focus, .fld select:focus { border-color: var(--ink); background: #fff; }
+.fld input, .fld select, .fld textarea { width: 100%; font-family: inherit; font-size: 14.5px; font-weight: 500; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; outline: none; }
+.fld textarea { min-height: 94px; resize: vertical; line-height: 1.45; }
+.fld input:focus, .fld select:focus, .fld textarea:focus { border-color: var(--ink); background: #fff; }
 .frow { display: flex; gap: 10px; } .frow .fld { flex: 1; }
 .form-err { color: var(--red-ink); font-size: 13px; font-weight: 600; min-height: 1em; }
+.help-fab { position: fixed; right: 22px; bottom: 22px; z-index: 30; border: none; border-radius: 999px; background: var(--ink); color: #fff; box-shadow: 0 12px 30px rgba(16,20,27,.22); padding: 12px 16px; font: 700 13.5px 'IBM Plex Sans', system-ui, sans-serif; cursor: pointer; }
+.help-fab:hover { background: var(--red); }
 
 /* ---- login ---- */
 .auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: var(--side); }

@@ -104,9 +104,14 @@
       '<form class="modal-b" method="dialog">' +
       fields.map(function (f) {
         if (f.type === 'select') {
+          var opts = f.quickAdd ? f.options.concat([{ value: '__add:' + f.quickAdd, label: '+ Add new ' + f.quickAddLabel }]) : f.options;
           return '<div class="fld"><label>' + esc(f.label) + '</label><select name="' + f.name + '">' +
-            f.options.map(function (o) { return '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>'; }).join('') +
+            opts.map(function (o) { return '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>'; }).join('') +
             '</select></div>';
+        }
+        if (f.type === 'textarea') {
+          return '<div class="fld"><label>' + esc(f.label) + '</label><textarea name="' + f.name + '"' +
+            (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + '>' + esc(f.value || '') + '</textarea></div>';
         }
         return '<div class="fld"><label>' + esc(f.label) + '</label><input name="' + f.name + '" type="' + (f.type || 'text') + '"' +
           (f.step ? ' step="' + f.step + '"' : '') + (f.required ? ' required' : '') +
@@ -117,6 +122,31 @@
       '<button type="submit" class="btn acc" style="flex:1">' + esc(submitLabel) + '</button></div></form>';
     document.body.appendChild(dlg);
     dlg.querySelector('[data-x]').onclick = function () { dlg.close(); dlg.remove(); };
+    fields.forEach(function (f) {
+      if (!f.quickAdd) return;
+      var sel = dlg.querySelector('[name="' + f.name + '"]');
+      if (!sel) return;
+      sel.onchange = function () {
+        if (sel.value.indexOf('__add:') !== 0) return;
+        var name = window.prompt('Name for new ' + f.quickAddLabel + ':');
+        if (!name || !name.trim()) { sel.value = ''; return; }
+        var body = { name: name.trim() };
+        if (f.quickAdd === 'suppliers') body.type = 'farmer';
+        else if (f.quickAdd === 'buyers') body.type = 'Wholesaler';
+        else if (f.quickAdd === 'items') { body.category = f.quickAddCategory || 'paddy'; body.hsn = body.category === 'byproduct' ? '2302' : '1006'; }
+        else if (f.quickAdd === 'godowns') body.capacity_qtl = 0;
+        apiPost('/api/' + f.quickAdd, body).then(function (j) {
+          var opt = document.createElement('option');
+          opt.value = j.id; opt.textContent = name.trim();
+          sel.insertBefore(opt, sel.querySelector('option[value^="__add:"]'));
+          sel.value = j.id;
+          return loadOverview();
+        }).catch(function (err) {
+          sel.value = '';
+          dlg.querySelector('.form-err').textContent = err.message;
+        });
+      };
+    });
     dlg.querySelector('form').onsubmit = function (e) {
       e.preventDefault();
       var data = {};
@@ -184,6 +214,32 @@
       '</div>';
   }
 
+  function onboardingCard() {
+    if (MODE !== 'live') return '';
+    var ov = S.ov;
+    var ob = ov.onboarding || {};
+    var created = ov.mill.created_at ? new Date(ov.mill.created_at).getTime() : Date.now();
+    var daysOld = Math.floor((Date.now() - created) / 86400000);
+    var active = ob.active_days || 0;
+    if (daysOld > 10 && active >= 5) return '';
+    var steps = [
+      ['Add suppliers', ov.suppliers.length > 0, 'Farmers, traders or brokers you buy from.', 'sup-new'],
+      ['Add buyers', ov.buyers.length > 0, 'Customers who buy rice or by-products.', 'buy-new'],
+      ['Check items', ov.items.length > 0, 'Paddy, parboiled rice, bran, husk and other SKUs.', 'item-new'],
+      ['Create a sauda', ov.saudas.length > 0, 'Record the purchase deal before the truck arrives.', 'sauda-new'],
+      ['Record gate entry', (ob.gate_count || ov.gate.length) > 0, 'Enter incoming/outgoing trucks and weights.', 'gate-new'],
+      ['Move to stock', ov.lots.length > 0, 'Add completed incoming trucks into a godown lot.', 'lot-new'],
+    ];
+    return '<div class="card pad guide-card"><div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start">' +
+      '<div><div class="card-h">First days flow</div><div class="hint" style="margin-top:4px">Follow this order until the mill data starts feeling natural.</div></div>' +
+      '<span class="pill" style="background:#FEF3D6;color:#8A6A16">' + active + ' active days</span></div>' +
+      '<div class="guide-steps">' + steps.map(function (s, i) {
+        return '<div class="guide-step ' + (s[1] ? 'done' : '') + '"><span class="guide-num">' + (s[1] ? '✓' : i + 1) + '</span>' +
+          '<div><div class="b7">' + esc(s[0]) + '</div><div class="mut">' + esc(s[2]) + '</div></div>' +
+          (MODE === 'live' && !s[1] ? '<button class="btn sm" data-act="' + s[3] + '">Start</button>' : '') + '</div>';
+      }).join('') + '</div></div>';
+  }
+
   function pageDashboard() {
     var ov = S.ov, k = ov.kpis, mb = ov.mass_balance;
     var kpis;
@@ -239,7 +295,8 @@
         '<td class="b6">' + (net(r) > 0 ? qtl(net(r)) + ' qtl' : '—') + '</td><td>' + pill(r.status) + '</td></tr>';
     }).join('') || '<tr><td colspan="4" class="empty">No gate activity today yet.</td></tr>';
 
-    return '<div class="kpis">' + kpis.join('') + '</div>' +
+    return onboardingCard() +
+      '<div class="kpis">' + kpis.join('') + '</div>' +
       '<div class="grid2">' +
       '<div class="card pad" style="min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline">' +
       '<div class="card-h">Paddy in vs. rice out</div><div class="hint">quintals · last 7 days</div></div>' +
@@ -262,8 +319,8 @@
     var live = MODE === 'live';
     var body = rows.map(function (g) {
       var canAct = live && g.status !== 'done';
-      return '<tr><td class="tok">' + esc(g.token_no) + '</td>' +
-        '<td class="b6">' + esc(g.vehicle_no) + (g.direction === 'out' ? ' <span class="pill" style="background:#E7EEF8;color:#2A5CA8">OUT</span>' : '') + '</td>' +
+      return '<tr class="gate-row gate-' + esc(g.direction) + '"><td class="tok">' + esc(g.token_no) + '</td>' +
+        '<td class="b6">' + esc(g.vehicle_no) + ' <span class="pill dir">' + (g.direction === 'out' ? 'OUT' : 'IN') + '</span></td>' +
         '<td>' + esc(g.supplier_name || g.buyer_name || '—') + '</td>' +
         '<td class="mut">' + esc(g.item_name || '—') + '</td>' +
         '<td class="b6">' + (g.gross_kg ? kgFmt(g.gross_kg) : '—') + '</td>' +
@@ -315,6 +372,7 @@
   function pageStock() {
     var ov = S.ov;
     var m = canMoney();
+    var live = MODE === 'live';
     var cards = ov.godowns.map(function (gd) {
       var cap = (gd.capacity_qtl || 0) * 100;
       var fill = cap > 0 ? Math.min(100, Math.round((gd.stock_kg / cap) * 100)) : 0;
@@ -328,19 +386,39 @@
         '<div class="s">of ' + (gd.capacity_qtl || 0).toLocaleString('en-IN') + ' qtl capacity</div>' +
         '<div class="gd-fill"><div style="width:' + fill + '%;background:' + color + '"></div></div></div>';
     }).join('');
+    var pending = ov.pending_receipts || [];
+    var receiptPanel = pending.length ? '<div class="card receipt-card"><div class="card-top"><div><div class="card-h">Incoming trucks waiting for stock</div>' +
+      '<div class="hint">These trucks are done at the weighbridge. Add them to a godown lot, or skip if the stock was handled elsewhere.</div></div></div>' +
+      '<div class="receipt-list">' + pending.map(function (g) {
+        var id = esc(g.id);
+        var amount = Math.round(Math.max(0, g.net_kg || 0) * ((g.sauda_rate_paise_per_qtl || 0) / 100));
+        return '<div class="receipt-row" data-receipt="' + id + '">' +
+          '<div><div><span class="tok">' + esc(g.token_no) + '</span> <span class="pill" style="background:#E6F0E9;color:#256238">IN</span></div>' +
+          '<div class="mut" style="margin-top:4px">' + esc(g.supplier_name || 'Supplier') + ' · ' + esc(g.item_name || 'Item') + ' · ' + qtl(g.net_kg) + ' qtl' +
+          (g.moisture_pct != null ? ' · ' + pct(g.moisture_pct) : '') + (g.sauda_code ? ' · ' + esc(g.sauda_code) : '') + '</div></div>' +
+          '<div class="receipt-controls">' +
+          '<select data-r-godown>' + optList(ov.godowns).map(function (o) { return '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>'; }).join('') + '</select>' +
+          '<input data-r-qty type="number" step="0.1" value="' + esc(qtl(g.net_kg, 1).replace(/,/g, '')) + '" title="Quantity in qtl">' +
+          '<input data-r-note placeholder="Note, shortage or variation">' +
+          '<button class="btn acc sm" data-act="receipt-add" data-id="' + id + '" data-item="' + esc(g.item_id || '') + '" data-moisture="' + esc(g.moisture_pct == null ? '' : g.moisture_pct) + '" data-value="' + esc(amount) + '">Add lot</button>' +
+          '<button class="btn sm" data-act="receipt-skip" data-id="' + id + '">Skip</button>' +
+          '</div></div>';
+      }).join('') + '</div></div>' : '<div class="card pad receipt-empty"><div class="card-h">No pending stock receipts</div><div class="hint" style="margin-top:4px">When an incoming truck is marked Done at the gate, it will appear here before becoming a lot.</div></div>';
     var rows = filt(ov.lots);
     var body = rows.map(function (s) {
       return '<tr><td class="tok">' + esc(s.code) + '</td><td class="b6">' + esc(s.godown_name || '—') + '</td>' +
         '<td>' + esc(s.item_name || '—') + '</td><td class="b7">' + qtl(s.qty_kg) + ' qtl</td>' +
         '<td class="b6">' + (s.moisture_pct != null ? pct(s.moisture_pct) : '—') + '</td>' +
-        '<td class="mut">' + dstr(s.in_date) + '</td>' + (m ? '<td class="b7">' + money(s.value_paise) + '</td>' : '') + '</tr>';
+        '<td class="mut">' + dstr(s.in_date) + '</td>' + (m ? '<td class="b7">' + money(s.value_paise) + '</td>' : '') +
+        '<td class="mut">' + esc(s.note || '') + '</td></tr>';
     }).join('') || '<tr><td colspan="7" class="empty">No lots on hand.</td></tr>';
     return '<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:18px">' + cards + '</div>' +
+      (live ? receiptPanel : '') +
       '<div class="card"><div class="card-top"><div class="card-h">Lots on hand</div>' +
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + ' lots</span>' +
       (MODE === 'live' ? '<button class="btn acc" data-act="lot-new">+ New lot</button>' : '') + '</div></div>' +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:800px"><thead><tr>' +
-      '<th>Lot</th><th>Godown</th><th>Item</th><th>Qty</th><th>Moisture</th><th>In date</th>' + (m ? '<th>Value</th>' : '') +
+      '<th>Lot</th><th>Godown</th><th>Item</th><th>Qty</th><th>Moisture</th><th>In date</th>' + (m ? '<th>Value</th>' : '') + '<th>Note</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table></div></div>';
   }
 
@@ -436,9 +514,9 @@
       modal('New gate entry', [
         { name: 'direction', label: 'Direction', type: 'select', options: [{ value: 'in', label: 'In — paddy arriving' }, { value: 'out', label: 'Out — dispatch to buyer' }] },
         { name: 'vehicle_no', label: 'Vehicle number', required: true, placeholder: 'AP 16 TG 5544' },
-        { name: 'supplier_id', label: 'Supplier (for In)', type: 'select', options: optList(ov.suppliers, [{ value: '', label: '—' }]) },
-        { name: 'buyer_id', label: 'Buyer (for Out)', type: 'select', options: optList(ov.buyers, [{ value: '', label: '—' }]) },
-        { name: 'item_id', label: 'Material', type: 'select', options: optList(ov.items, [{ value: '', label: '—' }]) },
+        { name: 'supplier_id', label: 'Supplier (for In)', type: 'select', options: optList(ov.suppliers, [{ value: '', label: '—' }]), quickAdd: 'suppliers', quickAddLabel: 'supplier' },
+        { name: 'buyer_id', label: 'Buyer (for Out)', type: 'select', options: optList(ov.buyers, [{ value: '', label: '—' }]), quickAdd: 'buyers', quickAddLabel: 'buyer' },
+        { name: 'item_id', label: 'Material', type: 'select', options: optList(ov.items, [{ value: '', label: '—' }]), quickAdd: 'items', quickAddLabel: 'item', quickAddCategory: 'paddy' },
         { name: 'sauda_id', label: 'Against sauda (optional)', type: 'select', options: optList(ov.saudas.filter(function (s) { return s.status === 'open' || s.status === 'advance_paid'; }), [{ value: '', label: '—' }]) },
         { name: 'rate', label: 'Rate ₹/qtl (for Out sales)', type: 'number', step: '1' },
       ], 'Create token', function (d) {
@@ -467,9 +545,9 @@
       if (sel) sel.value = g.status;
     } else if (act === 'sauda-new') {
       modal('New sauda', [
-        { name: 'supplier_id', label: 'Supplier', type: 'select', options: optList(ov.suppliers) },
+        { name: 'supplier_id', label: 'Supplier', type: 'select', options: optList(ov.suppliers), quickAdd: 'suppliers', quickAddLabel: 'supplier' },
         { name: 'broker_name', label: 'Broker', value: 'Direct' },
-        { name: 'item_id', label: 'Variety', type: 'select', options: optList(ov.items.filter(function (i) { return i.category === 'paddy'; })) },
+        { name: 'item_id', label: 'Variety', type: 'select', options: optList(ov.items.filter(function (i) { return i.category === 'paddy'; })), quickAdd: 'items', quickAddLabel: 'paddy variety', quickAddCategory: 'paddy' },
         { name: 'qty_qtl', label: 'Quantity (qtl)', type: 'number', step: '1', required: true },
         { name: 'rate', label: 'Rate ₹/qtl', type: 'number', step: '1', required: true },
         { name: 'moisture_pct', label: 'Agreed moisture %', type: 'number', step: '0.1' },
@@ -491,17 +569,34 @@
       if (sel2) sel2.value = sa.status;
     } else if (act === 'lot-new') {
       modal('New lot', [
-        { name: 'godown_id', label: 'Godown', type: 'select', options: optList(ov.godowns) },
-        { name: 'item_id', label: 'Item', type: 'select', options: optList(ov.items) },
+        { name: 'godown_id', label: 'Godown', type: 'select', options: optList(ov.godowns), quickAdd: 'godowns', quickAddLabel: 'godown' },
+        { name: 'item_id', label: 'Item', type: 'select', options: optList(ov.items), quickAdd: 'items', quickAddLabel: 'item', quickAddCategory: 'paddy' },
         { name: 'qty_qtl', label: 'Quantity (qtl)', type: 'number', step: '0.1', required: true },
         { name: 'moisture_pct', label: 'Moisture %', type: 'number', step: '0.1' },
         { name: 'value', label: 'Value ₹ (optional)', type: 'number', step: '1' },
+        { name: 'note', label: 'Note / variation (optional)', type: 'textarea', placeholder: 'Shortage, bag count difference, quality note…' },
       ], 'Create lot', function (d) {
         return apiPost('/api/lots', {
           godown_id: d.godown_id, item_id: d.item_id, qty_kg: Math.round(num(d.qty_qtl) * 100),
-          moisture_pct: d.moisture_pct ? num(d.moisture_pct) : null, value_paise: Math.round(num(d.value) * 100),
+          moisture_pct: d.moisture_pct ? num(d.moisture_pct) : null, value_paise: Math.round(num(d.value) * 100), note: d.note || null,
         });
       });
+    } else if (act === 'receipt-add') {
+      var row = el.closest('[data-receipt]');
+      if (!row) return;
+      return apiPost('/api/lots', {
+        gate_entry_id: el.getAttribute('data-id'),
+        godown_id: row.querySelector('[data-r-godown]').value,
+        item_id: el.getAttribute('data-item') || null,
+        qty_kg: Math.round(num(row.querySelector('[data-r-qty]').value) * 100),
+        moisture_pct: el.getAttribute('data-moisture') ? num(el.getAttribute('data-moisture')) : null,
+        value_paise: Math.round(num(el.getAttribute('data-value')) || 0),
+        note: row.querySelector('[data-r-note]').value || null,
+      }).then(refresh);
+    } else if (act === 'receipt-skip') {
+      var skipRow = el.closest('[data-receipt]');
+      var note = skipRow && skipRow.querySelector('[data-r-note]') ? skipRow.querySelector('[data-r-note]').value : '';
+      return apiPost('/api/stock-receipts/' + el.getAttribute('data-id') + '/skip', { note: note || null }).then(refresh);
     } else if (act === 'production') {
       modal('Today’s production (quintals)', [
         { name: 'paddy', label: 'Paddy milled (qtl)', type: 'number', step: '0.1', required: true },
@@ -548,6 +643,14 @@
         { name: 'name', label: 'Name', required: true },
         { name: 'capacity_qtl', label: 'Capacity (qtl)', type: 'number', step: '1' },
       ], 'Add', function (d) { return apiPost('/api/godowns', d); });
+    } else if (act === 'feedback') {
+      modal('Tell us what is stuck', [
+        { name: 'kind', label: 'Type', type: 'select', options: [{ value: 'help', label: 'Need help' }, { value: 'bug', label: 'Bug' }, { value: 'feature', label: 'Missing feature' }] },
+        { name: 'message', label: 'Message', type: 'textarea', placeholder: 'What were you trying to do? What was confusing or missing?' },
+        { name: 'contact', label: 'Phone or WhatsApp (optional)', placeholder: 'So we can reply if needed' },
+      ], 'Send', function (d) {
+        return apiPost('/api/feedback', { kind: d.kind, message: d.message, contact: d.contact || null, page: S.page });
+      });
     }
   }
 
@@ -599,7 +702,9 @@
         '<input id="ms-q" placeholder="Search…" value="' + esc(S.q) + '"></div>' : '') +
       '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
       '<div class="content ms-scroll"><div class="page" id="ms-page"></div></div>' +
-      '</main></div>';
+      '</main>' +
+      (MODE === 'live' ? '<button class="help-fab" data-act="feedback">Need help?</button>' : '') +
+      '</div>';
 
     var page = document.getElementById('ms-page');
     if (S.page === 'dashboard') page.innerHTML = pageDashboard();

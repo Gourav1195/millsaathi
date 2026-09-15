@@ -11,7 +11,7 @@ export type UserRow = {
   pass_hash: string; pass_salt: string;
 };
 export type MillRow = {
-  id: string; name: string; slug: string; plan: string; language: string; loss_limit_pct: number; season_label: string;
+  id: string; name: string; slug: string; plan: string; language: string; loss_limit_pct: number; season_label: string; created_at: string;
 };
 export type AppEnv = {
   Bindings: Env;
@@ -73,6 +73,7 @@ app.post('/api/auth/signup', async (c) => {
   const defaultItems: [string, string, string, number | null][] = [
     ['Paddy (common)', 'paddy', '1006', null],
     ['Raw Rice', 'rice', '1006', 67],
+    ['Parboiled Non-Basmati Rice', 'rice', '1006', 68],
     ['Rice Bran', 'byproduct', '2302', 8],
     ['Broken Rice', 'byproduct', '1006', 5],
     ['Husk', 'byproduct', '1213', 20],
@@ -116,7 +117,8 @@ app.use('/api/*', async (c, next) => {
   const row = await c.env.DB.prepare(
     `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.pass_hash, u.pass_salt,
             m.id AS m_id, m.name AS m_name, m.slug AS m_slug, m.plan AS m_plan,
-            m.language AS m_language, m.loss_limit_pct AS m_loss_limit_pct, m.season_label AS m_season_label
+            m.language AS m_language, m.loss_limit_pct AS m_loss_limit_pct, m.season_label AS m_season_label,
+            m.created_at AS m_created_at
      FROM sessions se
      JOIN users u ON u.id = se.user_id
      JOIN mills m ON m.id = u.mill_id
@@ -129,7 +131,7 @@ app.use('/api/*', async (c, next) => {
     user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, pass_hash: '', pass_salt: '' },
     mill: {
       id: row.m_id, name: row.m_name, slug: row.m_slug, plan: row.m_plan,
-      language: row.m_language, loss_limit_pct: row.m_loss_limit_pct, season_label: row.m_season_label,
+      language: row.m_language, loss_limit_pct: row.m_loss_limit_pct, season_label: row.m_season_label, created_at: row.m_created_at,
     },
   });
   await next();

@@ -64,8 +64,9 @@ api.get('/overview', async (c) => {
   const db = c.env.DB;
   const today = istToday();
   const weekAgo = istToday(-6);
+  const monthAgo = istToday(-30);
 
-  const [gateRes, gateWeekRes, saudasRes, lotsRes, godownsRes, suppliersRes, buyersRes, itemsRes, prodRes, payTodayRes] =
+  const [gateRes, gateWeekRes, saudasRes, lotsRes, godownsRes, suppliersRes, buyersRes, itemsRes, prodRes, payTodayRes, pendingReceiptsRes, activityRes] =
     await db.batch([
       db.prepare(
         `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
@@ -139,6 +140,30 @@ api.get('/overview', async (c) => {
         `SELECT direction, COALESCE(SUM(amount_paise),0) AS total
          FROM payments WHERE mill_id = ?1 AND pay_date = ?2 GROUP BY direction`,
       ).bind(mill.id, today),
+      db.prepare(
+        `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
+                s.name AS supplier_name, i.name AS item_name,
+                sa.code AS sauda_code, sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl
+         FROM gate_entries g
+         LEFT JOIN suppliers s ON s.id = g.supplier_id
+         LEFT JOIN items i ON i.id = g.item_id
+         LEFT JOIN saudas sa ON sa.id = g.sauda_id
+         WHERE g.mill_id = ?1
+           AND g.direction = 'in'
+           AND g.status = 'done'
+           AND g.stock_status = 'pending'
+           AND g.entry_date >= ?2
+           AND COALESCE(g.gross_kg,0) > COALESCE(g.tare_kg,0)
+           AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
+         ORDER BY g.entry_date DESC, g.updated_at DESC
+         LIMIT 20`,
+      ).bind(mill.id, monthAgo),
+      db.prepare(
+        `SELECT COUNT(*) AS gate_count,
+                COUNT(DISTINCT entry_date) AS active_days,
+                MIN(entry_date) AS first_gate_date
+         FROM gate_entries WHERE mill_id = ?1`,
+      ).bind(mill.id),
     ]);
 
   const gateAll = gateRes.results as Record<string, unknown>[];
@@ -175,6 +200,7 @@ api.get('/overview', async (c) => {
   const lots = lotsRes.results as Record<string, unknown>[];
   const suppliers = suppliersRes.results as Record<string, unknown>[];
   const buyers = buyersRes.results as Record<string, unknown>[];
+  const activity = (activityRes.results[0] ?? {}) as { gate_count?: number; active_days?: number; first_gate_date?: string | null };
 
   const stockValuePaise = lots.reduce((a, l) => a + ((l.value_paise as number) ?? 0), 0);
   const purchaseValueToday = doneIn.reduce((a, g) => {
@@ -213,7 +239,7 @@ api.get('/overview', async (c) => {
 
   const body = {
     me: { id: user.id, name: user.name, email: user.email, role: user.role },
-    mill: { id: mill.id, name: mill.name, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label },
+    mill: { id: mill.id, name: mill.name, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
     today,
     kpis: {
       gross_margin_today_paise: salesValueToday - purchaseValueToday,
@@ -236,6 +262,12 @@ api.get('/overview', async (c) => {
     mass_balance: mb,
     week,
     alerts,
+    pending_receipts: pendingReceiptsRes.results,
+    onboarding: {
+      active_days: activity.active_days ?? 0,
+      gate_count: activity.gate_count ?? 0,
+      first_gate_date: activity.first_gate_date ?? null,
+    },
     gate: gateToday,
     saudas,
     lots,
@@ -328,15 +360,43 @@ api.post('/lots', async (c) => {
   const b = await c.req.json<Record<string, unknown>>();
   const code = await nextCode(c.env.DB, mill.id, 'lot', 'LOT');
   const id = uuid();
-  await c.env.DB.prepare(
-    `INSERT INTO lots (id, mill_id, code, godown_id, item_id, qty_kg, moisture_pct, value_paise, in_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  const gateEntryId = (b.gate_entry_id as string) || null;
+  const inserts = c.env.DB.prepare(
+    `INSERT INTO lots (id, mill_id, code, gate_entry_id, godown_id, item_id, qty_kg, moisture_pct, value_paise, in_date, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(id, mill.id, code, (b.godown_id as string) || null, (b.item_id as string) || null,
+    .bind(id, mill.id, code, gateEntryId, (b.godown_id as string) || null, (b.item_id as string) || null,
       Math.round(Number(b.qty_kg) || 0), b.moisture_pct != null ? Number(b.moisture_pct) : null,
-      Math.round(Number(b.value_paise) || 0), (b.in_date as string) || istToday())
-    .run();
+      Math.round(Number(b.value_paise) || 0), (b.in_date as string) || istToday(), (b.note as string) || null);
+  if (gateEntryId) {
+    const gate = await c.env.DB.prepare(
+      `SELECT id FROM gate_entries
+       WHERE id = ?1 AND mill_id = ?2 AND direction = 'in' AND status = 'done' AND stock_status = 'pending'`,
+    ).bind(gateEntryId, mill.id).first();
+    if (!gate) return c.json({ error: 'incoming truck is not pending for stock' }, 400);
+    await c.env.DB.batch([
+      inserts,
+      c.env.DB.prepare(`UPDATE gate_entries SET stock_status = 'added', stock_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND mill_id = ?`)
+        .bind((b.note as string) || null, gateEntryId, mill.id),
+    ]);
+  } else {
+    await inserts.run();
+  }
   return c.json({ id, code }, 201);
+});
+
+api.post('/stock-receipts/:id/skip', async (c) => {
+  const { mill } = c.get('session');
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const res = await c.env.DB.prepare(
+    `UPDATE gate_entries
+     SET stock_status = 'skipped', stock_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = ? AND mill_id = ? AND direction = 'in' AND status = 'done' AND stock_status = 'pending'`,
+  )
+    .bind((b.note as string) || null, c.req.param('id'), mill.id)
+    .run();
+  if (!res.meta.changes) return c.json({ error: 'incoming truck is not pending for stock' }, 404);
+  return c.json({ ok: true });
 });
 
 api.post('/production', async (c) => {
@@ -395,6 +455,22 @@ api.post('/:master{suppliers|buyers|items|godowns}', async (c) => {
      VALUES (?, ?${present.map(() => ', ?').join('')})`,
   )
     .bind(id, mill.id, ...present.map((col) => b[col]))
+    .run();
+  return c.json({ id }, 201);
+});
+
+api.post('/feedback', async (c) => {
+  const { user, mill } = c.get('session');
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const message = String(b.message ?? '').trim();
+  if (message.length < 5) return c.json({ error: 'Please write a little more detail.' }, 400);
+  const kind = ['help', 'bug', 'feature'].includes(String(b.kind)) ? String(b.kind) : 'help';
+  const id = uuid();
+  await c.env.DB.prepare(
+    `INSERT INTO feedback_tickets (id, mill_id, user_id, kind, page, message, contact)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(id, mill.id, user.id, kind, (b.page as string) || null, message.slice(0, 2000), (b.contact as string) || user.email)
     .run();
   return c.json({ id }, 201);
 });
