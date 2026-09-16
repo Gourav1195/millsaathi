@@ -218,10 +218,7 @@
     if (MODE !== 'live') return '';
     var ov = S.ov;
     var ob = ov.onboarding || {};
-    var created = ov.mill.created_at ? new Date(ov.mill.created_at).getTime() : Date.now();
-    var daysOld = Math.floor((Date.now() - created) / 86400000);
     var active = ob.active_days || 0;
-    if (daysOld > 10 && active >= 5) return '';
     var steps = [
       ['Add suppliers', ov.suppliers.length > 0, 'Farmers, traders or brokers you buy from.', 'sup-new'],
       ['Add buyers', ov.buyers.length > 0, 'Customers who buy rice or by-products.', 'buy-new'],
@@ -230,6 +227,12 @@
       ['Record gate entry', (ob.gate_count || ov.gate.length) > 0, 'Enter incoming/outgoing trucks and weights.', 'gate-new'],
       ['Move to stock', ov.lots.length > 0, 'Add completed incoming trucks into a godown lot.', 'lot-new'],
     ];
+    var done = steps.every(function (s) { return s[1]; });
+    if (done) {
+      return '<div class="card pad guide-card celebrate-card"><div class="celebrate-mark"></div>' +
+        '<div><div class="card-h">Good to go</div><div class="hint" style="margin-top:4px">Your basic mill flow is ready: parties, items, sauda, gate and stock are connected. Keep entering trucks and production; the dashboard will start becoming useful by itself.</div></div>' +
+        '<span class="pill" style="background:#E6F0E9;color:#256238">' + active + ' active days</span></div>';
+    }
     return '<div class="card pad guide-card"><div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start">' +
       '<div><div class="card-h">First days flow</div><div class="hint" style="margin-top:4px">Follow this order until the mill data starts feeling natural.</div></div>' +
       '<span class="pill" style="background:#FEF3D6;color:#8A6A16">' + active + ' active days</span></div>' +
@@ -373,6 +376,7 @@
     var ov = S.ov;
     var m = canMoney();
     var live = MODE === 'live';
+    var defaultGodown = ov.godowns[0] || {};
     var cards = ov.godowns.map(function (gd) {
       var cap = (gd.capacity_qtl || 0) * 100;
       var fill = cap > 0 ? Math.min(100, Math.round((gd.stock_kg / cap) * 100)) : 0;
@@ -387,30 +391,30 @@
         '<div class="gd-fill"><div style="width:' + fill + '%;background:' + color + '"></div></div></div>';
     }).join('');
     var pending = ov.pending_receipts || [];
-    var receiptPanel = pending.length ? '<div class="card receipt-card"><div class="card-top"><div><div class="card-h">Incoming trucks waiting for stock</div>' +
-      '<div class="hint">These trucks are done at the weighbridge. Add them to a godown lot, or skip if the stock was handled elsewhere.</div></div></div>' +
-      '<div class="receipt-list">' + pending.map(function (g) {
-        var id = esc(g.id);
-        var amount = Math.round(Math.max(0, g.net_kg || 0) * ((g.sauda_rate_paise_per_qtl || 0) / 100));
-        return '<div class="receipt-row" data-receipt="' + id + '">' +
-          '<div><div><span class="tok">' + esc(g.token_no) + '</span> <span class="pill" style="background:#E6F0E9;color:#256238">IN</span></div>' +
-          '<div class="mut" style="margin-top:4px">' + esc(g.supplier_name || 'Supplier') + ' · ' + esc(g.item_name || 'Item') + ' · ' + qtl(g.net_kg) + ' qtl' +
-          (g.moisture_pct != null ? ' · ' + pct(g.moisture_pct) : '') + (g.sauda_code ? ' · ' + esc(g.sauda_code) : '') + '</div></div>' +
-          '<div class="receipt-controls">' +
-          '<select data-r-godown>' + optList(ov.godowns).map(function (o) { return '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>'; }).join('') + '</select>' +
-          '<input data-r-qty type="number" step="0.1" value="' + esc(qtl(g.net_kg, 1).replace(/,/g, '')) + '" title="Quantity in qtl">' +
-          '<input data-r-note placeholder="Note, shortage or variation">' +
-          '<button class="btn acc sm" data-act="receipt-add" data-id="' + id + '" data-item="' + esc(g.item_id || '') + '" data-moisture="' + esc(g.moisture_pct == null ? '' : g.moisture_pct) + '" data-value="' + esc(amount) + '">Add lot</button>' +
-          '<button class="btn sm" data-act="receipt-skip" data-id="' + id + '">Skip</button>' +
-          '</div></div>';
-      }).join('') + '</div></div>' : '<div class="card pad receipt-empty"><div class="card-h">No pending stock receipts</div><div class="hint" style="margin-top:4px">When an incoming truck is marked Done at the gate, it will appear here before becoming a lot.</div></div>';
+    var receiptPanel = '';
+    if (pending.length) {
+      var g = pending[0];
+      var amount = Math.round(Math.max(0, g.net_kg || 0) * ((g.sauda_rate_paise_per_qtl || 0) / 100));
+      receiptPanel = '<div class="receipt-toast card" data-receipt="' + esc(g.id) + '">' +
+        '<div><div class="card-h">Add incoming truck to stock?</div>' +
+        '<div class="hint">' + esc(g.token_no) + ' · ' + esc(g.supplier_name || 'Supplier') + ' · ' + esc(g.item_name || 'Item') + ' · ' + qtl(g.net_kg) + ' qtl' +
+        (g.moisture_pct != null ? ' · ' + pct(g.moisture_pct) : '') + (pending.length > 1 ? ' · +' + (pending.length - 1) + ' more' : '') + '</div>' +
+        '<div class="hint" style="margin-top:4px">Accept creates a lot in ' + esc(defaultGodown.name || 'your first godown') + '. You can edit quantity, godown or note later.</div></div>' +
+        '<div class="receipt-toast-actions">' +
+        '<button class="btn acc" data-act="receipt-accept" data-id="' + esc(g.id) + '" data-godown="' + esc(defaultGodown.id || '') + '" data-item="' + esc(g.item_id || '') + '" data-qty="' + esc(g.net_kg || 0) + '" data-moisture="' + esc(g.moisture_pct == null ? '' : g.moisture_pct) + '" data-value="' + esc(amount) + '">Accept</button>' +
+        '<button class="btn ghost" data-act="receipt-reject" data-id="' + esc(g.id) + '">Reject</button>' +
+        '</div></div>';
+    } else if (live) {
+      receiptPanel = '<div class="card pad receipt-empty"><div class="card-h">No pending stock receipts</div><div class="hint" style="margin-top:4px">When an incoming truck is marked Done at the gate, it will appear here for one-click accept or reject.</div></div>';
+    }
     var rows = filt(ov.lots);
     var body = rows.map(function (s) {
       return '<tr><td class="tok">' + esc(s.code) + '</td><td class="b6">' + esc(s.godown_name || '—') + '</td>' +
         '<td>' + esc(s.item_name || '—') + '</td><td class="b7">' + qtl(s.qty_kg) + ' qtl</td>' +
         '<td class="b6">' + (s.moisture_pct != null ? pct(s.moisture_pct) : '—') + '</td>' +
         '<td class="mut">' + dstr(s.in_date) + '</td>' + (m ? '<td class="b7">' + money(s.value_paise) + '</td>' : '') +
-        '<td class="mut">' + esc(s.note || '') + '</td></tr>';
+        '<td class="mut">' + esc(s.note || '') + '</td>' +
+        (live ? '<td><button class="btn sm" data-act="lot-edit" data-id="' + esc(s.id) + '">Edit</button></td>' : '') + '</tr>';
     }).join('') || '<tr><td colspan="7" class="empty">No lots on hand.</td></tr>';
     return '<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:18px">' + cards + '</div>' +
       (live ? receiptPanel : '') +
@@ -418,7 +422,7 @@
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + ' lots</span>' +
       (MODE === 'live' ? '<button class="btn acc" data-act="lot-new">+ New lot</button>' : '') + '</div></div>' +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:800px"><thead><tr>' +
-      '<th>Lot</th><th>Godown</th><th>Item</th><th>Qty</th><th>Moisture</th><th>In date</th>' + (m ? '<th>Value</th>' : '') + '<th>Note</th>' +
+      '<th>Lot</th><th>Godown</th><th>Item</th><th>Qty</th><th>Moisture</th><th>In date</th>' + (m ? '<th>Value</th>' : '') + '<th>Note</th>' + (live ? '<th></th>' : '') +
       '</tr></thead><tbody>' + body + '</tbody></table></div></div>';
   }
 
@@ -597,6 +601,44 @@
       var skipRow = el.closest('[data-receipt]');
       var note = skipRow && skipRow.querySelector('[data-r-note]') ? skipRow.querySelector('[data-r-note]').value : '';
       return apiPost('/api/stock-receipts/' + el.getAttribute('data-id') + '/skip', { note: note || null }).then(refresh);
+    } else if (act === 'receipt-accept') {
+      if (!el.getAttribute('data-godown')) {
+        modal('Add godown first', [
+          { name: 'name', label: 'Godown name', required: true, value: 'Godown 1' },
+          { name: 'capacity_qtl', label: 'Capacity (qtl)', type: 'number', step: '1' },
+        ], 'Add godown', function (d) { return apiPost('/api/godowns', d); });
+        return;
+      }
+      return apiPost('/api/lots', {
+        gate_entry_id: el.getAttribute('data-id'),
+        godown_id: el.getAttribute('data-godown'),
+        item_id: el.getAttribute('data-item') || null,
+        qty_kg: Math.round(num(el.getAttribute('data-qty'))),
+        moisture_pct: el.getAttribute('data-moisture') ? num(el.getAttribute('data-moisture')) : null,
+        value_paise: Math.round(num(el.getAttribute('data-value')) || 0),
+      }).then(refresh);
+    } else if (act === 'receipt-reject') {
+      return apiPost('/api/stock-receipts/' + el.getAttribute('data-id') + '/skip', { note: 'Rejected from stock page' }).then(refresh);
+    } else if (act === 'lot-edit') {
+      var lot = ov.lots.find(function (x) { return x.id === el.getAttribute('data-id'); });
+      if (!lot) return;
+      modal('Edit ' + lot.code, [
+        { name: 'godown_id', label: 'Godown', type: 'select', options: optList(ov.godowns), quickAdd: 'godowns', quickAddLabel: 'godown' },
+        { name: 'item_id', label: 'Item', type: 'select', options: optList(ov.items), quickAdd: 'items', quickAddLabel: 'item', quickAddCategory: 'paddy' },
+        { name: 'qty_qtl', label: 'Quantity (qtl)', type: 'number', step: '0.1', required: true, value: qtl(lot.qty_kg, 1).replace(/,/g, '') },
+        { name: 'moisture_pct', label: 'Moisture %', type: 'number', step: '0.1', value: lot.moisture_pct == null ? '' : lot.moisture_pct },
+        { name: 'value', label: 'Value ₹ (optional)', type: 'number', step: '1', value: lot.value_paise ? Math.round(lot.value_paise / 100) : '' },
+        { name: 'note', label: 'Note / variation (optional)', type: 'textarea', value: lot.note || '', placeholder: 'Shortage, bag count difference, quality note...' },
+      ], 'Save', function (d) {
+        return apiPost('/api/lots/' + lot.id, {
+          godown_id: d.godown_id, item_id: d.item_id, qty_kg: Math.round(num(d.qty_qtl) * 100),
+          moisture_pct: d.moisture_pct ? num(d.moisture_pct) : null, value_paise: Math.round(num(d.value) * 100), note: d.note || '',
+        }, 'PATCH');
+      });
+      var gsel = document.querySelector('#ms-modal [name="godown_id"]');
+      var isel = document.querySelector('#ms-modal [name="item_id"]');
+      if (gsel && lot.godown_id) gsel.value = lot.godown_id;
+      if (isel && lot.item_id) isel.value = lot.item_id;
     } else if (act === 'production') {
       modal('Today’s production (quintals)', [
         { name: 'paddy', label: 'Paddy milled (qtl)', type: 'number', step: '0.1', required: true },

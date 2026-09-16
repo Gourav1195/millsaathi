@@ -413,6 +413,27 @@ api.post('/lots', async (c) => {
   return c.json({ id, code }, 201);
 });
 
+api.patch('/lots/:id', async (c) => {
+  const { mill } = c.get('session');
+  const b = await c.req.json<Record<string, unknown>>();
+  const [lotColumnsRes] = await c.env.DB.batch([c.env.DB.prepare(`PRAGMA table_info(lots)`)]);
+  const lotColumns = new Set((lotColumnsRes.results as { name: string }[]).map((col) => col.name));
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (typeof b.godown_id === 'string') { sets.push('godown_id = ?'); vals.push(b.godown_id || null); }
+  if (typeof b.item_id === 'string') { sets.push('item_id = ?'); vals.push(b.item_id || null); }
+  if (b.qty_kg != null && Number.isFinite(Number(b.qty_kg))) { sets.push('qty_kg = ?'); vals.push(Math.round(Number(b.qty_kg))); }
+  if (b.moisture_pct === null || Number.isFinite(Number(b.moisture_pct))) { sets.push('moisture_pct = ?'); vals.push(b.moisture_pct === null ? null : Number(b.moisture_pct)); }
+  if (b.value_paise != null && Number.isFinite(Number(b.value_paise))) { sets.push('value_paise = ?'); vals.push(Math.round(Number(b.value_paise))); }
+  if (lotColumns.has('note') && typeof b.note === 'string') { sets.push('note = ?'); vals.push(b.note.trim() || null); }
+  if (!sets.length) return c.json({ error: 'nothing to update' }, 400);
+  const res = await c.env.DB.prepare(`UPDATE lots SET ${sets.join(', ')} WHERE id = ? AND mill_id = ?`)
+    .bind(...vals, c.req.param('id'), mill.id)
+    .run();
+  if (!res.meta.changes) return c.json({ error: 'not found' }, 404);
+  return c.json({ ok: true });
+});
+
 api.post('/stock-receipts/:id/skip', async (c) => {
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);

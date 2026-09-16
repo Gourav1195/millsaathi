@@ -94,15 +94,17 @@ table.ms th:last-child, table.ms td:last-child { padding-right: 22px; }
 .guide-step.done { background: #F5FBF7; border-color: #BCD8C4; }
 .guide-num { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--ink); color: #fff; font-size: 12px; font-weight: 800; }
 .guide-step.done .guide-num { background: var(--green); }
+.celebrate-card { display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 14px; border-color: #BCD8C4; background: linear-gradient(135deg, #F5FBF7 0%, #FFFFFF 55%, #FEF7E3 100%); }
+.celebrate-mark { width: 42px; height: 42px; border-radius: 12px; background: var(--green); position: relative; overflow: hidden; }
+.celebrate-mark::before, .celebrate-mark::after { content: ""; position: absolute; background: #fff; border-radius: 999px; }
+.celebrate-mark::before { width: 24px; height: 5px; left: 9px; top: 18px; transform: rotate(-38deg); }
+.celebrate-mark::after { width: 11px; height: 5px; left: 8px; top: 22px; transform: rotate(42deg); }
 .receipt-card, .receipt-empty { margin-bottom: 18px; }
-.receipt-list { display: flex; flex-direction: column; }
-.receipt-row { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(360px, 1.5fr); gap: 14px; align-items: center; padding: 14px 22px; border-top: 1px solid var(--line); }
-.receipt-controls { display: grid; grid-template-columns: minmax(120px, 1fr) 90px minmax(150px, 1fr) auto auto; gap: 8px; align-items: center; }
-.receipt-controls select, .receipt-controls input { width: 100%; font-family: inherit; font-size: 13.5px; font-weight: 500; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; outline: none; }
+.receipt-toast { margin-bottom: 18px; padding: 14px 16px 14px 18px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; border-left: 4px solid var(--green); background: #F5FBF7; }
+.receipt-toast-actions { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 900px) {
-  .receipt-row { grid-template-columns: 1fr; }
-  .receipt-controls { grid-template-columns: 1fr 1fr; }
-  .receipt-controls input[data-r-note] { grid-column: 1 / -1; }
+  .celebrate-card, .receipt-toast { grid-template-columns: 1fr; }
+  .receipt-toast-actions { justify-content: flex-start; flex-wrap: wrap; }
 }
 
 /* ---- mass balance / bars ---- */
