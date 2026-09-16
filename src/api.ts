@@ -65,6 +65,13 @@ api.get('/overview', async (c) => {
   const today = istToday();
   const weekAgo = istToday(-6);
   const monthAgo = istToday(-30);
+  const [gateColumnsRes, lotColumnsRes] = await db.batch([
+    db.prepare(`PRAGMA table_info(gate_entries)`),
+    db.prepare(`PRAGMA table_info(lots)`),
+  ]);
+  const gateColumns = new Set((gateColumnsRes.results as { name: string }[]).map((col) => col.name));
+  const lotColumns = new Set((lotColumnsRes.results as { name: string }[]).map((col) => col.name));
+  const hasStockReceiptFields = gateColumns.has('stock_status') && lotColumns.has('gate_entry_id');
 
   const [gateRes, gateWeekRes, saudasRes, lotsRes, godownsRes, suppliersRes, buyersRes, itemsRes, prodRes, payTodayRes, pendingReceiptsRes, activityRes] =
     await db.batch([
@@ -140,24 +147,26 @@ api.get('/overview', async (c) => {
         `SELECT direction, COALESCE(SUM(amount_paise),0) AS total
          FROM payments WHERE mill_id = ?1 AND pay_date = ?2 GROUP BY direction`,
       ).bind(mill.id, today),
-      db.prepare(
-        `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
-                s.name AS supplier_name, i.name AS item_name,
-                sa.code AS sauda_code, sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl
-         FROM gate_entries g
-         LEFT JOIN suppliers s ON s.id = g.supplier_id
-         LEFT JOIN items i ON i.id = g.item_id
-         LEFT JOIN saudas sa ON sa.id = g.sauda_id
-         WHERE g.mill_id = ?1
-           AND g.direction = 'in'
-           AND g.status = 'done'
-           AND g.stock_status = 'pending'
-           AND g.entry_date >= ?2
-           AND COALESCE(g.gross_kg,0) > COALESCE(g.tare_kg,0)
-           AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
-         ORDER BY g.entry_date DESC, g.updated_at DESC
-         LIMIT 20`,
-      ).bind(mill.id, monthAgo),
+      hasStockReceiptFields
+        ? db.prepare(
+            `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
+                    s.name AS supplier_name, i.name AS item_name,
+                    sa.code AS sauda_code, sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl
+             FROM gate_entries g
+             LEFT JOIN suppliers s ON s.id = g.supplier_id
+             LEFT JOIN items i ON i.id = g.item_id
+             LEFT JOIN saudas sa ON sa.id = g.sauda_id
+             WHERE g.mill_id = ?1
+               AND g.direction = 'in'
+               AND g.status = 'done'
+               AND g.stock_status = 'pending'
+               AND g.entry_date >= ?2
+               AND COALESCE(g.gross_kg,0) > COALESCE(g.tare_kg,0)
+               AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
+             ORDER BY g.entry_date DESC, g.updated_at DESC
+             LIMIT 20`,
+          ).bind(mill.id, monthAgo)
+        : db.prepare(`SELECT NULL AS id WHERE 0`),
       db.prepare(
         `SELECT COUNT(*) AS gate_count,
                 COUNT(DISTINCT entry_date) AS active_days,
@@ -361,13 +370,32 @@ api.post('/lots', async (c) => {
   const code = await nextCode(c.env.DB, mill.id, 'lot', 'LOT');
   const id = uuid();
   const gateEntryId = (b.gate_entry_id as string) || null;
+  const [lotColumnsRes, gateColumnsRes] = await c.env.DB.batch([
+    c.env.DB.prepare(`PRAGMA table_info(lots)`),
+    c.env.DB.prepare(`PRAGMA table_info(gate_entries)`),
+  ]);
+  const lotColumns = new Set((lotColumnsRes.results as { name: string }[]).map((col) => col.name));
+  const gateColumns = new Set((gateColumnsRes.results as { name: string }[]).map((col) => col.name));
+  const canLinkGate = lotColumns.has('gate_entry_id') && gateColumns.has('stock_status');
+  if (gateEntryId && !canLinkGate) return c.json({ error: 'Stock receipt helper needs the latest database migration.' }, 503);
+
+  const columns = ['id', 'mill_id', 'code', 'godown_id', 'item_id', 'qty_kg', 'moisture_pct', 'value_paise', 'in_date'];
+  const values: unknown[] = [
+    id, mill.id, code, (b.godown_id as string) || null, (b.item_id as string) || null,
+    Math.round(Number(b.qty_kg) || 0), b.moisture_pct != null ? Number(b.moisture_pct) : null,
+    Math.round(Number(b.value_paise) || 0), (b.in_date as string) || istToday(),
+  ];
+  if (lotColumns.has('gate_entry_id')) {
+    columns.splice(3, 0, 'gate_entry_id');
+    values.splice(3, 0, gateEntryId);
+  }
+  if (lotColumns.has('note')) {
+    columns.push('note');
+    values.push((b.note as string) || null);
+  }
   const inserts = c.env.DB.prepare(
-    `INSERT INTO lots (id, mill_id, code, gate_entry_id, godown_id, item_id, qty_kg, moisture_pct, value_paise, in_date, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(id, mill.id, code, gateEntryId, (b.godown_id as string) || null, (b.item_id as string) || null,
-      Math.round(Number(b.qty_kg) || 0), b.moisture_pct != null ? Number(b.moisture_pct) : null,
-      Math.round(Number(b.value_paise) || 0), (b.in_date as string) || istToday(), (b.note as string) || null);
+    `INSERT INTO lots (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+  ).bind(...values);
   if (gateEntryId) {
     const gate = await c.env.DB.prepare(
       `SELECT id FROM gate_entries
@@ -465,6 +493,8 @@ api.post('/feedback', async (c) => {
   const message = String(b.message ?? '').trim();
   if (message.length < 5) return c.json({ error: 'Please write a little more detail.' }, 400);
   const kind = ['help', 'bug', 'feature'].includes(String(b.kind)) ? String(b.kind) : 'help';
+  const table = await c.env.DB.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'feedback_tickets'`).first();
+  if (!table) return c.json({ error: 'Help box needs the latest database migration.' }, 503);
   const id = uuid();
   await c.env.DB.prepare(
     `INSERT INTO feedback_tickets (id, mill_id, user_id, kind, page, message, contact)
