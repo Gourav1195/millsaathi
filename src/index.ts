@@ -7,7 +7,7 @@ import { api } from './api';
 
 export type UserRow = {
   id: string; mill_id: string; name: string; email: string; role: string; role_code?: string | null;
-  preferred_unit?: string | null;
+  preferred_unit?: string | null; theme?: string | null;
   pass_hash: string; pass_salt: string;
 };
 export type MillRow = {
@@ -88,7 +88,7 @@ async function verifyTurnstile(c: Context<AppEnv>, token: unknown): Promise<bool
 async function sessionFromCookie(db: D1Database, token: string | undefined) {
   if (!token) return null;
   const row = await db.prepare(
-    `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code, u.preferred_unit,
+    `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code, u.preferred_unit, u.theme,
             m.id AS m_id, m.name AS m_name, m.slug AS m_slug, m.plan AS m_plan,
             m.language AS m_language, m.loss_limit_pct AS m_loss_limit_pct, m.season_label AS m_season_label,
             m.created_at AS m_created_at, m.address AS m_address, m.phone AS m_phone, m.email AS m_email,
@@ -98,7 +98,7 @@ async function sessionFromCookie(db: D1Database, token: string | undefined) {
   ).bind(await hashToken(token)).first<Record<string, string | number>>();
   if (!row) return null;
   return {
-    user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, preferred_unit: row.preferred_unit ?? 'QUINTAL', pass_hash: '', pass_salt: '' } as UserRow,
+    user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, preferred_unit: row.preferred_unit ?? 'QUINTAL', theme: row.theme ?? 'light', pass_hash: '', pass_salt: '' } as UserRow,
     mill: { id: row.m_id, name: row.m_name, slug: row.m_slug, plan: row.m_plan, language: row.m_language,
       loss_limit_pct: row.m_loss_limit_pct, season_label: row.m_season_label, created_at: row.m_created_at,
       address: row.m_address ?? null, phone: row.m_phone ?? null, email: row.m_email ?? null, gstin: row.m_gstin ?? null, place_of_supply: row.m_place_of_supply ?? null } as MillRow,
@@ -220,17 +220,20 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/auth/me', (c) => {
   const { user, mill } = c.get('session');
-  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', mill: { id: mill.id, name: mill.name, plan: mill.plan } });
+  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', mill: { id: mill.id, name: mill.name, plan: mill.plan } });
 });
 
 app.patch('/api/auth/me', async (c) => {
   const { user } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
-  const preferredUnit = String(b.preferred_unit ?? '').toUpperCase();
+  const preferredUnit = String(b.preferred_unit ?? user.preferred_unit ?? 'QUINTAL').toUpperCase();
+  const theme = String(b.theme ?? user.theme ?? 'light').toLowerCase();
   if (!['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(preferredUnit)) return c.json({ error: 'unsupported preferred unit' }, 400);
-  await c.env.DB.prepare(`UPDATE users SET preferred_unit = ? WHERE id = ?`).bind(preferredUnit, user.id).run();
+  if (!['light', 'dark'].includes(theme)) return c.json({ error: 'unsupported theme' }, 400);
+  await c.env.DB.prepare(`UPDATE users SET preferred_unit = ?, theme = ? WHERE id = ?`).bind(preferredUnit, theme, user.id).run();
   user.preferred_unit = preferredUnit;
-  return c.json({ ok: true, preferred_unit: preferredUnit });
+  user.theme = theme;
+  return c.json({ ok: true, preferred_unit: preferredUnit, theme });
 });
 
 app.route('/api', api);

@@ -429,7 +429,7 @@ api.get('/overview', async (c) => {
   if (labPending > 0) alerts.push({ level: 'amber', title: `${labPending} lab test${labPending > 1 ? 's' : ''} pending`, body: 'Trucks are waiting on moisture results at the lab.' });
 
   const body = {
-    me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', permissions: ROLE_PERMISSIONS[effectiveRole(user)] || [] },
+    me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', permissions: ROLE_PERMISSIONS[effectiveRole(user)] || [] },
     mill: { id: mill.id, name: mill.name, address: mill.address, phone: mill.phone, email: mill.email, gstin: mill.gstin, place_of_supply: mill.place_of_supply, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
     today,
     kpis: {
@@ -904,6 +904,17 @@ api.get('/payments', async (c) => {
   const result = await c.env.DB.prepare(`SELECT p.id, p.party_kind, p.party_id, p.direction, p.amount_paise, p.method, p.note, p.pay_date, p.status, p.created_at, COALESCE(s.name, b.name) AS party_name FROM payments p LEFT JOIN suppliers s ON p.party_kind = 'supplier' AND s.id = p.party_id AND s.mill_id = p.mill_id LEFT JOIN buyers b ON p.party_kind = 'buyer' AND b.id = p.party_id AND b.mill_id = p.mill_id WHERE p.mill_id = ? ORDER BY p.pay_date DESC, p.created_at DESC LIMIT 200`).bind(mill.id).all<Record<string, unknown>>();
   const body = { payments: result.results };
   return c.json(user.role_code === 'manager' || user.role === 'manager' ? stripMoney(body) : body);
+});
+
+api.get('/payments/:id/print', async (c) => {
+  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const payment = await c.env.DB.prepare(`SELECT p.*, COALESCE(s.name, b.name) AS party_name, COALESCE(s.address, b.address) AS party_address, COALESCE(s.phone, b.phone) AS party_phone FROM payments p LEFT JOIN suppliers s ON p.party_kind = 'supplier' AND s.id = p.party_id AND s.mill_id = p.mill_id LEFT JOIN buyers b ON p.party_kind = 'buyer' AND b.id = p.party_id AND b.mill_id = p.mill_id WHERE p.id = ? AND p.mill_id = ?`).bind(c.req.param('id'), mill.id).first<Record<string, unknown>>();
+  if (!payment) return c.html('<h1>Receipt not found</h1>', 404);
+  const escHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[ch]);
+  const amount = (Number(payment.amount_paise || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const direction = payment.direction === 'paid' ? 'Payment made to supplier' : 'Receipt received from buyer';
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>Receipt · ${escHtml(mill.name)}</title><style>body{font:14px system-ui;margin:40px;color:#1b2431;max-width:760px}.watermark{position:fixed;inset:40% 0;text-align:center;font-size:48px;font-weight:800;color:#1b2431;opacity:.06;transform:rotate(-25deg)}table{border-collapse:collapse;width:100%;margin-top:24px}td{border:1px solid #d0d5dd;padding:12px}td:first-child{font-weight:700;width:35%}@media print{button{display:none}}</style></head><body><div class="watermark">millsaathi.com</div><button onclick="print()">Print / Save PDF</button><h1>${escHtml(mill.name)}</h1><p>${escHtml(mill.address || '')}${mill.phone ? ` · ${escHtml(mill.phone)}` : ''}</p><h2>Payment receipt</h2><table><tr><td>Receipt date</td><td>${escHtml(payment.pay_date)}</td></tr><tr><td>Party</td><td>${escHtml(payment.party_name)}</td></tr><tr><td>Transaction</td><td>${escHtml(direction)}</td></tr><tr><td>Amount</td><td>₹${escHtml(amount)}</td></tr><tr><td>Method</td><td>${escHtml(payment.method)}</td></tr><tr><td>Note</td><td>${escHtml(payment.note || '—')}</td></tr></table><p style="margin-top:36px;color:#667085">Generated with millsaathi.com</p></body></html>`);
 });
 
 // ---- Masters ----

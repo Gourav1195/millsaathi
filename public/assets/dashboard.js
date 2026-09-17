@@ -676,7 +676,7 @@
           (canFinance() && out > 0 ? ' <button class="btn sm" data-act="pay" data-kind="' + (isSup ? 'supplier' : 'buyer') + '" data-id="' + esc(s.id) + '">' + (isSup ? 'Pay' : 'Receive') + '</button>' : '') + '</td>' : '') +
         '<td class="mut">' + ago(s.last_at) + '</td><td>' + (can('EDIT') ? '<button class="btn sm" data-act="' + (isSup ? 'sup-edit' : 'buy-edit') + '" data-id="' + esc(s.id) + '">Edit</button>' : '') + '</td></tr>';
     }).join('') || '<tr><td colspan="' + (m ? '7' : '6') + '" class="empty">Nobody here yet.</td></tr>';
-    var paymentRows = (S.payments || []).filter(function (p) { return p.party_kind === (isSup ? 'supplier' : 'buyer'); }).map(function (p) { var voidButton = p.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="payment-void" data-id="' + esc(p.id) + '">Void</button>' : ''; return '<tr><td class="tok">' + esc(p.pay_date) + '</td><td>' + esc(p.party_name || '—') + '</td><td>' + esc(p.direction === 'paid' ? 'Paid' : 'Received') + '</td><td class="b7">' + (m ? money(p.amount_paise) : '—') + '</td><td>' + pill(String(p.status || '').toLowerCase()) + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No payments recorded.</td></tr>';
+    var paymentRows = (S.payments || []).filter(function (p) { return p.party_kind === (isSup ? 'supplier' : 'buyer'); }).map(function (p) { var voidButton = p.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="payment-void" data-id="' + esc(p.id) + '">Void</button>' : ''; var receiptButton = can('EXPORT') ? ' <a class="btn sm" target="_blank" rel="noopener" href="/api/payments/' + encodeURIComponent(p.id) + '/print">Download receipt</a>' : ''; return '<tr><td class="tok">' + esc(p.pay_date) + '</td><td>' + esc(p.party_name || '—') + '</td><td>' + esc(p.direction === 'paid' ? 'Paid' : 'Received') + '</td><td class="b7">' + (m ? money(p.amount_paise) : '—') + '</td><td>' + pill(String(p.status || '').toLowerCase()) + receiptButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No payments recorded.</td></tr>';
     var paymentSection = '<div class="card" style="margin-top:18px"><div class="card-top"><div><div class="card-h">Recent ' + (isSup ? 'supplier payments' : 'buyer receipts') + '</div><div class="hint">Posted payments affect outstanding balances; voids remain in history.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Party</th><th>Direction</th><th>Amount</th><th>Status</th></tr></thead><tbody>' + paymentRows + '</tbody></table></div></div>';
     return '<div class="card"><div class="card-top"><div class="card-h">' + (isSup ? 'Suppliers' : 'Buyers') + '</div>' +
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + (isSup ? ' · farmers, traders & brokers' : ' customers') + '</span>' +
@@ -944,7 +944,8 @@
         { name: 'profile_email', label: 'Email', type: 'info', value: me.email },
         { name: 'profile_role', label: 'Role', type: 'info', value: me.role },
         { name: 'preferred_unit', label: 'Preferred quantity unit', type: 'select', value: me.preferred_unit || 'QUINTAL', options: [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
-      ], 'Save preference', function (d) { return apiPost('/api/auth/me', { preferred_unit: d.preferred_unit }, 'PATCH').then(function () { ov.me.preferred_unit = d.preferred_unit; }); });
+        { name: 'theme', label: 'Appearance', type: 'toggle', value: me.theme || 'light', options: [{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }] },
+      ], 'Save preference', function (d) { return apiPost('/api/auth/me', { preferred_unit: d.preferred_unit, theme: d.theme }, 'PATCH').then(function () { ov.me.preferred_unit = d.preferred_unit; ov.me.theme = d.theme; document.documentElement.setAttribute('data-theme', d.theme); }); });
     } else if (act === 'nav-open') {
       var menu = document.getElementById('mobile-nav');
       if (menu) { menu.classList.add('open'); document.body.classList.add('nav-open'); }
@@ -1241,9 +1242,11 @@
     ['stock', 'Stock & Lots'], ['suppliers', 'Suppliers'], ['buyers', 'Buyers'], ['items', 'Items'], ['processing', 'Processing'], ['team', 'Team'], ['documents', 'Documents'], ['digest', 'Night Digest'],
   ];
   var NAV_PERMS = { team: 'MANAGE_MEMBERS' };
+  var NAV_ROLES = { dashboard: ['owner','admin','manager','accountant','gate_operator','production_operator','operator','viewer'], gate: ['owner','admin','manager','gate_operator','operator'], purchase: ['owner','admin','manager','accountant'], stock: ['owner','admin','manager','accountant','production_operator'], suppliers: ['owner','admin','manager','accountant'], buyers: ['owner','admin','manager','accountant'], items: ['owner','admin','manager','accountant','production_operator'], processing: ['owner','admin','manager','production_operator','operator'], team: ['owner','admin'], documents: ['owner','admin','manager','accountant'], digest: ['owner','admin','manager','accountant'] };
   function navItems() {
     var all = isSupportAdmin() ? NAV.concat([['bugs', 'Bug Reports']]) : NAV;
-    return all.filter(function (n) { var required = NAV_PERMS[n[0]]; return !required || !S.ov || !S.ov.me.permissions || S.ov.me.permissions.indexOf(required) >= 0; });
+    var role = S.ov && S.ov.me ? S.ov.me.role : '';
+    return all.filter(function (n) { var required = NAV_PERMS[n[0]]; var roles = NAV_ROLES[n[0]]; return (!roles || roles.indexOf(role) >= 0) && (!required || !S.ov || !S.ov.me.permissions || S.ov.me.permissions.indexOf(required) >= 0); });
   }
   function navMarkup() {
     return navItems().map(function (n) {
@@ -1275,6 +1278,7 @@
   function render() {
     var root = document.getElementById('ms-root');
     if (!S.ov) { renderLogin(root); return; }
+    document.documentElement.setAttribute('data-theme', S.ov.me && S.ov.me.theme === 'dark' ? 'dark' : 'light');
     if (S.page === 'bugs' && !isSupportAdmin()) S.page = 'dashboard';
     var meta = PAGES[S.page];
     var today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
