@@ -29,7 +29,7 @@ and seeded smoke tests continue without a challenge. Never commit either value.
 
 ## Import boundary
 
-Party CSV and XLSX import are supported with a 2 MB / 1,000-row limit, preview validation, duplicate detection, and formula-safe exports. XLSX parsing is bounded and performed in the browser using platform ZIP/deflate APIs; the Worker receives only validated row JSON and does not depend on the vulnerable `xlsx` package. Business documents export as CSV or Excel-compatible SpreadsheetML, both behind the export permission.
+Party CSV and XLSX import are supported with a 2 MB / 1,000-row limit, bounded browser parsing, common-header mapping, preview validation, duplicate detection, and formula-safe exports. XLSX parsing is performed in the browser using platform ZIP/deflate APIs; the Worker receives only mapped row JSON and does not depend on the vulnerable `xlsx` package. Business documents export as CSV or Excel-compatible SpreadsheetML, both behind the export permission.
 
 ## Transaction reversals
 

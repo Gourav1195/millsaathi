@@ -20,6 +20,7 @@
     if (kg == null) return '—';
     return (kg / 100).toLocaleString('en-IN', { maximumFractionDigits: dec == null ? 0 : dec });
   }
+  function balanceQtl(kg) { return qtl(kg, Math.abs(Number(kg) || 0) < 10000 ? 2 : 0); }
   function incomingToday(k) { return k.incoming_today_kg != null ? k.incoming_today_kg : (k.paddy_in_today_kg || 0); }
   function outgoingToday(k) { return k.outgoing_today_kg != null ? k.outgoing_today_kg : (k.rice_out_today_kg || 0); }
   function qualityValue(row, key) { if (!row || !row.quality_json) return ''; try { return JSON.parse(row.quality_json)[key] || ''; } catch (_) { return ''; } }
@@ -362,10 +363,10 @@
       (withAction ? '<button class="btn sm" data-nav="processing">Open Processing</button>' : '') + '</div>' +
       '<div class="mb-bar">' + segment(output, '#BE8A16') + segment(loss, '#CBB78C') + segment(unexplained, '#C0451C') + '</div>' +
       '<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">' +
-      '<div class="mb-row"><span class="b6 mut">Input</span><span class="b7">' + qtl(input) + ' qtl</span></div>' +
-      '<div class="mb-row"><span class="b6 mut">Output</span><span class="b7">' + qtl(output) + ' qtl · ' + pct(output) + '%</span></div>' +
-      '<div class="mb-row"><span class="b6 mut">Measured loss</span><span class="b7">' + qtl(loss) + ' qtl · ' + pct(loss) + '%</span></div></div>' +
-      (unexplained > 0 ? '<div class="warn-box" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;color:var(--red-ink);font-size:14px">⚠ Unexplained</span><span class="arch" style="font-weight:800;font-size:18px;color:var(--red)">' + qtl(unexplained) + ' qtl · ' + pctUnexplained + '%</span></div></div>' :
+      '<div class="mb-row"><span class="b6 mut">Input</span><span class="b7">' + balanceQtl(input) + ' qtl</span></div>' +
+      '<div class="mb-row"><span class="b6 mut">Output</span><span class="b7">' + balanceQtl(output) + ' qtl · ' + pct(output) + '%</span></div>' +
+      '<div class="mb-row"><span class="b6 mut">Measured loss</span><span class="b7">' + balanceQtl(loss) + ' qtl · ' + pct(loss) + '%</span></div></div>' +
+      (unexplained > 0 ? '<div class="warn-box" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;color:var(--red-ink);font-size:14px">⚠ Unexplained</span><span class="arch" style="font-weight:800;font-size:18px;color:var(--red)">' + balanceQtl(unexplained) + ' qtl · ' + pctUnexplained + '%</span></div></div>' :
         '<div class="ok-box" style="margin-top:14px"><span style="font-weight:700;color:#256238;font-size:14px">✓ All process input accounted for</span></div>') + '</div>';
   }
 
@@ -460,7 +461,7 @@
       '<div class="kpis">' + kpis.join('') + '</div>' +
       '<div class="card pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="card-h">Current stock by item</div><div class="hint">Normalized ledger quantities</div></div><button class="btn sm" data-nav="stock">View stock</button></div><div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">' + stockRows + '</div></div>' +
       '<div class="card pad" style="margin-top:14px"><div class="card-h">Item movements · last 30 days</div><div class="hint" style="margin-top:4px">Direction is recorded on each transaction; item category never determines IN or OUT.</div><div class="twrap ms-scroll" style="margin-top:12px"><table class="ms"><thead><tr><th>Item</th><th>Arriving</th><th>Dispatching</th></tr></thead><tbody>' + flowRows + '</tbody></table></div></div>' +
-      '<div class="card pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="card-h">Processing · last 30 days</div><div class="hint">Normalized movement totals across posted process runs.</div></div><button class="btn sm" data-nav="processing">View runs</button></div><div class="kpis" style="margin-top:14px"><div class="kpi"><div class="l">Inputs</div><div class="v">' + qtl(processInput) + ' qtl</div></div><div class="kpi"><div class="l">Outputs</div><div class="v">' + qtl(processOutput) + ' qtl</div></div><div class="kpi"><div class="l">Measured loss</div><div class="v">' + qtl(processLoss) + ' qtl</div></div><div class="kpi"><div class="l">Output yield</div><div class="v">' + (processYield == null ? '—' : processYield + '%') + '</div></div></div></div>' +
+      '<div class="card pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="card-h">Processing · last 30 days</div><div class="hint">Normalized movement totals across posted process runs.</div></div><button class="btn sm" data-nav="processing">View runs</button></div><div class="kpis" style="margin-top:14px"><div class="kpi"><div class="l">Inputs</div><div class="v">' + balanceQtl(processInput) + ' qtl</div></div><div class="kpi"><div class="l">Outputs</div><div class="v">' + balanceQtl(processOutput) + ' qtl</div></div><div class="kpi"><div class="l">Measured loss</div><div class="v">' + balanceQtl(processLoss) + ' qtl</div></div><div class="kpi"><div class="l">Output yield</div><div class="v">' + (processYield == null ? '—' : processYield + '%') + '</div></div></div></div>' +
       '<div class="grid2">' +
       '<div class="card pad" style="min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline">' +
       '<div class="card-h">Inbound vs. outbound</div><div class="hint">all items · quintals · last 7 days</div></div>' +
@@ -781,9 +782,45 @@
     var headers = rows.shift().map(function (h) { return h.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''); });
     return rows.slice(0, 1000).map(function (values) { var out = {}; headers.forEach(function (h, index) { out[h] = values[index] || ''; }); return out; });
   }
+  function mapPartyImportRows(kind, rows) {
+    var targets = kind === 'supplier'
+      ? ['name', 'type', 'place', 'phone', 'email', 'gstin', 'address']
+      : ['name', 'type', 'location', 'phone', 'email', 'gstin', 'address'];
+    var aliases = {
+      name: ['name', 'party_name', 'supplier_name', 'buyer_name', 'customer_name', 'vendor_name'],
+      type: ['type', 'party_type', 'category', 'kind'],
+      place: ['place', 'location', 'city', 'district', 'town'],
+      location: ['location', 'place', 'city', 'district', 'town'],
+      phone: ['phone', 'mobile', 'mobile_no', 'phone_number', 'contact', 'contact_number'],
+      email: ['email', 'email_address', 'mail'],
+      gstin: ['gstin', 'gst', 'gst_no', 'gst_number', 'tax_id'],
+      address: ['address', 'postal_address', 'full_address'],
+    };
+    var headers = [];
+    rows.forEach(function (row) { Object.keys(row).forEach(function (key) { if (headers.indexOf(key) < 0) headers.push(key); }); });
+    var mapping = {};
+    targets.forEach(function (target) {
+      var candidates = aliases[target] || [target];
+      mapping[target] = candidates.find(function (candidate) { return headers.indexOf(candidate) >= 0; }) || '';
+    });
+    return {
+      rows: rows.map(function (row) {
+        var mapped = {};
+        targets.forEach(function (target) { if (mapping[target]) mapped[target] = row[mapping[target]] || ''; });
+        return mapped;
+      }),
+      summary: targets.filter(function (target) { return mapping[target]; }).map(function (target) { return mapping[target] + ' → ' + target; }),
+    };
+  }
   function importParties(kind) {
     var input = document.createElement('input'); input.type = 'file'; input.accept = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    function validateAndCommit(rows) { if (!rows.length || rows.length > 1000) return Promise.reject(new Error('File must contain between 1 and 1,000 data rows.')); return apiPost('/api/parties/import/validate', { kind: kind, rows: rows }).then(function (check) { var clean = check.rows.filter(function (r) { return !r.error && !r.duplicate; }).map(function (r) { return r.row; }); if (!clean.length || !confirm('Preview: ' + clean.length + ' valid, ' + check.duplicates + ' duplicate(s), ' + check.errors + ' error(s). Import valid rows?')) return null; return apiPost('/api/parties/import/commit', { kind: kind, rows: clean, skip_duplicates: true }); }); }
+    function validateAndCommit(rows) {
+      if (!rows.length || rows.length > 1000) return Promise.reject(new Error('File must contain between 1 and 1,000 data rows.'));
+      var mapped = mapPartyImportRows(kind, rows);
+      if (!mapped.summary.length) return Promise.reject(new Error('No recognized party columns were found. Download the template or use name, phone, email and GSTIN headers.'));
+      if (!confirm('Detected column mapping:\n' + mapped.summary.join('\n') + '\n\nContinue to preview and validate these rows?')) return null;
+      return apiPost('/api/parties/import/validate', { kind: kind, rows: mapped.rows }).then(function (check) { var clean = check.rows.filter(function (r) { return !r.error && !r.duplicate; }).map(function (r) { return r.row; }); if (!clean.length || !confirm('Preview: ' + clean.length + ' valid, ' + check.duplicates + ' duplicate(s), ' + check.errors + ' error(s). Import valid rows?')) return null; return apiPost('/api/parties/import/commit', { kind: kind, rows: clean, skip_duplicates: true }); });
+    }
     input.onchange = function () { var file = input.files && input.files[0]; if (!file || file.size > 2 * 1024 * 1024) return alert('Choose a CSV or XLSX file up to 2 MB.'); var isXlsx = /\.xlsx$/i.test(file.name); file.arrayBuffer().then(function (buffer) { if (isXlsx && new Uint8Array(buffer)[0] !== 80) throw new Error('The selected XLSX file is invalid.'); return isXlsx ? parseXlsx(buffer) : Promise.resolve(parseCsv(new TextDecoder().decode(buffer))); }).then(validateAndCommit).then(function (result) { if (result) { alert('Imported ' + result.imported + ', skipped ' + result.skipped + ', failed ' + result.failed + '.'); refresh(); } }).catch(function (err) { alert(err.message); }); }; input.click();
   }
 
