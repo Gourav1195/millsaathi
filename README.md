@@ -13,7 +13,7 @@ database, no other services and no secrets.
 |---|---|---|
 | Marketing site | `/` | Landing page |
 | Demo mill | `/demo` | Full interactive dashboard, client-side data, no login — the sales tool |
-| Real app | `/app` | Multi-tenant ERP: signup/login, gate & weighbridge, saudas, stock & lots, suppliers/buyers/items, mass balance, night digest |
+| Real app | `/app` | Multi-tenant ERP: signup/login, gate & weighbridge, purchase/sales Saudās, stock ledger & lots, suppliers/buyers/items, processing, documents, team/RBAC, mass balance, night digest |
 | API | `/api/*` | Hono JSON API on Workers + D1 |
 
 ## Demo logins
@@ -70,10 +70,15 @@ npm run deploy              # wrangler deploy → millsaathi.com
 
 ## Status
 
-Currently **free** — ₹0, all modules, unlimited users. Paid tiers are written but parked in an
-HTML comment in `public/index.html`, and stay parked until a payment gateway is actually wired up.
+Currently **free** — ₹0, all shipped modules, unlimited users. Paid tiers are written but parked in
+an HTML comment in `public/index.html`, and stay parked until a payment gateway is actually wired up.
 
-Known gaps:
+Deliberate follow-ups:
 
-- Turnstile not yet added to login/signup.
-- Auth endpoints are not rate-limited.
+- Turnstile is optional and wired into login/signup; production still needs the site-key variable and `wrangler secret put TURNSTILE_SECRET_KEY` configuration.
+- Party CSV/XLSX import is bounded, previewed, and validated in the browser before commit.
+- Cloudflare account-level managed bot/AI crawler controls still need to be enabled in the production dashboard.
+- GST/e-invoice/IRN integration and SaaS subscription checkout are future integrations; operational documents and billing-boundary tables are separate. Each mill is provisioned with a read-only free billing status record so checkout can be added without coupling it to operational payments.
+- Posted gate weights are immutable after stock/fulfilment synchronization; corrections should be recorded as a separate operational adjustment.
+- Posted processing runs can be voided with the `VOID` permission; stock movements are reversed and source lots restored without deleting run history.
+- Owners and admins can either create active team accounts directly or issue seven-day shareable invite links; credentials are hashed server-side and team changes are audited.

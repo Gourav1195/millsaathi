@@ -1,5 +1,23 @@
 User-agent: *
 Allow: /
+Disallow: /api/
+
+# Keep public pages discoverable to normal search engines, while opting out of
+# known model-training crawlers. This cannot prevent copying of public pages.
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
 
 # Login and demo app are intentionally noindex (see meta robots on those pages).
 # We do NOT block them here so crawlers can read the noindex directive.

@@ -43,6 +43,7 @@ input::placeholder { color: #98A2B3; }
 /* ---- main ---- */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { background: #fff; border-bottom: 1px solid var(--border); padding: 14px clamp(18px,3vw,32px); display: flex; align-items: center; gap: 18px; position: sticky; top: 0; z-index: 20; }
+.menu-trigger, .mobile-nav, .nav-backdrop { display: none; }
 .topbar h1 { font-family: 'Archivo', sans-serif; font-weight: 800; font-size: clamp(20px,2.4vw,26px); letter-spacing: -.02em; margin: 0; line-height: 1.1; }
 .topbar .sub { font-size: 13.5px; color: var(--muted); font-weight: 500; margin-top: 2px; }
 .topbar .grow { flex: 1; min-width: 0; }
@@ -64,7 +65,7 @@ input::placeholder { color: #98A2B3; }
 .kpi .s { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .grid2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; margin-top: 14px; }
 .grid2r { display: grid; grid-template-columns: 1fr 1.5fr; gap: 14px; margin-top: 14px; }
-@media (max-width: 900px) { .grid2, .grid2r { grid-template-columns: 1fr; } .side { display: none; } }
+@media (max-width: 900px) { .grid2, .grid2r { grid-template-columns: 1fr; } .side { display: none; } .menu-trigger { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex: 0 0 38px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--ink); font-size: 21px; cursor: pointer; } .mobile-nav { display: flex; flex-direction: column; position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); background: var(--side); color: #fff; z-index: 60; transform: translateX(-105%); transition: transform .2s ease; box-shadow: 12px 0 30px rgba(16,20,27,.22); } .mobile-nav.open { transform: translateX(0); } .mobile-nav .nav { width: 100%; } .mobile-nav-head { display: flex; align-items: center; justify-content: space-between; padding: 20px; border-bottom: 1px solid var(--side-line); } .mobile-nav-head .name { font-family: 'Archivo',sans-serif; font-weight: 800; font-size: 18px; } .mobile-nav-head .mill { color: var(--side-mut); font-size: 11px; margin-top: 4px; } .nav-close { background: none; border: 0; color: #fff; font-size: 28px; cursor: pointer; line-height: 1; } .nav-backdrop { position: fixed; inset: 0; z-index: 55; background: rgba(27,36,49,.45); } body.nav-open .nav-backdrop { display: block; } body.nav-open { overflow: hidden; } }
 .card-h { font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 17px; }
 .card-top { padding: 16px 22px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .hint { font-size: 13px; color: var(--muted); font-weight: 600; }
