@@ -8,7 +8,7 @@
   var SUPPORT_ADMIN_EMAIL = 'gouravmodi1195@gmail.com';
   var AUTH_CONFIG = null;
   var TURNSTILE_SCRIPT = null;
-  var S = { page: 'dashboard', role: 'owner', q: '', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, team: null, documents: null, payments: null };
+  var S = { page: 'dashboard', role: 'owner', q: '', period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, team: null, documents: null, payments: null };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -93,7 +93,7 @@
       S.role = S.role || 'owner';
       return Promise.resolve(true);
     }
-    return fetch('/api/overview').then(function (r) {
+    return fetch('/api/overview?range=' + encodeURIComponent(S.period)).then(function (r) {
       if (r.status === 401) return false;
       return r.json().then(function (ov) { S.ov = ov; S.role = ov.me.role; return true; });
     });
@@ -201,30 +201,43 @@
     if (old && !options.keepExisting) old.remove();
     var dlg = document.createElement('dialog');
     dlg.className = 'modal'; dlg.id = options.id || 'ms-modal';
+    function renderField(f) {
+      var simpleProcessOptional = title === 'New process run' && ['source_lot', 'input_item_2', 'input_lot_2', 'input_qty_2', 'input_unit_2', 'output_item_2', 'output_qty_2', 'output_unit_2', 'destination_godown', 'byproduct_item', 'byproduct_qty', 'byproduct_unit', 'loss_item', 'loss_qty', 'loss_unit'].indexOf(f.name) >= 0;
+      var when = (f.when ? ' data-when="' + esc(f.when) + '"' : '') + (f.advanced || simpleProcessOptional ? ' data-advanced="1"' : '');
+      if (f.type === 'select') {
+        var opts = f.quickAdd ? f.options.concat([{ value: '__add:' + f.quickAdd, label: '+ Add new ' + f.quickAddLabel }]) : f.options;
+        var preferred = title === 'New process run' && ['input_unit', 'output_unit', 'input_unit_2', 'output_unit_2', 'byproduct_unit', 'loss_unit'].indexOf(f.name) >= 0 ? ((S.ov && S.ov.me && S.ov.me.preferred_unit) || 'QUINTAL') : '';
+        var selectedValue = f.value == null ? preferred : f.value;
+        return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><select name="' + f.name + '">' +
+          opts.map(function (o) { return '<option value="' + esc(o.value) + '"' + (String(o.value) === String(selectedValue == null ? '' : selectedValue) ? ' selected' : '') + '>' + esc(o.label) + '</option>'; }).join('') +
+          '</select></div>';
+      }
+      if (f.type === 'toggle') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><div class="toggle-control" data-toggle-name="' + esc(f.name) + '">' + f.options.map(function (o) { return '<button type="button" class="toggle-option' + (String(o.value) === String(f.value == null ? f.options[0].value : f.value) ? ' on' : '') + '" data-toggle-value="' + esc(o.value) + '" aria-pressed="' + (String(o.value) === String(f.value == null ? f.options[0].value : f.value) ? 'true' : 'false') + '">' + esc(o.label) + '</button>'; }).join('') + '<input type="hidden" name="' + f.name + '" value="' + esc(f.value == null ? f.options[0].value : f.value) + '"></div></div>';
+      if (f.type === 'textarea') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><textarea name="' + f.name + '"' + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + '>' + esc(f.value || '') + '</textarea></div>';
+      if (f.type === 'info') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><div class="hint" data-info="' + esc(f.name) + '">' + esc(f.value || '—') + '</div></div>';
+      return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><input name="' + f.name + '" type="' + (f.type || 'text') + '"' + (f.step ? ' step="' + f.step + '"' : '') + (f.required ? ' required' : '') + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + (f.value != null ? ' value="' + esc(f.value) + '"' : '') + '></div>';
+    }
+    var formFields = [], openRow = null;
+    fields.forEach(function (f, i) {
+      if (f.row && openRow !== f.row) { if (openRow) formFields.push('</div>'); openRow = f.row; formFields.push('<div class="frow modal-row">'); }
+      if (!f.row && openRow) { formFields.push('</div>'); openRow = null; }
+      formFields.push(renderField(f));
+      if (openRow && (!fields[i + 1] || fields[i + 1].row !== openRow)) { formFields.push('</div>'); openRow = null; }
+    });
     dlg.innerHTML =
       '<div class="modal-h">' + esc(title) + '</div>' +
       '<form class="modal-b" method="dialog">' +
-      fields.map(function (f) {
-        var when = f.when ? ' data-when="' + esc(f.when) + '"' : '';
-        if (f.type === 'select') {
-          var opts = f.quickAdd ? f.options.concat([{ value: '__add:' + f.quickAdd, label: '+ Add new ' + f.quickAddLabel }]) : f.options;
-          return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><select name="' + f.name + '">' +
-            opts.map(function (o) { return '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>'; }).join('') +
-            '</select></div>';
-        }
-        if (f.type === 'textarea') {
-          return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><textarea name="' + f.name + '"' +
-            (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + '>' + esc(f.value || '') + '</textarea></div>';
-        }
-        if (f.type === 'info') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><div class="hint" data-info="' + esc(f.name) + '">—</div></div>';
-        return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><input name="' + f.name + '" type="' + (f.type || 'text') + '"' +
-          (f.step ? ' step="' + f.step + '"' : '') + (f.required ? ' required' : '') +
-          (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + (f.value != null ? ' value="' + esc(f.value) + '"' : '') + '></div>';
-      }).join('') +
+      formFields.join('') +
       '<div class="form-err"></div>' +
       '<div class="frow"><button type="button" class="btn ghost" style="flex:1" data-x>Cancel</button>' +
       '<button type="submit" class="btn acc" style="flex:1">' + esc(submitLabel) + '</button></div></form>';
     document.body.appendChild(dlg);
+    if (fields.some(function (f) { return f.advanced || (title === 'New process run' && f.name === 'source_lot'); })) {
+      dlg.querySelectorAll('[data-advanced]').forEach(function (node) { node.hidden = true; });
+      var more = document.createElement('button'); more.type = 'button'; more.className = 'btn ghost advanced-toggle'; more.textContent = '＋ More details (optional)';
+      more.onclick = function () { var open = more.getAttribute('aria-expanded') === 'true'; more.setAttribute('aria-expanded', open ? 'false' : 'true'); more.textContent = open ? '＋ More details (optional)' : '− Hide optional details'; dlg.querySelectorAll('[data-advanced]').forEach(function (node) { node.hidden = open; }); };
+      dlg.querySelector('.form-err').before(more);
+    }
     function updateConditionalFields() {
       var direction = dlg.querySelector('[name="direction"]');
       fields.forEach(function (f) {
@@ -237,6 +250,18 @@
     }
     var directionSelect = dlg.querySelector('[name="direction"]');
     if (directionSelect) directionSelect.onchange = updateConditionalFields;
+    fields.forEach(function (f) {
+      if (f.type !== 'toggle') return;
+      var hidden = dlg.querySelector('[name="' + f.name + '"]');
+      dlg.querySelectorAll('[data-toggle-name="' + f.name + '"] .toggle-option').forEach(function (button) {
+        button.onclick = function () {
+          hidden.value = button.getAttribute('data-toggle-value');
+          dlg.querySelectorAll('[data-toggle-name="' + f.name + '"] .toggle-option').forEach(function (other) { var on = other === button; other.classList.toggle('on', on); other.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+          updateConditionalFields();
+          if (f.onChange) f.onChange(hidden.value, dlg);
+        };
+      });
+    });
     updateConditionalFields();
     dlg.querySelector('[data-x]').onclick = function () { dlg.close(); dlg.remove(); if (options.onCancel) options.onCancel(); };
     fields.forEach(function (f) {
@@ -384,6 +409,13 @@
     ];
     var done = steps.every(function (s) { return s[1]; });
     if (done) {
+      var connectedKey = 'ms-onboarding-connected:' + (ov.mill.id || ov.mill.name);
+      try { if (localStorage.getItem(connectedKey) === '1') return ''; } catch (_) {}
+      setTimeout(function () {
+        try { localStorage.setItem(connectedKey, '1'); } catch (_) {}
+        var card = document.querySelector('.celebrate-card');
+        if (card) card.remove();
+      }, 8000);
       return '<div class="card pad guide-card celebrate-card"><div class="celebrate-mark"></div>' +
         '<div><div class="card-h">Mill flow is connected</div><div class="hint" style="margin-top:4px">Parties, items, sauda, gate and stock are ready for daily use.</div></div></div>';
     }
@@ -427,9 +459,12 @@
       ];
     }
 
-    var max = Math.max.apply(null, ov.week.map(function (d) { return Math.max(d.in_kg, d.out_kg, 1); }));
-    var bars = ov.week.map(function (d) {
-      var lab = new Date(d.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' });
+    var trend = ov.trend || { range: 'daily', label: 'last 7 days', data: ov.week || [] };
+    var trendData = trend.data || [];
+    var max = Math.max.apply(null, trendData.map(function (d) { return Math.max(d.in_kg, d.out_kg, 1); }));
+    var bars = trendData.map(function (d) {
+      var date = trend.range === 'monthly' ? new Date(d.date + '-01T00:00:00') : new Date(d.date + 'T00:00:00');
+      var lab = trend.range === 'monthly' ? date.toLocaleDateString('en-IN', { month: 'short' }) : trend.range === 'weekly' ? date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : date.toLocaleDateString('en-IN', { weekday: 'short' });
       return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;position:relative;height:100%;justify-content:flex-end">' +
         '<div style="display:flex;align-items:flex-end;gap:4px;height:100%;width:100%;justify-content:center">' +
         '<div style="width:40%;max-width:20px;background:#BE8A16;border-radius:3px 3px 0 0;height:' + Math.round((d.in_kg / max) * 140) + 'px"></div>' +
@@ -460,11 +495,11 @@
     return onboardingCard() +
       '<div class="kpis">' + kpis.join('') + '</div>' +
       '<div class="card pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="card-h">Current stock by item</div><div class="hint">Normalized ledger quantities</div></div><button class="btn sm" data-nav="stock">View stock</button></div><div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">' + stockRows + '</div></div>' +
-      '<div class="card pad" style="margin-top:14px"><div class="card-h">Item movements · last 30 days</div><div class="hint" style="margin-top:4px">Direction is recorded on each transaction; item category never determines IN or OUT.</div><div class="twrap ms-scroll" style="margin-top:12px"><table class="ms"><thead><tr><th>Item</th><th>Arriving</th><th>Dispatching</th></tr></thead><tbody>' + flowRows + '</tbody></table></div></div>' +
-      '<div class="card pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="card-h">Processing · last 30 days</div><div class="hint">Normalized movement totals across posted process runs.</div></div><button class="btn sm" data-nav="processing">View runs</button></div><div class="kpis" style="margin-top:14px"><div class="kpi"><div class="l">Inputs</div><div class="v">' + balanceQtl(processInput) + ' qtl</div></div><div class="kpi"><div class="l">Outputs</div><div class="v">' + balanceQtl(processOutput) + ' qtl</div></div><div class="kpi"><div class="l">Measured loss</div><div class="v">' + balanceQtl(processLoss) + ' qtl</div></div><div class="kpi"><div class="l">Output yield</div><div class="v">' + (processYield == null ? '—' : processYield + '%') + '</div></div></div></div>' +
+      '<div class="card pad" style="margin-top:14px"><div class="card-h">Item movements · ' + esc(trend.label) + '</div><div class="hint" style="margin-top:4px">Direction is recorded on each transaction; item category never determines IN or OUT.</div><div class="twrap ms-scroll" style="margin-top:12px"><table class="ms"><thead><tr><th>Item</th><th>Arriving</th><th>Dispatching</th></tr></thead><tbody>' + flowRows + '</tbody></table></div></div>' +
+      '<div class="card pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="card-h">Processing · ' + esc(trend.label) + '</div><div class="hint">Normalized movement totals across posted process runs.</div></div><button class="btn sm" data-nav="processing">View runs</button></div><div class="kpis" style="margin-top:14px"><div class="kpi"><div class="l">Inputs</div><div class="v">' + balanceQtl(processInput) + ' qtl</div></div><div class="kpi"><div class="l">Outputs</div><div class="v">' + balanceQtl(processOutput) + ' qtl</div></div><div class="kpi"><div class="l">Measured loss</div><div class="v">' + balanceQtl(processLoss) + ' qtl</div></div><div class="kpi"><div class="l">Output yield</div><div class="v">' + (processYield == null ? '—' : processYield + '%') + '</div></div></div></div>' +
       '<div class="grid2">' +
       '<div class="card pad" style="min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline">' +
-      '<div class="card-h">Inbound vs. outbound</div><div class="hint">all items · quintals · last 7 days</div></div>' +
+      '<div class="card-h">Inbound vs. outbound</div><div class="hint">all items · quintals · ' + esc(trend.label) + '</div></div>' +
       '<div style="display:flex;align-items:flex-end;gap:clamp(8px,1.5vw,20px);height:180px;margin-top:22px;padding-bottom:26px;position:relative">' + bars + '</div>' +
       '<div style="display:flex;gap:20px;margin-top:8px;font-size:13px;font-weight:600">' +
       '<span style="display:flex;align-items:center;gap:7px"><span style="width:11px;height:11px;border-radius:2px;background:#BE8A16"></span>↙ Arriving</span>' +
@@ -690,7 +725,7 @@
     });
   }
   function loadProcessTypes() {
-    return fetch('/api/process-types').then(function (r) { return r.json(); }).then(function (j) { S.processTypes = j.process_types || []; render(); });
+    return fetch('/api/process-types?include_archived=1').then(function (r) { return r.json(); }).then(function (j) { S.processTypes = j.process_types || []; render(); });
   }
   function loadProcessRuns() {
     return fetch('/api/process-runs').then(function (r) { return r.json(); }).then(function (j) { S.processRuns = j.runs || []; render(); });
@@ -700,7 +735,7 @@
   }
   function pageProcessing() {
     if (!S.processTypes || !S.processRuns) { if (!S.processTypes) loadProcessTypes(); if (!S.processRuns) loadProcessRuns(); return '<div class="card pad"><div class="empty">Loading processing…</div></div>'; }
-    var rows = S.processTypes.map(function (p) { return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (p.active ? 'Active' : 'Inactive') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-archive" data-id="' + esc(p.id) + '">Archive</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="4" class="empty">No process types yet.</td></tr>';
+    var rows = S.processTypes.map(function (p) { var archived = !!p.deleted_at; var action = can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : ''; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + action + '</td></tr>'; }).join('') || '<tr><td colspan="4" class="empty">No process types yet.</td></tr>';
     var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
     return '<div class="card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Define the transformations your mill performs.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' : '') + (can('CREATE') ? '<button class="btn acc" data-act="process-run-new">+ Run</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products are linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
   }
@@ -902,7 +937,15 @@
   // ---------- actions ----------
   function openAction(act, el) {
     var ov = S.ov;
-    if (act === 'nav-open') {
+    if (act === 'profile') {
+      var me = ov.me || {};
+      modal('Your profile', [
+        { name: 'profile_name', label: 'Name', type: 'info', value: me.name },
+        { name: 'profile_email', label: 'Email', type: 'info', value: me.email },
+        { name: 'profile_role', label: 'Role', type: 'info', value: me.role },
+        { name: 'preferred_unit', label: 'Preferred quantity unit', type: 'select', value: me.preferred_unit || 'QUINTAL', options: [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
+      ], 'Save preference', function (d) { return apiPost('/api/auth/me', { preferred_unit: d.preferred_unit }, 'PATCH').then(function () { ov.me.preferred_unit = d.preferred_unit; }); });
+    } else if (act === 'nav-open') {
       var menu = document.getElementById('mobile-nav');
       if (menu) { menu.classList.add('open'); document.body.classList.add('nav-open'); }
       var trigger = document.querySelector('.menu-trigger');
@@ -912,6 +955,9 @@
       if (closed) { closed.classList.remove('open'); document.body.classList.remove('nav-open'); }
       var opener = document.querySelector('.menu-trigger');
       if (opener) { opener.setAttribute('aria-expanded', 'false'); opener.focus(); }
+    } else if (act === 'period') {
+      var nextPeriod = el.getAttribute('data-period');
+      if (nextPeriod && nextPeriod !== S.period) { S.period = nextPeriod; loadOverview().then(render); }
     } else if (act === 'party-import') {
       importParties(el.getAttribute('data-kind'));
     } else if (act === 'bugs-refresh') {
@@ -922,6 +968,8 @@
     } else if (act === 'process-type-archive') {
       if (!confirm('Archive this process type? Existing runs will remain available.')) return;
       return apiPost('/api/process-types/' + encodeURIComponent(el.getAttribute('data-id')), {}, 'DELETE').then(function () { S.processTypes = null; render(); });
+    } else if (act === 'process-type-restore') {
+      return apiPost('/api/process-types/' + encodeURIComponent(el.getAttribute('data-id')) + '/restore', {}, 'PATCH').then(function () { S.processTypes = null; render(); });
     } else if (act === 'process-run-void') {
       if (!confirm('Void this process run? Its posted stock movements will be reversed and source-lot quantities restored.')) return;
       return apiPost('/api/process-runs/' + encodeURIComponent(el.getAttribute('data-id')) + '/void', { reason: 'Voided from Processing' }).then(function () { S.processRuns = null; render(); });
@@ -961,15 +1009,31 @@
       return apiPost('/api/feedback/tickets/' + el.getAttribute('data-id') + '/status', { status: el.getAttribute('data-status') }, 'PATCH')
         .then(function () { S.bugs = null; render(); });
     } else if (act === 'gate-new') {
+      function setGateSaudas(dlg, direction) {
+        var sel = dlg.querySelector('[name="sauda_id"]'); if (!sel) return;
+        var current = sel.value;
+        sel.innerHTML = '<option value="">—</option>' + ov.saudas.filter(function (s) { return (s.status === 'open' || s.status === 'advance_paid') && s.direction === direction; }).map(function (s) { return '<option value="' + esc(s.id) + '">' + esc(s.code + ' · ' + (s.direction === 'out' ? 'Sale' : 'Purchase')) + '</option>'; }).join('');
+        if ([].some.call(sel.options, function (o) { return o.value === current; })) sel.value = current;
+      }
       modal('New gate entry', [
-        { name: 'direction', label: 'Direction', type: 'select', options: [{ value: 'in', label: 'In — Arriving' }, { value: 'out', label: 'Out — dispatch to buyer' }] },
+        { name: 'direction', label: 'Direction', type: 'toggle', options: [{ value: 'in', label: 'In · Arriving' }, { value: 'out', label: 'Out · Dispatch' }], onChange: function (value, dlg) { setGateSaudas(dlg, value); } },
         { name: 'vehicle_no', label: 'Vehicle number', required: true, placeholder: 'AP 16 TG 5544' },
+        { name: 'sauda_id', label: 'Sauda (optional)', type: 'select', options: [{ value: '', label: '—' }], onChange: function (id, dlg) {
+          var info = dlg.querySelector('[data-info="sauda_info"]'); if (info) info.textContent = saudaSummary(id, ov);
+          var selected = ov.saudas.find(function (s) { return s.id === id; });
+          var item = dlg.querySelector('[name="item_id"]'); var supplier = dlg.querySelector('[name="supplier_id"]'); var buyer = dlg.querySelector('[name="buyer_id"]'); var rate = dlg.querySelector('[name="rate"]');
+          if (selected) {
+            if (item && selected.item_id) { item.value = selected.item_id; item.disabled = true; }
+            if (selected.supplier_id && supplier) { supplier.value = selected.supplier_id; supplier.disabled = true; }
+            if (selected.buyer_id && buyer) { buyer.value = selected.buyer_id; buyer.disabled = true; }
+            if (rate) { rate.value = Math.round((selected.rate_paise_per_qtl || 0) / 100); rate.disabled = true; }
+          } else { if (item) item.disabled = false; if (supplier) supplier.disabled = false; if (buyer) buyer.disabled = false; if (rate) rate.disabled = false; }
+        } },
         { name: 'supplier_id', label: 'Supplier', type: 'select', options: optList(ov.suppliers, [{ value: '', label: '—' }]), quickAdd: 'suppliers', quickAddLabel: 'supplier', when: 'in' },
         { name: 'buyer_id', label: 'Buyer', type: 'select', options: optList(ov.buyers, [{ value: '', label: '—' }]), quickAdd: 'buyers', quickAddLabel: 'buyer', when: 'out' },
         { name: 'item_id', label: 'Material', type: 'select', options: optList(ov.items, [{ value: '', label: '—' }]), quickAdd: 'items', quickAddLabel: 'item', quickAddCategory: 'paddy' },
-        { name: 'sauda_id', label: 'Against sauda (optional)', type: 'select', options: [{ value: '', label: '—' }].concat(ov.saudas.filter(function (s) { return s.status === 'open' || s.status === 'advance_paid'; }).map(function (s) { return { value: s.id, label: s.code + ' · ' + (s.direction === 'out' ? 'Sale' : 'Purchase') }; })), onChange: function (id, dlg) { var info = dlg.querySelector('[data-info="sauda_info"]'); if (info) info.textContent = saudaSummary(id, ov); var selected = ov.saudas.find(function (s) { return s.id === id; }); var rateField = dlg.querySelector('[name="rate"]'); if (selected && rateField && !rateField.value) rateField.value = Math.round((selected.rate_paise_per_qtl || 0) / 100); } },
         { name: 'sauda_info', label: 'Agreement details', type: 'info' },
-        { name: 'rate', label: 'Rate ₹/qtl (for Out sales)', type: 'number', step: '1' },
+        { name: 'rate', label: 'Rate ₹/qtl (for Out sales)', type: 'number', step: '1', when: 'out' },
       ], 'Create token', function (d) {
         return apiPost('/api/gate', {
           direction: d.direction, vehicle_no: d.vehicle_no, supplier_id: d.supplier_id || null, buyer_id: d.buyer_id || null,
@@ -1007,10 +1071,10 @@
         { name: 'buyer_id', label: 'Buyer', type: 'select', options: optList(ov.buyers, [{ value: '', label: '—' }]), quickAdd: 'buyers', quickAddLabel: 'buyer', when: 'out' },
         { name: 'broker_name', label: 'Broker', value: 'Direct' },
         { name: 'item_id', label: 'Item', type: 'select', options: optList(ov.items), quickAdd: 'items', quickAddLabel: 'item', quickAddCategory: 'paddy' },
-        { name: 'quantity', label: 'Agreed quantity', type: 'number', step: '0.001', required: true },
-        { name: 'unit', label: 'Agreed unit', type: 'select', options: [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
-        { name: 'rate', label: 'Rate ₹/qtl', type: 'number', step: '1', required: true },
-        { name: 'moisture_pct', label: 'Agreed moisture %', type: 'number', step: '0.1' },
+        { name: 'quantity', label: 'Agreed quantity', type: 'number', step: '0.001', required: true, row: 'agreement' },
+        { name: 'unit', label: 'Agreed unit', type: 'select', value: (ov.me && ov.me.preferred_unit) || 'QUINTAL', options: [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }], row: 'agreement' },
+        { name: 'rate', label: 'Rate ₹/qtl', type: 'number', step: '1', required: true, row: 'pricing' },
+        { name: 'moisture_pct', label: 'Agreed moisture %', type: 'number', step: '0.1', row: 'pricing' },
         { name: 'agreement_date', label: 'Agreement date', type: 'date' },
         { name: 'delivery_start', label: 'Delivery window starts', type: 'date' },
         { name: 'delivery_end', label: 'Delivery window ends', type: 'date' },
@@ -1186,6 +1250,13 @@
       return '<button data-nav="' + n[0] + '" class="' + (S.page === n[0] ? 'on' : '') + '" aria-current="' + (S.page === n[0] ? 'page' : 'false') + '">' + ICONS[n[0]] + n[1] + '</button>';
     }).join('');
   }
+  function periodToggle() {
+    if (MODE !== 'live' || S.page !== 'dashboard') return '';
+    return '<div class="period-toggle" role="group" aria-label="Chart period">' +
+      [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(function (p) {
+        return '<button type="button" data-act="period" data-period="' + p[0] + '" class="' + (S.period === p[0] ? 'on' : '') + '" aria-pressed="' + (S.period === p[0] ? 'true' : 'false') + '">' + p[1] + '</button>';
+      }).join('') + '</div>';
+  }
   var ICONS = {
     dashboard: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" stroke-width="1.9"/><rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" stroke-width="1.9"/><rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" stroke-width="1.9"/><rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" stroke-width="1.9"/></svg>',
     gate: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M12 3v3M5 9h14l-2 7H7L5 9Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
@@ -1221,15 +1292,16 @@
         : '') +
       '<nav class="nav ms-scroll">' + navMarkup() +
       '</nav>' +
-      '<div class="side-user"><div class="av">' + esc(initials(userName())) + '</div>' +
+      '<div class="side-user"><button class="side-profile" data-act="profile" aria-label="Open your profile"><div class="av">' + esc(initials(userName())) + '</div>' +
       '<div style="min-width:0"><div class="nm">' + esc(userName()) + '</div><div class="ds">' + esc(roleDesc()) + '</div></div>' +
+      '</button>' +
       (MODE === 'live' ? '<button class="out" data-act="logout">Log out</button>' : '<a class="out" style="text-decoration:none" href="/">Exit demo</a>') +
       '</div></aside>' +
       '<main class="main">' +
       '<header class="topbar"><button class="menu-trigger" type="button" aria-label="Open application navigation" aria-controls="mobile-nav" aria-expanded="false" data-act="nav-open">☰</button><div class="grow"><h1>' + esc(meta.t) + '</h1><div class="sub">' + esc(meta.s()) + '</div></div>' +
       (meta.search ? '<div class="search"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><circle cx="11" cy="11" r="7" stroke="#98A2B3" stroke-width="2"/><path d="m20 20-3-3" stroke="#98A2B3" stroke-width="2" stroke-linecap="round"/></svg>' +
         '<input id="ms-q" placeholder="Search…" value="' + esc(S.q) + '"></div>' : '') +
-      '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
+      periodToggle() + '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
       '<div class="content ms-scroll"><div class="page" id="ms-page"></div></div>' +
       '</main>' +
       '<div class="nav-backdrop" data-act="nav-close"></div><aside class="mobile-nav" id="mobile-nav" aria-label="Application navigation"><div class="mobile-nav-head"><div><div class="name">MillSaathi</div><div class="mill">' + esc(S.ov.mill.name) + '</div></div><button class="nav-close" type="button" aria-label="Close application navigation" data-act="nav-close">×</button></div><nav class="nav">' + navMarkup() + '</nav></aside>' +

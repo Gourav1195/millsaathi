@@ -56,6 +56,16 @@ assert.equal(ownerOverview.response.status, 200, 'owner should be able to view t
 assert.ok(Array.isArray(ownerOverview.body.processing_today), 'overview should expose generic processing totals for the current day');
 assert.equal(ownerOverview.body.kpis.incoming_today_kg, ownerOverview.body.kpis.paddy_in_today_kg, 'generic inbound KPI should preserve the legacy alias');
 assert.equal(ownerOverview.body.kpis.outgoing_today_kg, ownerOverview.body.kpis.rice_out_today_kg, 'generic outbound KPI should preserve the legacy alias');
+for (const [range, size] of [['daily', 7], ['weekly', 5], ['monthly', 12]]) {
+  const rangedOverview = await request('/api/overview?range=' + range, { headers: { cookie: cookieFrom(ownerLogin.response) } });
+  assert.equal(rangedOverview.response.status, 200, range + ' overview should load');
+  assert.equal(rangedOverview.body.trend?.range, range, range + ' trend should identify its range');
+  assert.equal(rangedOverview.body.trend?.data?.length, size, range + ' trend should have the expected buckets');
+}
+const processTypes = await request('/api/process-types', { headers: { cookie: newMillCookie } });
+for (const name of ['Pre-Cleaning', 'De-husking (Hulling)', 'Paddy Separation', 'Whitening and Polishing', 'Grading and Color Sorting', 'Weighing and Packaging']) {
+  assert.ok(processTypes.body.process_types?.some((type) => type.name === name), 'default process type should be available: ' + name);
+}
 const ownerBilling = await request('/api/billing/status', { headers: { cookie: cookieFrom(ownerLogin.response) } });
 assert.equal(ownerBilling.response.status, 200, 'owner should be able to view billing status');
 assert.equal(ownerBilling.body.billing?.plan, 'free', 'newly provisioned mills should start on the free plan');

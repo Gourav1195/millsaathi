@@ -7,6 +7,7 @@ import { api } from './api';
 
 export type UserRow = {
   id: string; mill_id: string; name: string; email: string; role: string; role_code?: string | null;
+  preferred_unit?: string | null;
   pass_hash: string; pass_salt: string;
 };
 export type MillRow = {
@@ -87,7 +88,7 @@ async function verifyTurnstile(c: Context<AppEnv>, token: unknown): Promise<bool
 async function sessionFromCookie(db: D1Database, token: string | undefined) {
   if (!token) return null;
   const row = await db.prepare(
-    `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code,
+    `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code, u.preferred_unit,
             m.id AS m_id, m.name AS m_name, m.slug AS m_slug, m.plan AS m_plan,
             m.language AS m_language, m.loss_limit_pct AS m_loss_limit_pct, m.season_label AS m_season_label,
             m.created_at AS m_created_at, m.address AS m_address, m.phone AS m_phone, m.email AS m_email,
@@ -97,7 +98,7 @@ async function sessionFromCookie(db: D1Database, token: string | undefined) {
   ).bind(await hashToken(token)).first<Record<string, string | number>>();
   if (!row) return null;
   return {
-    user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, pass_hash: '', pass_salt: '' } as UserRow,
+    user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, preferred_unit: row.preferred_unit ?? 'QUINTAL', pass_hash: '', pass_salt: '' } as UserRow,
     mill: { id: row.m_id, name: row.m_name, slug: row.m_slug, plan: row.m_plan, language: row.m_language,
       loss_limit_pct: row.m_loss_limit_pct, season_label: row.m_season_label, created_at: row.m_created_at,
       address: row.m_address ?? null, phone: row.m_phone ?? null, email: row.m_email ?? null, gstin: row.m_gstin ?? null, place_of_supply: row.m_place_of_supply ?? null } as MillRow,
@@ -140,6 +141,18 @@ app.post('/api/auth/signup', async (c) => {
     c.env.DB.prepare(`INSERT INTO billing_accounts (id, mill_id, provider) VALUES (?, ?, 'razorpay')`).bind(crypto.randomUUID(), millId),
     c.env.DB.prepare(`INSERT INTO godowns (id, mill_id, name, capacity_qtl) VALUES (?, ?, 'Godown 1', 2000)`).bind(crypto.randomUUID(), millId),
   ];
+  const defaultProcesses = [
+    ['Pre-Cleaning', 'Remove dust, stones and foreign matter before milling.'],
+    ['De-husking (Hulling)', 'Separate husk from paddy.'],
+    ['Paddy Separation', 'Separate paddy and brown rice.'],
+    ['Whitening and Polishing', 'Whiten and polish brown rice to finished rice.'],
+    ['Grading and Color Sorting', 'Grade kernels and remove discolored grains.'],
+    ['Weighing and Packaging', 'Weigh, pack and prepare finished goods for dispatch.'],
+  ];
+  for (const [name, description] of defaultProcesses) {
+    defaults.push(c.env.DB.prepare(`INSERT INTO process_types (id, mill_id, name, description) VALUES (?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), millId, name, description));
+  }
   const defaultItems: [string, string, string, number | null][] = [
     ['Paddy (common)', 'paddy', '1006', null],
     ['Raw Rice', 'rice', '1006', 67],
@@ -207,7 +220,17 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/auth/me', (c) => {
   const { user, mill } = c.get('session');
-  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, mill: { id: mill.id, name: mill.name, plan: mill.plan } });
+  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', mill: { id: mill.id, name: mill.name, plan: mill.plan } });
+});
+
+app.patch('/api/auth/me', async (c) => {
+  const { user } = c.get('session');
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const preferredUnit = String(b.preferred_unit ?? '').toUpperCase();
+  if (!['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(preferredUnit)) return c.json({ error: 'unsupported preferred unit' }, 400);
+  await c.env.DB.prepare(`UPDATE users SET preferred_unit = ? WHERE id = ?`).bind(preferredUnit, user.id).run();
+  user.preferred_unit = preferredUnit;
+  return c.json({ ok: true, preferred_unit: preferredUnit });
 });
 
 app.route('/api', api);

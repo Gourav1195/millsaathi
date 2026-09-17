@@ -9,6 +9,40 @@ export function istToday(offsetDays = 0): string {
   return new Date(Date.now() + 5.5 * 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
 }
 
+function shiftDate(dateText: string, days: number): string {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfWeek(dateText: string): string {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
+
+function shiftMonth(monthText: string, months: number): string {
+  const [year, month] = monthText.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1 + months, 1)).toISOString().slice(0, 7);
+}
+
+type TrendRange = 'daily' | 'weekly' | 'monthly';
+function trendConfig(value: string | undefined): { range: TrendRange; start: string; buckets: string[]; label: string } {
+  const today = istToday();
+  if (value === 'monthly') {
+    const current = today.slice(0, 7);
+    const buckets = Array.from({ length: 12 }, (_, index) => shiftMonth(current, index - 11));
+    return { range: 'monthly', start: `${buckets[0]}-01`, buckets, label: 'last 12 months' };
+  }
+  if (value === 'weekly') {
+    const current = startOfWeek(today);
+    const buckets = Array.from({ length: 5 }, (_, index) => shiftDate(current, (index - 4) * 7));
+    return { range: 'weekly', start: buckets[0], buckets, label: 'last 5 weeks' };
+  }
+  const buckets = Array.from({ length: 7 }, (_, index) => istToday(index - 6));
+  return { range: 'daily', start: buckets[0], buckets, label: 'last 7 days' };
+}
+
 function financialYearFor(dateText: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText);
   const year = match ? Number(match[1]) : Number(istToday().slice(0, 4));
@@ -184,6 +218,7 @@ api.get('/overview', async (c) => {
   const today = istToday();
   const weekAgo = istToday(-6);
   const monthAgo = istToday(-30);
+  const trend = trendConfig(c.req.query('range'));
   const [gateColumnsRes, lotColumnsRes] = await db.batch([
     db.prepare(`PRAGMA table_info(gate_entries)`),
     db.prepare(`PRAGMA table_info(lots)`),
@@ -203,7 +238,7 @@ api.get('/overview', async (c) => {
          LEFT JOIN items i ON i.id = g.item_id
          WHERE g.mill_id = ?1 AND g.entry_date >= ?2
          ORDER BY g.created_at DESC LIMIT 200`,
-      ).bind(mill.id, weekAgo),
+      ).bind(mill.id, trend.start),
       db.prepare(
         `SELECT entry_date, direction,
                 SUM(MAX(COALESCE(gross_kg,0)-COALESCE(tare_kg,0),0)) AS net_kg
@@ -309,12 +344,12 @@ api.get('/overview', async (c) => {
             COALESCE(SUM(CASE WHEN g.direction = 'out' THEN MAX(COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0),0) ELSE 0 END),0) AS outgoing_base
      FROM items i LEFT JOIN gate_entries g ON g.item_id = i.id AND g.mill_id = i.mill_id AND g.status = 'done' AND g.entry_date >= ?
      WHERE i.mill_id = ? AND i.deleted_at IS NULL GROUP BY i.id ORDER BY i.name`,
-  ).bind(monthAgo, mill.id).all();
+  ).bind(trend.start, mill.id).all();
   const processSummaryRes = await db.prepare(
     `SELECT l.line_type, COALESCE(SUM(l.quantity_base), 0) AS quantity_base, COUNT(DISTINCT l.run_id) AS run_count
      FROM process_run_lines l JOIN process_runs r ON r.id = l.run_id AND r.mill_id = l.mill_id
      WHERE l.mill_id = ? AND r.run_date >= ? AND r.status = 'POSTED' GROUP BY l.line_type`,
-  ).bind(mill.id, monthAgo).all();
+  ).bind(mill.id, trend.start).all();
   const processTodayRes = await db.prepare(
     `SELECT l.line_type, COALESCE(SUM(l.quantity_base), 0) AS quantity_base
      FROM process_run_lines l JOIN process_runs r ON r.id = l.run_id AND r.mill_id = l.mill_id
@@ -327,16 +362,17 @@ api.get('/overview', async (c) => {
   const todayRun = prodRuns.filter((r) => r.run_date === today).at(-1) ?? null;
   const mb = massBalance(todayRun);
 
-  // 7-day paddy-in vs rice-out chart
-  const weekMap = new Map<string, { in_kg: number; out_kg: number }>();
-  for (let d = -6; d <= 0; d++) weekMap.set(istToday(d), { in_kg: 0, out_kg: 0 });
+  // Dashboard trend chart. The API returns a stable bucket shape for all three views.
+  const trendMap = new Map<string, { in_kg: number; out_kg: number }>();
+  trend.buckets.forEach((bucket) => trendMap.set(bucket, { in_kg: 0, out_kg: 0 }));
   for (const r of gateWeekRes.results as { entry_date: string; direction: string; net_kg: number }[]) {
-    const slot = weekMap.get(r.entry_date);
+    const bucket = trend.range === 'daily' ? r.entry_date : trend.range === 'weekly' ? startOfWeek(r.entry_date) : r.entry_date.slice(0, 7);
+    const slot = trendMap.get(bucket);
     if (!slot) continue;
     if (r.direction === 'in') slot.in_kg = r.net_kg ?? 0;
     else slot.out_kg = r.net_kg ?? 0;
   }
-  const week = [...weekMap.entries()].map(([date, v]) => ({ date, ...v }));
+  const trendData = [...trendMap.entries()].map(([date, v]) => ({ date, ...v }));
 
   const inToday = gateToday.filter((g) => g.direction === 'in');
   const outToday = gateToday.filter((g) => g.direction === 'out' && g.status === 'done');
@@ -393,7 +429,7 @@ api.get('/overview', async (c) => {
   if (labPending > 0) alerts.push({ level: 'amber', title: `${labPending} lab test${labPending > 1 ? 's' : ''} pending`, body: 'Trucks are waiting on moisture results at the lab.' });
 
   const body = {
-    me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), permissions: ROLE_PERMISSIONS[effectiveRole(user)] || [] },
+    me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', permissions: ROLE_PERMISSIONS[effectiveRole(user)] || [] },
     mill: { id: mill.id, name: mill.name, address: mill.address, phone: mill.phone, email: mill.email, gstin: mill.gstin, place_of_supply: mill.place_of_supply, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
     today,
     kpis: {
@@ -419,7 +455,8 @@ api.get('/overview', async (c) => {
     },
     mass_balance: mb,
     processing_today: processTodayRes.results,
-    week,
+    week: trendData,
+    trend: { range: trend.range, label: trend.label, data: trendData },
     alerts,
     pending_receipts: pendingReceiptsRes.results,
     onboarding: { gate_count: activity.gate_count ?? 0, first_gate_date: activity.first_gate_date ?? null },
@@ -1064,7 +1101,8 @@ api.post('/process-types', async (c) => {
 
 api.get('/process-types', async (c) => {
   const { mill } = c.get('session');
-  const result = await c.env.DB.prepare(`SELECT * FROM process_types WHERE mill_id = ? AND deleted_at IS NULL ORDER BY name`).bind(mill.id).all();
+  const includeArchived = c.req.query('include_archived') === '1';
+  const result = await c.env.DB.prepare(`SELECT * FROM process_types WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY name`).bind(mill.id).all();
   return c.json({ process_types: result.results });
 });
 
@@ -1075,6 +1113,16 @@ api.delete('/process-types/:id', async (c) => {
   const result = await c.env.DB.prepare(`UPDATE process_types SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), deleted_by = ? WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(user.id, id, mill.id).run();
   if (!result.meta.changes) return c.json({ error: 'process type not found' }, 404);
   await audit(c, 'process_type', id, 'ARCHIVE');
+  return c.json({ ok: true });
+});
+
+api.patch('/process-types/:id/restore', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare(`UPDATE process_types SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
+  if (!result.meta.changes) return c.json({ error: 'archived process type not found' }, 404);
+  await audit(c, 'process_type', id, 'RESTORE');
   return c.json({ ok: true });
 });
 

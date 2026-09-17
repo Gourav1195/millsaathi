@@ -34,6 +34,7 @@ input::placeholder { color: #98A2B3; }
 .nav button.on { color: #fff; background: rgba(255,255,255,.07); border-left-color: var(--gold); }
 .nav .sep { height: 1px; background: var(--side-line); margin: 8px 6px; }
 .side-user { padding: 14px 16px; border-top: 1px solid var(--side-line); display: flex; align-items: center; gap: 10px; }
+.side-profile { display:flex;align-items:center;gap:10px;min-width:0;flex:1;background:none;border:0;padding:0;text-align:left;cursor:pointer;font-family:inherit; }
 .side-user .av { width: 34px; height: 34px; border-radius: 50%; background: var(--side-line); display: flex; align-items: center; justify-content: center; color: var(--gold); font-weight: 700; font-size: 14px; flex-shrink: 0; }
 .side-user .nm { font-size: 13.5px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-user .ds { font-size: 11.5px; color: var(--side-mut); font-weight: 500; }
@@ -52,6 +53,9 @@ input::placeholder { color: #98A2B3; }
 .date-chip { text-align: right; }
 .date-chip .d { font-size: 13px; font-weight: 700; }
 .date-chip .s { font-size: 11.5px; color: var(--muted); font-weight: 500; }
+.period-toggle { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); }
+.period-toggle button { border: 0; border-radius: 6px; padding: 7px 9px; background: transparent; color: var(--muted2); font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.period-toggle button.on { background: var(--ink); color: #fff; }
 .content { flex: 1; overflow-y: auto; padding: clamp(18px,3vw,30px); }
 .page { max-width: 1240px; }
 
@@ -133,6 +137,10 @@ dialog.modal::backdrop { background: rgba(27,36,49,.45); }
 .fld textarea { min-height: 94px; resize: vertical; line-height: 1.45; }
 .fld input:focus, .fld select:focus, .fld textarea:focus { border-color: var(--ink); background: #fff; }
 .frow { display: flex; gap: 10px; } .frow .fld { flex: 1; }
+.modal-row { margin-bottom: 12px; }
+.toggle-control { display:inline-flex;gap:3px;padding:3px;border:1px solid var(--border);border-radius:9px;background:var(--bg);width:100%; }
+.toggle-option { flex:1;border:0;border-radius:6px;padding:10px 12px;background:transparent;color:var(--muted2);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer; }
+.toggle-option.on { background:var(--ink);color:#fff; }
 .form-err { color: var(--red-ink); font-size: 13px; font-weight: 600; min-height: 1em; }
 .help-fab { position: fixed; right: 22px; bottom: 22px; z-index: 30; border: none; border-radius: 999px; background: var(--ink); color: #fff; box-shadow: 0 12px 30px rgba(16,20,27,.22); padding: 12px 16px; font: 700 13.5px 'IBM Plex Sans', system-ui, sans-serif; cursor: pointer; }
 .help-fab:hover { background: var(--red); }
@@ -158,3 +166,4 @@ html[data-region="intl"] .deva { display: none; }
 
 .note-locked { padding: 12px 22px; background: #FAFBFC; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .empty { padding: 34px 22px; text-align: center; color: var(--muted); font-weight: 600; font-size: 14px; }
+@media (max-width: 700px) { .topbar { flex-wrap: wrap; } .topbar .grow { flex-basis: calc(100% - 56px); } .period-toggle { order: 3; } .date-chip { margin-left: auto; order: 4; } }
