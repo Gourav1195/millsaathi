@@ -61,6 +61,13 @@ npm run dev                                          # wrangler dev on :8787
 npm run check                                        # tsc
 ```
 
+### Offline Processing test account
+
+After the local migration and demo seed commands above, run `npm run dev` and open
+`http://127.0.0.1:8787/app`. Use `owner@demo.millsaathi.com` with password `demo1234` as the
+development test ID; it includes seeded stock lots and process data for testing the Processing
+workspace without the hosted environment.
+
 ## Deploy
 
 ```sh
