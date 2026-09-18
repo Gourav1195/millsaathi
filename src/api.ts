@@ -247,7 +247,9 @@ api.get('/overview', async (c) => {
                 SUM(MAX(COALESCE(gross_kg,0)-COALESCE(tare_kg,0),0)) AS net_kg
          FROM gate_entries WHERE mill_id = ?1 AND entry_date >= ?2
          GROUP BY entry_date, direction`,
-      ).bind(mill.id, weekAgo),
+      // Fetch the full selected window. Weekly and monthly charts group these
+      // daily rows into their respective buckets below.
+      ).bind(mill.id, trend.start),
       db.prepare(
         `SELECT sa.*, s.name AS supplier_name, b.name AS buyer_name, i.name AS item_name,
                 sa.qty_kg * sa.rate_paise_per_qtl / 100 AS value_paise,
