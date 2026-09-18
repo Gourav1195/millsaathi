@@ -1109,7 +1109,11 @@ api.post('/process-types', async (c) => {
   const name = String(b.name ?? '').trim();
   if (!name) return c.json({ error: 'name is required' }, 400);
   const id = uuid();
-  await c.env.DB.prepare(`INSERT INTO process_types (id, mill_id, name, description) VALUES (?, ?, ?, ?)`).bind(id, mill.id, name, String(b.description ?? '').trim() || null).run();
+  const defaultUnit = String(b.default_unit ?? '').trim().toUpperCase() || null;
+  if (defaultUnit && !DISPLAY_UNITS.includes(defaultUnit)) return c.json({ error: 'unsupported default unit' }, 400);
+  const defaultGodown = String(b.default_destination_godown_id ?? '') || null;
+  if (defaultGodown && !await c.env.DB.prepare(`SELECT id FROM godowns WHERE id = ? AND mill_id = ? AND active = 1`).bind(defaultGodown, mill.id).first()) return c.json({ error: 'default godown not found' }, 400);
+  await c.env.DB.prepare(`INSERT INTO process_types (id, mill_id, name, description, default_unit, default_destination_godown_id) VALUES (?, ?, ?, ?, ?, ?)`).bind(id, mill.id, name, String(b.description ?? '').trim() || null, defaultUnit, defaultGodown).run();
   await audit(c, 'process_type', id, 'CREATE');
   return c.json({ id }, 201);
 });
@@ -1118,7 +1122,69 @@ api.get('/process-types', async (c) => {
   const { mill } = c.get('session');
   const includeArchived = c.req.query('include_archived') === '1';
   const result = await c.env.DB.prepare(`SELECT * FROM process_types WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY name`).bind(mill.id).all();
-  return c.json({ process_types: result.results });
+  const types = result.results as Record<string, unknown>[];
+  const ids = types.map((type) => String(type.id));
+  const lineResult = ids.length
+    ? await c.env.DB.prepare(`SELECT * FROM process_type_lines WHERE mill_id = ? AND process_type_id IN (${ids.map(() => '?').join(',')}) AND active = 1 ORDER BY sort_order, created_at`).bind(mill.id, ...ids).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const linesByType = new Map<string, Record<string, unknown>[]>();
+  for (const line of lineResult.results) linesByType.set(String(line.process_type_id), [...(linesByType.get(String(line.process_type_id)) || []), line]);
+  return c.json({ process_types: types.map((type) => ({ ...type, template_lines: linesByType.get(String(type.id)) || [] })) });
+});
+
+api.put('/process-types/:id/template', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const processTypeId = c.req.param('id');
+  const processType = await c.env.DB.prepare(`SELECT id FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first();
+  if (!processType) return c.json({ error: 'process type not found' }, 404);
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const lines = Array.isArray(b.lines) ? b.lines as Record<string, unknown>[] : [];
+  const defaultUnit = String(b.default_unit ?? '').trim().toUpperCase() || null;
+  if (defaultUnit && !DISPLAY_UNITS.includes(defaultUnit)) return c.json({ error: 'unsupported default unit' }, 400);
+  const defaultGodown = String(b.default_destination_godown_id ?? '') || null;
+  if (defaultGodown && !await c.env.DB.prepare(`SELECT id FROM godowns WHERE id = ? AND mill_id = ? AND active = 1`).bind(defaultGodown, mill.id).first()) return c.json({ error: 'default godown not found' }, 400);
+  const allowedTypes = new Set(['INPUT', 'OUTPUT', 'LOSS']);
+  const allowedSemantics = new Set(['input', 'main', 'byproduct', 'waste']);
+  const itemIds = lines.map((line) => String(line.item_id ?? '')).filter(Boolean);
+  if (lines.some((line) => !allowedTypes.has(String(line.line_type)) || !allowedSemantics.has(String(line.semantic_type)) || !String(line.item_id ?? '') || (line.default_unit && !DISPLAY_UNITS.includes(String(line.default_unit).toUpperCase())))) return c.json({ error: 'invalid process template line' }, 400);
+  if (itemIds.length) {
+    const uniqueItemIds = [...new Set(itemIds)];
+    const validItems = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM items WHERE mill_id = ? AND deleted_at IS NULL AND id IN (${uniqueItemIds.map(() => '?').join(',')})`).bind(mill.id, ...uniqueItemIds).first<{ count: number }>();
+    if (!validItems || validItems.count !== uniqueItemIds.length) return c.json({ error: 'one or more template items were not found' }, 400);
+  }
+  const godownIds = [defaultGodown, ...lines.map((line) => String(line.default_godown_id ?? ''))].filter(Boolean);
+  if (godownIds.length) {
+    const validGodowns = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM godowns WHERE mill_id = ? AND active = 1 AND id IN (${godownIds.map(() => '?').join(',')})`).bind(mill.id, ...godownIds).first<{ count: number }>();
+    if (!validGodowns || validGodowns.count !== new Set(godownIds).size) return c.json({ error: 'one or more template godowns were not found' }, 400);
+  }
+  const statements: D1PreparedStatement[] = [
+    c.env.DB.prepare(`UPDATE process_types SET default_unit = ?, default_destination_godown_id = ? WHERE id = ? AND mill_id = ?`).bind(defaultUnit, defaultGodown, processTypeId, mill.id),
+    c.env.DB.prepare(`UPDATE process_type_lines SET active = 0 WHERE process_type_id = ? AND mill_id = ? AND active = 1`).bind(processTypeId, mill.id),
+  ];
+  lines.forEach((line, index) => {
+    statements.push(c.env.DB.prepare(`INSERT INTO process_type_lines (id, mill_id, process_type_id, line_type, semantic_type, item_id, default_unit, default_godown_id, required, auto_calculate, expected_yield_min_pct, expected_yield_max_pct, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      uuid(), mill.id, processTypeId, String(line.line_type), String(line.semantic_type), String(line.item_id), String(line.default_unit ?? '').trim().toUpperCase() || defaultUnit, String(line.default_godown_id ?? '') || null, line.required === false || String(line.required) === '0' ? 0 : 1, line.auto_calculate === true || String(line.auto_calculate) === '1' ? 1 : 0, line.expected_yield_min_pct == null || line.expected_yield_min_pct === '' ? null : Number(line.expected_yield_min_pct), line.expected_yield_max_pct == null || line.expected_yield_max_pct === '' ? null : Number(line.expected_yield_max_pct), Number.isFinite(Number(line.sort_order)) ? Number(line.sort_order) : index,
+    ));
+  });
+  await c.env.DB.batch(statements);
+  await audit(c, 'process_type', processTypeId, 'UPDATE', 'Updated process template');
+  return c.json({ ok: true });
+});
+
+api.get('/process-workspace', async (c) => {
+  const { mill } = c.get('session');
+  const processTypeId = String(c.req.query('process_type_id') ?? '');
+  const processType = await c.env.DB.prepare(`SELECT * FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first<Record<string, unknown>>();
+  if (!processType) return c.json({ error: 'process type not found' }, 404);
+  const [lines, lots, godowns, items] = await c.env.DB.batch([
+    c.env.DB.prepare(`SELECT ptl.*, i.name AS item_name, i.base_unit, i.display_unit, i.package_unit, i.package_quantity_base, gd.name AS default_godown_name FROM process_type_lines ptl LEFT JOIN items i ON i.id = ptl.item_id LEFT JOIN godowns gd ON gd.id = ptl.default_godown_id WHERE ptl.process_type_id = ? AND ptl.mill_id = ? AND ptl.active = 1 ORDER BY ptl.sort_order, ptl.created_at`).bind(processTypeId, mill.id),
+    c.env.DB.prepare(`SELECT l.*, i.name AS item_name, i.base_unit, i.display_unit, gd.name AS godown_name FROM lots l LEFT JOIN items i ON i.id = l.item_id LEFT JOIN godowns gd ON gd.id = l.godown_id WHERE l.mill_id = ? AND l.qty_kg > 0 AND l.item_id IS NOT NULL ORDER BY l.in_date DESC, l.code DESC LIMIT 1000`).bind(mill.id),
+    c.env.DB.prepare(`SELECT * FROM godowns WHERE mill_id = ? AND active = 1 ORDER BY name`).bind(mill.id),
+    c.env.DB.prepare(`SELECT id, name, base_unit, display_unit, package_unit, package_quantity_base FROM items WHERE mill_id = ? AND deleted_at IS NULL ORDER BY category, name`).bind(mill.id),
+  ]);
+  return c.json({ process_type: processType, template_lines: lines.results, lots: lots.results, godowns: godowns.results, items: items.results });
 });
 
 api.delete('/process-types/:id', async (c) => {
@@ -1203,6 +1269,31 @@ api.post('/process-runs', async (c) => {
   if (!processTypeId || !lines.length) return c.json({ error: 'process_type_id and lines are required' }, 400);
   const processType = await c.env.DB.prepare(`SELECT id FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first();
   if (!processType) return c.json({ error: 'process type not found' }, 400);
+  const processTypeConfig = await c.env.DB.prepare(`SELECT default_unit, default_destination_godown_id FROM process_types WHERE id = ? AND mill_id = ?`).bind(processTypeId, mill.id).first<{ default_unit: string | null; default_destination_godown_id: string | null }>();
+  const templateLines = await c.env.DB.prepare(`SELECT * FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND active = 1 ORDER BY sort_order, created_at`).bind(processTypeId, mill.id).all<Record<string, unknown>>();
+  const templateById = new Map(templateLines.results.map((line) => [String(line.id), line]));
+  const inferredLines = lines.map((rawLine) => {
+    const line = { ...rawLine };
+    const template = rawLine.template_line_id ? templateById.get(String(rawLine.template_line_id)) : undefined;
+    if (template) {
+      if (!line.item_id) line.item_id = template.item_id;
+      if (!line.unit) line.unit = template.default_unit || processTypeConfig?.default_unit || undefined;
+      if (!line.godown_id && template.default_godown_id) line.godown_id = template.default_godown_id;
+      if (!line.semantic_type) line.semantic_type = template.semantic_type;
+    }
+    const lotId = String(line.lot_id ?? '');
+    if (!line.item_id && lotId) line.item_id = '__LOT__';
+    return line;
+  });
+  for (const line of inferredLines) {
+    if (line.item_id === '__LOT__' && line.lot_id) {
+      const lotItem = await c.env.DB.prepare(`SELECT item_id FROM lots WHERE id = ? AND mill_id = ?`).bind(line.lot_id, mill.id).first<{ item_id: string | null }>();
+      line.item_id = lotItem?.item_id || '';
+    }
+  }
+  lines.splice(0, lines.length, ...inferredLines);
+  const defaultDestinationGodown = String(b.destination_godown_id ?? '') || processTypeConfig?.default_destination_godown_id || '';
+  if (defaultDestinationGodown && !b.destination_godown_id) b.destination_godown_id = defaultDestinationGodown;
   const operatorId = String(b.operator_id ?? user.id);
   if (!await c.env.DB.prepare(`SELECT id FROM users WHERE id = ? AND mill_id = ? AND active = 1`).bind(operatorId, mill.id).first()) return c.json({ error: 'operator not found' }, 400);
   const sourceLotId = String(b.source_lot_id ?? '');
@@ -1212,10 +1303,11 @@ api.post('/process-runs', async (c) => {
   const linkedSourceLotId = sourceLotId || (inputLines.length === 1 ? String(inputLines[0].lot_id ?? '') : '');
   if (linkedSourceLotId && !await c.env.DB.prepare(`SELECT id FROM lots WHERE id = ? AND mill_id = ?`).bind(linkedSourceLotId, mill.id).first()) return c.json({ error: 'source lot not found' }, 400);
   const itemIds = lines.map((line) => String(line.item_id ?? '')).filter(Boolean);
-  if (itemIds.length !== new Set(itemIds).size) return c.json({ error: 'duplicate process lines are not allowed in this release' }, 400);
+  if (!itemIds.length) return c.json({ error: 'each process line needs an item or a resolvable source lot' }, 400);
   const placeholders = itemIds.map(() => '?').join(',');
+  const uniqueItemIds = [...new Set(itemIds)];
   const validItems = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM items WHERE mill_id = ? AND deleted_at IS NULL AND id IN (${placeholders})`).bind(mill.id, ...itemIds).first<{ count: number }>();
-  if (!validItems || validItems.count !== itemIds.length) return c.json({ error: 'one or more items were not found' }, 400);
+  if (!validItems || validItems.count !== uniqueItemIds.length) return c.json({ error: 'one or more items were not found' }, 400);
   const godownIds = [String(b.destination_godown_id ?? ''), ...lines.map((line) => String(line.godown_id ?? ''))].filter(Boolean);
   if (godownIds.length) {
     const godownPlaceholders = godownIds.map(() => '?').join(',');
@@ -1253,7 +1345,7 @@ api.post('/process-runs', async (c) => {
     const line = prepared.line, q = prepared.q;
     if (prepared.lotCode) statements.push(c.env.DB.prepare(`INSERT INTO lots (id, mill_id, code, godown_id, item_id, qty_kg, in_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(prepared.lotId, mill.id, prepared.lotCode, prepared.godownId, line.item_id, Math.round(q.base), String(b.run_date ?? istToday()), `Created by process run ${runId}`));
     if (line.line_type === 'INPUT' && prepared.lotId) statements.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg - ? WHERE id = ? AND mill_id = ? AND qty_kg >= ?`).bind(Math.round(q.base), prepared.lotId, mill.id, Math.round(q.base)));
-    statements.push(c.env.DB.prepare(`INSERT INTO process_run_lines (id, mill_id, run_id, line_type, item_id, lot_id, quantity, unit, quantity_base, base_unit, godown_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(uuid(), mill.id, runId, line.line_type, line.item_id, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, prepared.godownId));
+    statements.push(c.env.DB.prepare(`INSERT INTO process_run_lines (id, mill_id, run_id, line_type, item_id, lot_id, quantity, unit, quantity_base, base_unit, godown_id, semantic_type, template_line_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(uuid(), mill.id, runId, line.line_type, line.item_id, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, prepared.godownId, String(line.semantic_type ?? (line.line_type === 'INPUT' ? 'input' : line.line_type === 'LOSS' ? 'waste' : 'main')), String(line.template_line_id ?? '') || null));
     if (line.line_type !== 'LOSS') {
       statements.push(c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESS_RUN', ?, ?)`).bind(uuid(), mill.id, line.line_type === 'OUTPUT' ? 'IN' : 'OUT', line.item_id, prepared.godownId, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, runId, user.id));
     }

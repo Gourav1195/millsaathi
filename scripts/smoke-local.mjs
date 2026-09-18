@@ -134,6 +134,44 @@ const processType = await request('/api/process-types', {
   body: JSON.stringify({ name: `Smoke process ${Date.now()}` }),
 });
 assert.equal(processType.response.status, 201, 'owner should be able to create a process type');
+const processTemplate = await request('/api/process-types/' + processType.body.id + '/template', {
+  method: 'PUT',
+  headers: { cookie: cookieFrom(ownerLogin.response), 'content-type': 'application/json' },
+  body: JSON.stringify({
+    default_unit: 'QUINTAL',
+    default_destination_godown_id: processGodown.id,
+    lines: [
+      { line_type: 'INPUT', semantic_type: 'input', item_id: item.id, default_unit: 'KG', required: true },
+      { line_type: 'OUTPUT', semantic_type: 'main', item_id: processOutputItem.id, default_unit: 'KG', required: true },
+      { line_type: 'LOSS', semantic_type: 'waste', item_id: processLossItem.id, default_unit: 'KG', required: false, auto_calculate: true },
+    ],
+  }),
+});
+assert.equal(processTemplate.response.status, 200, 'owner should be able to configure a process template');
+const processWorkspace = await request('/api/process-workspace?process_type_id=' + processType.body.id, { headers: { cookie: cookieFrom(ownerLogin.response) } });
+assert.equal(processWorkspace.response.status, 200, 'configured process workspace should load');
+assert.equal(processWorkspace.body.template_lines?.length, 3, 'workspace should expose configured process lines');
+assert.equal(processWorkspace.body.lots?.find((lot) => lot.id === processLot.body.id)?.item_id, item.id, 'workspace should expose source lot item metadata');
+const inferredProcessRun = await request('/api/process-runs', {
+  method: 'POST',
+  headers: { cookie: cookieFrom(ownerLogin.response), 'content-type': 'application/json' },
+  body: JSON.stringify({ process_type_id: processType.body.id, lines: [
+    { line_type: 'INPUT', lot_id: processLot.body.id, quantity: 10, unit: 'KG' },
+    { line_type: 'OUTPUT', template_line_id: processWorkspace.body.template_lines.find((line) => line.line_type === 'OUTPUT').id, quantity: 8, unit: 'KG' },
+    { line_type: 'LOSS', template_line_id: processWorkspace.body.template_lines.find((line) => line.line_type === 'LOSS').id, quantity: 2, unit: 'KG' },
+  ] }),
+});
+assert.equal(inferredProcessRun.response.status, 201, 'template process run should infer item, godown and unit metadata');
+const templatePostedOverview = await request('/api/overview', { headers: { cookie: cookieFrom(ownerLogin.response) } });
+assert.ok(templatePostedOverview.body.lots?.some((lot) => lot.item_id === processOutputItem.id && lot.godown_id === processGodown.id && Number(lot.qty_kg) === 8), 'template run should create an output lot in the default godown');
+const voidedTemplateRun = await request('/api/process-runs/' + inferredProcessRun.body.id + '/void', {
+  method: 'POST',
+  headers: { cookie: cookieFrom(ownerLogin.response), 'content-type': 'application/json' },
+  body: JSON.stringify({ reason: 'Smoke test void' }),
+});
+assert.equal(voidedTemplateRun.response.status, 200, 'template process run should remain voidable');
+const restoredOverview = await request('/api/overview', { headers: { cookie: cookieFrom(ownerLogin.response) } });
+assert.equal(Number(restoredOverview.body.lots?.find((lot) => lot.id === processLot.body.id)?.qty_kg), 100, 'voiding a template run should restore the source lot');
 const processRun = await request('/api/process-runs', {
   method: 'POST',
   headers: { cookie: cookieFrom(ownerLogin.response), 'content-type': 'application/json' },

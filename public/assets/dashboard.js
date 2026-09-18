@@ -8,7 +8,7 @@
   var SUPPORT_ADMIN_EMAIL = 'gouravmodi1195@gmail.com';
   var AUTH_CONFIG = null;
   var TURNSTILE_SCRIPT = null;
-  var S = { page: 'dashboard', role: 'owner', q: '', filter: 'all', period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, team: null, documents: null, payments: null, pageIndex: {} };
+  var S = { page: 'dashboard', role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, team: null, documents: null, payments: null, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -78,19 +78,42 @@
     if (g.gross_kg == null || g.tare_kg == null) return 0;
     return Math.max(0, g.gross_kg - g.tare_kg);
   }
-  function filt(rows) {
-    var q = S.q.toLowerCase();
-    return rows.filter(function (r) {
-      var matchesSearch = !q || Object.keys(r).some(function (k) { return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(q) >= 0; });
-      var status = String(r.status == null ? '' : r.status).toLowerCase();
-      var matchesFilter = S.filter === 'all' || (S.page === 'gate' && (S.filter === r.direction || S.filter === status)) || (S.page === 'purchase' && S.filter === status) || (S.page === 'documents' && S.filter === status);
-      return matchesSearch && matchesFilter;
-    });
+  function filtersFor(page) { return S.filters[page] || {}; }
+  function quantityFor(row) {
+    if (S.page === 'gate') return net(row) / 100;
+    if (S.page === 'purchase') return Number(row.qty_kg || 0) / 100;
+    if (S.page === 'stock') return Number(row.qty_kg || 0) / 100;
+    if (S.page === 'suppliers') return Number(row.supplied_kg || 0) / 100;
+    if (S.page === 'buyers') return Number(row.bought_kg || 0) / 100;
+    if (S.page === 'items') return Number(row.stock_kg || 0) / 100;
+    return null;
   }
-  function filterControl() {
-    var options = { gate: [['all', 'All gate entries'], ['in', 'Incoming'], ['out', 'Outgoing'], ['done', 'Done'], ['at_gate', 'At gate']], purchase: [['all', 'All saudas'], ['open', 'Open'], ['advance_paid', 'Advance paid'], ['settled', 'Settled'], ['disputed', 'Disputed']], documents: [['all', 'All documents'], ['posted', 'Posted'], ['void', 'Void']] }[S.page];
-    if (!options) return '';
-    return '<select id="ms-filter" class="list-filter" aria-label="Filter list">' + options.map(function (option) { return '<option value="' + option[0] + '"' + (S.filter === option[0] ? ' selected' : '') + '>' + option[1] + '</option>'; }).join('') + '</select>';
+  function optionsFrom(rows, key, label, transform) {
+    var values = rows.map(function (row) { return transform ? transform(row) : row[key]; }).filter(Boolean).map(String).filter(function (value, index, list) { return list.indexOf(value) === index; }).sort();
+    var selected = filtersFor(S.page)[key] || '';
+    return '<select class="table-filter" data-filter-key="' + esc(key) + '"><option value="">All ' + esc(label) + '</option>' + values.map(function (value) { return '<option value="' + esc(value) + '"' + (selected === value ? ' selected' : '') + '>' + esc(value) + '</option>'; }).join('') + '</select>';
+  }
+  function filterToolbar(rows, kind) {
+    var page = S.page, f = filtersFor(page), fields = '';
+    if (page === 'gate') fields = optionsFrom(rows, 'direction', 'directions') + optionsFrom(rows, 'status', 'statuses', function (r) { return String(r.status || '').toLowerCase(); });
+    else if (page === 'purchase') fields = optionsFrom(rows, 'direction', 'directions') + optionsFrom(rows, 'status', 'statuses', function (r) { return String(r.status || '').toLowerCase(); }) + optionsFrom(rows, 'item_name', 'materials');
+    else if (page === 'stock') fields = optionsFrom(rows, 'godown_name', 'godowns') + optionsFrom(rows, 'item_name', 'materials');
+    else if (page === 'suppliers' || page === 'buyers') fields = optionsFrom(rows, 'type', 'types') + optionsFrom(rows, 'location', 'locations', function (r) { return page === 'suppliers' ? r.place : r.location; });
+    else if (page === 'items') fields = optionsFrom(rows, 'category', 'categories', function (r) { return r.category_code || r.category; });
+    else if (page === 'documents') fields = optionsFrom(rows, 'status', 'statuses', function (r) { return String(r.status || '').toLowerCase(); }) + optionsFrom(rows, 'document_type', 'types');
+    var quantity = ['gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items'].indexOf(page) >= 0;
+    var dates = page === 'documents';
+    return '<div class="table-filters"><div class="filter-title"><span>⌕</span><div><strong>Filter ' + esc(kind) + '</strong><small>Search and narrow the results</small></div></div><div class="filter-fields"><label class="filter-search"><span>⌕</span><input id="ms-q" placeholder="Search ' + esc(kind.toLowerCase()) + '…" value="' + esc(S.q) + '"></label>' + fields + (quantity ? '<label class="range-field"><span>Qty qtl</span><input class="table-filter" data-filter-key="min_qty" type="number" min="0" step="0.01" placeholder="Min" value="' + esc(f.min_qty || '') + '"><span>–</span><input class="table-filter" data-filter-key="max_qty" type="number" min="0" step="0.01" placeholder="Max" value="' + esc(f.max_qty || '') + '"></label>' : '') + (dates ? '<input class="table-filter" data-filter-key="from_date" type="date" value="' + esc(f.from_date || '') + '"><input class="table-filter" data-filter-key="to_date" type="date" value="' + esc(f.to_date || '') + '">' : '') + '<button class="clear-filters" data-act="filters-clear"' + ((!S.q && !Object.keys(f).length) ? ' disabled' : '') + '>Clear</button></div></div>';
+  }
+  function filt(rows) {
+    var q = S.q.toLowerCase(), f = filtersFor(S.page);
+    return rows.filter(function (r) {
+      var qty = quantityFor(r), location = S.page === 'suppliers' ? r.place : r.location;
+      var matchesSearch = !q || Object.keys(r).some(function (k) { return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(q) >= 0; });
+      var matchesFields = (!f.direction || f.direction === r.direction) && (!f.status || f.status === String(r.status || '').toLowerCase()) && (!f.item_name || f.item_name === r.item_name) && (!f.godown_name || f.godown_name === r.godown_name) && (!f.type || f.type === r.type) && (!f.location || f.location === location) && (!f.category || f.category === (r.category_code || r.category)) && (!f.document_type || f.document_type === r.document_type);
+      var matchesRange = (qty == null || (!f.min_qty || qty >= Number(f.min_qty)) && (!f.max_qty || qty <= Number(f.max_qty))) && (!f.from_date || String(r.issue_date || '') >= f.from_date) && (!f.to_date || String(r.issue_date || '') <= f.to_date);
+      return matchesSearch && matchesFields && matchesRange;
+    });
   }
 
   // ---------- data ----------
@@ -556,6 +579,7 @@
       '<div class="card"><div class="card-top"><div class="card-h">Weighbridge queue</div>' +
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + ' shown</span>' +
       (can('CREATE') ? '<button class="btn acc" data-act="gate-new">+ New gate entry</button>' : '') + '</div></div>' +
+      filterToolbar(ov.gate, 'gate entries') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:860px"><thead><tr>' +
       '<th>Token</th><th>Vehicle</th><th>Party</th><th>Material</th><th>Gross</th><th>Net</th><th>Moisture</th><th>Status</th></tr></thead><tbody>' +
       body + '</tbody></table></div>' + pager(page, 'gate') + '</div>';
@@ -585,6 +609,7 @@
     return '<div class="card"><div class="card-top"><div class="card-h">Saudas &amp; purchases</div>' +
       '<div style="display:flex;gap:10px;align-items:center">' + (m ? '<span class="hint">Open value: ' + money(openVal) + '</span>' : '') +
       (canFinance() && m ? '<button class="btn acc" data-act="sauda-new">+ New sauda</button>' : '') + '</div></div>' +
+      filterToolbar(ov.saudas, 'saudas') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:' + (m ? 900 : 700) + 'px"><thead><tr>' +
       '<th>Sauda</th><th>Direction / Party</th><th>Item</th><th>Qty</th>' + (m ? '<th>Rate</th>' : '') + '<th>Moisture</th>' + (m ? '<th>Value</th>' : '') + '<th>Status / deliveries</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table></div>' +
@@ -669,6 +694,7 @@
       '<div class="card"><div class="card-top"><div class="card-h">Lots on hand</div>' +
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + ' lots</span>' +
       (can('CREATE') ? '<button class="btn acc" data-act="lot-new">+ New lot</button>' : '') + '</div></div>' +
+      filterToolbar(ov.lots, 'lots') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:800px"><thead><tr>' +
       '<th>Lot</th><th>Godown</th><th>Item</th><th>Qty</th><th>Moisture</th><th>In date</th>' + (m ? '<th>Value</th>' : '') + '<th>Note</th>' + (can('EDIT') ? '<th></th>' : '') +
       '</tr></thead><tbody>' + body + '</tbody></table></div>' + pager(page, 'stock') + '</div></div>';
@@ -695,9 +721,10 @@
     }).join('') || '<tr><td colspan="' + (m ? '7' : '6') + '" class="empty">Nobody here yet.</td></tr>';
     var paymentRows = (S.payments || []).filter(function (p) { return p.party_kind === (isSup ? 'supplier' : 'buyer'); }).map(function (p) { var voidButton = p.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="payment-void" data-id="' + esc(p.id) + '">Void</button>' : ''; var receiptButton = can('EXPORT') ? ' <a class="btn sm" target="_blank" rel="noopener" href="/api/payments/' + encodeURIComponent(p.id) + '/print">Download receipt</a>' : ''; return '<tr><td class="tok">' + esc(p.pay_date) + '</td><td>' + esc(p.party_name || '—') + '</td><td>' + esc(p.direction === 'paid' ? 'Paid' : 'Received') + '</td><td class="b7">' + (m ? money(p.amount_paise) : '—') + '</td><td>' + pill(String(p.status || '').toLowerCase()) + receiptButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No payments recorded.</td></tr>';
     var paymentSection = '<div class="card" style="margin-top:18px"><div class="card-top"><div><div class="card-h">Recent ' + (isSup ? 'supplier payments' : 'buyer receipts') + '</div><div class="hint">Posted payments affect outstanding balances; voids remain in history.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Party</th><th>Direction</th><th>Amount</th><th>Status</th></tr></thead><tbody>' + paymentRows + '</tbody></table></div></div>';
-    return '<div class="card"><div class="card-top"><div class="card-h">' + (isSup ? 'Suppliers' : 'Buyers') + '</div>' +
+    return '<div class="card"><div class="card-top"><div><div class="card-h">' + (isSup ? 'Supplier directory' : 'Buyer directory') + '</div><div class="hint">Manage contacts, activity and balances.</div></div>' +
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + (isSup ? ' · farmers, traders & brokers' : ' customers') + '</span>' +
       (can('CREATE') ? '<a class="btn sm" href="/api/parties/import/template.csv?kind=' + (isSup ? 'supplier' : 'buyer') + '">CSV template</a><button class="btn sm" data-act="party-import" data-kind="' + (isSup ? 'supplier' : 'buyer') + '">Import CSV</button><button class="btn acc" data-act="' + (isSup ? 'sup-new' : 'buy-new') + '">+ Add</button>' : '') + '</div></div>' +
+      filterToolbar(isSup ? ov.suppliers : ov.buyers, isSup ? 'suppliers' : 'buyers') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:760px"><thead><tr>' +
       '<th>Name</th><th>Type</th><th>' + (isSup ? 'Village / Place' : 'Location') + '</th><th>' + (isSup ? 'Supplied (season)' : 'Bought (season)') + '</th>' +
       (m ? '<th>' + (isSup ? 'Outstanding' : 'Receivable') + '</th>' : '') + '<th>Last</th><th></th></tr></thead><tbody>' + body + '</tbody></table></div>' + pager(page, kind) + '</div></div>' + paymentSection;
@@ -722,6 +749,7 @@
     return '<div class="card"><div class="card-top"><div><div class="card-h">Items</div>' +
       '<div class="hint" style="font-weight:500;margin-top:2px">Paddy varieties, rice SKUs &amp; by-products. OTR = out-turn ratio.</div></div>' +
       (can('CREATE') ? '<button class="btn acc" data-act="item-new">+ Add item</button>' : '') + '</div>' +
+      filterToolbar(S.ov.items, 'items') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:720px"><thead><tr>' +
       '<th>Item</th><th>Category</th><th>HSN</th><th>Stock</th><th>Typical OTR</th><th>Unit</th><th></th></tr></thead><tbody>' + body + '</tbody></table></div>' + pager(page, 'items') + '</div>';
   }
@@ -747,14 +775,174 @@
   function loadProcessRuns() {
     return fetch('/api/process-runs').then(function (r) { return r.json(); }).then(function (j) { S.processRuns = j.runs || []; render(); });
   }
+  function activeProcessTypes() { return (S.processTypes || []).filter(function (p) { return !p.deleted_at; }); }
+  function preferredProcessUnit() { return (S.ov && S.ov.me && S.ov.me.preferred_unit) || 'QUINTAL'; }
+  function processUnitOptions() { return [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }]; }
+  function processUnitBase(item, unit) {
+    var u = String(unit || '').toUpperCase(), multipliers = { KG: 1, QUINTAL: 100, TONNE: 1000 };
+    if (multipliers[u]) return multipliers[u];
+    if (item && String(item.package_unit || '').toUpperCase() === u && Number(item.package_quantity_base) > 0) return Number(item.package_quantity_base);
+    return null;
+  }
+  function processQuantityBase(item, quantity, unit) { var m = processUnitBase(item, unit); return m == null ? null : num(quantity) * m; }
+  function processItem(id, workspace) { return ((workspace && workspace.items) || (S.ov && S.ov.items) || []).find(function (item) { return String(item.id) === String(id); }) || null; }
+  function processTemplateLines(workspace) { return (workspace && workspace.template_lines) || []; }
+  function processWorkspaceFor(typeId) {
+    return fetch('/api/process-workspace?process_type_id=' + encodeURIComponent(typeId)).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Could not load process workspace'); return j; }); }).then(function (j) {
+      S.processWorkspace = j;
+      S.processDraft = { processTypeId: typeId, inputs: [], outputs: processTemplateLines(j).filter(function (line) { return line.line_type === 'OUTPUT' || line.line_type === 'LOSS'; }).map(function (line) {
+        return { template_line_id: line.id, line_type: line.line_type, semantic_type: line.semantic_type, item_id: line.item_id, item_name: line.item_name, quantity: '', unit: line.default_unit || j.process_type.default_unit || preferredProcessUnit(), auto_calculate: !!line.auto_calculate, required: !!line.required, godown_id: line.default_godown_id || j.process_type.default_destination_godown_id || '' };
+      }), destinationGodownId: j.process_type.default_destination_godown_id || '', notes: '' };
+      render();
+    }).catch(function (err) { S.processWorkspace = { error: err.message }; S.processDraft = null; render(); });
+  }
+  function processLotById(id) { return S.processWorkspace && (S.processWorkspace.lots || []).find(function (lot) { return String(lot.id) === String(id); }); }
+  function processInputModal(lot) {
+    var item = processItem(lot.item_id, S.processWorkspace);
+    var unit = (item && (item.display_unit || item.unit)) || preferredProcessUnit();
+    var available = Number(lot.qty_kg || 0) / (processUnitBase(item, unit) || 1);
+    modal('How much to process?', [
+      { name: 'material', label: 'Selected material', type: 'info', value: (lot.item_name || 'Material') + ' · ' + lot.code + ' · ' + available.toLocaleString('en-IN', { maximumFractionDigits: 3 }) + ' ' + String(unit).toLowerCase() + ' available' },
+      { name: 'quantity', label: 'Quantity (' + String(unit).toLowerCase() + ')', type: 'number', step: '0.001', required: true, value: '' },
+      { name: 'unit', label: 'Unit', type: 'select', value: unit, options: processUnitOptions() },
+    ], 'Use in process', function (d) {
+      var selectedUnit = d.unit || unit, base = processQuantityBase(item, d.quantity, selectedUnit);
+      if (!base || base <= 0 || base > Number(lot.qty_kg || 0)) throw new Error('Enter a positive quantity within the available lot quantity.');
+      var existing = S.processDraft.inputs.find(function (input) { return input.lot_id === lot.id; });
+      if (existing) { existing.quantity = d.quantity; existing.unit = selectedUnit; existing.quantity_base = base; }
+      else S.processDraft.inputs.push({ lot_id: lot.id, lot_code: lot.code, item_id: lot.item_id, item_name: lot.item_name, godown_id: lot.godown_id, godown_name: lot.godown_name, quantity: d.quantity, quantity_base: base, unit: selectedUnit, available_base: Number(lot.qty_kg || 0) });
+      render();
+    });
+    var dlg = document.getElementById('ms-modal');
+    if (dlg) {
+      var quick = document.createElement('div'); quick.className = 'process-quick-actions'; quick.innerHTML = '<span>Quick amount</span><button type="button" data-process-quick="25">25%</button><button type="button" data-process-quick="50">50%</button><button type="button" data-process-quick="100">All</button>';
+      dlg.querySelector('.form-err').before(quick);
+      quick.querySelectorAll('[data-process-quick]').forEach(function (button) { button.onclick = function () { var qty = dlg.querySelector('[name="quantity"]'); if (qty) qty.value = (available * Number(button.getAttribute('data-process-quick')) / 100).toFixed(3).replace(/\.000$/, ''); }; });
+    }
+  }
+  function processInputSelectionModal() {
+    var lots = (S.processWorkspace && S.processWorkspace.lots) || [];
+    modal('Add another input', [
+      { name: 'lot_id', label: 'Available lot', type: 'select', options: optList(lots.map(function (lot) { return { id: lot.id, name: (lot.item_name || 'Material') + ' · ' + lot.code + ' · ' + lotQty(lot) }; })), },
+      { name: 'quantity', label: 'Quantity', type: 'number', step: '0.001', required: true },
+      { name: 'unit', label: 'Unit', type: 'select', value: preferredProcessUnit(), options: processUnitOptions() },
+    ], 'Add input', function (d) {
+      var lot = processLotById(d.lot_id), item = lot && processItem(lot.item_id, S.processWorkspace), base = lot && processQuantityBase(item, d.quantity, d.unit);
+      if (!lot || !item || !base || base <= 0 || base > Number(lot.qty_kg || 0)) throw new Error('Enter a positive quantity within the available lot quantity.');
+      S.processDraft.inputs.push({ lot_id: lot.id, lot_code: lot.code, item_id: lot.item_id, item_name: lot.item_name, godown_id: lot.godown_id, godown_name: lot.godown_name, quantity: d.quantity, quantity_base: base, unit: d.unit, available_base: Number(lot.qty_kg || 0) });
+      render();
+    });
+  }
+  function processOutputModal() {
+    var itemOptions = optList((S.processWorkspace && S.processWorkspace.items) || S.ov.items, [{ value: '', label: 'Choose item' }]);
+    modal('Add output', [
+      { name: 'item_id', label: 'Item', type: 'select', options: itemOptions },
+      { name: 'semantic_type', label: 'Output type', type: 'select', options: [{ value: 'main', label: 'Main output' }, { value: 'byproduct', label: 'By-product' }, { value: 'waste', label: 'Waste / loss' }] },
+      { name: 'quantity', label: 'Quantity', type: 'number', step: '0.001', required: true },
+      { name: 'unit', label: 'Unit', type: 'select', value: preferredProcessUnit(), options: processUnitOptions() },
+    ], 'Add output', function (d) {
+      var item = processItem(d.item_id, S.processWorkspace);
+      if (!item || num(d.quantity) <= 0) throw new Error('Choose an item and enter a positive quantity.');
+      S.processDraft.outputs.push({ line_type: d.semantic_type === 'waste' ? 'LOSS' : 'OUTPUT', semantic_type: d.semantic_type, item_id: d.item_id, item_name: item.name, quantity: d.quantity, unit: d.unit || preferredProcessUnit(), auto_calculate: false, required: true, godown_id: S.processDraft.destinationGodownId || '' });
+      render();
+    });
+  }
+  function processBalance(draft) {
+    var input = draft && draft.inputs.length ? draft.inputs.reduce(function (total, line) { return total + Number(line.quantity_base || 0); }, 0) : 0;
+    var allMass = input > 0 && draft.outputs.every(function (line) { var item = processItem(line.item_id, S.processWorkspace); return processUnitBase(item, line.unit) != null; });
+    var accounted = allMass ? draft.outputs.reduce(function (total, line) { return total + (processQuantityBase(processItem(line.item_id, S.processWorkspace), line.quantity, line.unit) || 0); }, 0) : 0;
+    var difference = allMass ? Math.round((input - accounted) * 1000) / 1000 : null;
+    var loss = draft.outputs.find(function (line) { return line.line_type === 'LOSS' && line.auto_calculate; });
+    if (loss && difference != null && difference >= 0) { var item = processItem(loss.item_id, S.processWorkspace); var multiplier = processUnitBase(item, loss.unit); if (multiplier) loss.quantity = difference / multiplier; }
+    return { input: input, accounted: accounted, difference: difference, allMass: allMass };
+  }
+  function processBalanceMarkup(balance) {
+    if (!balance || !balance.input) return '<div class="process-balance muted">Add an input lot to see the mass balance.</div>';
+    if (!balance.allMass) return '<div class="process-balance"><span>Input <b>' + qtl(balance.input) + ' qtl</b></span><span class="muted">Balance available for compatible mass units.</span></div>';
+    var difference = balance.difference || 0, good = Math.abs(difference) < 0.001;
+    return '<div class="process-balance ' + (good ? 'good' : 'attention') + '"><span>Input <b>' + qtl(balance.input) + ' qtl</b></span><span>Accounted <b>' + qtl(balance.accounted) + ' qtl</b></span><span>Difference <b>' + qtl(Math.abs(difference)) + ' qtl</b> ' + (good ? '✓' : '') + '</span></div>';
+  }
+  function processWorkspaceMarkup() {
+    var types = activeProcessTypes(), workspace = S.processWorkspace, draft = S.processDraft;
+    if (!types.length) return '<div class="card pad"><div class="empty">Create a process type before opening a Process Workspace.</div></div>';
+    if (!workspace || !draft || workspace.error) return '<div class="card pad"><div class="empty">' + esc(workspace && workspace.error ? workspace.error : 'Loading Process Workspace…') + '</div></div>';
+    var lots = workspace.lots || [], selectedIds = draft.inputs.map(function (input) { return input.lot_id; });
+    var materials = lots.map(function (lot) { var used = selectedIds.indexOf(lot.id) >= 0; return '<article class="process-material ' + (used ? 'used' : '') + '" draggable="true" data-process-lot="' + esc(lot.id) + '"><div class="process-material-head"><div><strong>' + esc(lot.item_name || 'Material') + '</strong><span>' + esc(lot.code) + '</span></div>' + (used ? '<span class="pill" style="background:#E6F0E9;color:#256238">Added</span>' : '<button class="btn sm" data-act="process-lot-use" data-id="' + esc(lot.id) + '">Use</button>') + '</div><div class="process-material-qty">' + esc(lotQty(lot)) + ' available</div><div class="hint">' + esc(lot.godown_name || 'No godown') + '</div></article>'; }).join('') || '<div class="empty">No available lots.</div>';
+    var inputSummary = draft.inputs.map(function (input) { return '<div class="process-selected-line"><span>' + esc(input.item_name || 'Material') + ' · ' + esc(input.lot_code) + '</span><b>' + esc(input.quantity) + ' ' + esc(String(input.unit).toLowerCase()) + '</b></div>'; }).join('') || '<div class="hint">Drag or select a material card.</div>';
+    var balance = processBalance(draft);
+    var outputs = draft.outputs.map(function (output, index) { var label = output.semantic_type === 'byproduct' ? 'By-product' : output.semantic_type === 'waste' ? 'Loss' : 'Main output'; return '<div class="process-output-card"><div class="process-output-card-head"><div><strong>' + esc(output.item_name || 'Output') + '</strong><span>' + esc(label) + '</span></div>' + (output.template_line_id ? '' : '<button class="btn sm\" data-act=\"process-output-remove\" data-id=\"' + index + '\">Remove</button>') + '</div><div class=\"process-output-input\"><input data-process-output=\"' + index + '\" type=\"number\" step=\"0.001\" value=\"' + esc(output.quantity == null ? '' : output.quantity) + '\"' + (output.auto_calculate ? ' readonly' : '') + ' placeholder=\"Quantity\"><select data-process-unit=\"' + index + '\">' + processUnitOptions().map(function (unit) { return '<option value=\"' + unit.value + '\"' + (unit.value === output.unit ? ' selected' : '') + '>' + unit.label + '</option>'; }).join('') + '</select></div><div class=\"hint\">' + (output.auto_calculate ? 'Calculated from mass balance' : 'Enter actual quantity') + '</div></div>'; }).join('');
+    return '<div class="process-toolbar"><div><div class="card-h">Process Workspace</div><div class="hint">Select a lot, confirm the quantity, then record the actual outputs.</div></div><div class="process-toolbar-actions"><select class="process-select" data-process-select>' + types.map(function (type) { return '<option value="' + esc(type.id) + '"' + (type.id === draft.processTypeId ? ' selected' : '') + '>' + esc(type.name) + '</option>'; }).join('') + '</select>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(draft.processTypeId) + '">Configure process</button>' : '') + '</div></div>' +
+      '<div class="process-flow"><section class="process-column"><div class="process-column-title">Available materials <span>' + lots.length + '</span></div><div class="process-materials">' + materials + '</div></section><section class="process-column process-center"><div class="process-column-title">Process</div><div class="process-dropzone" data-process-drop="1"><div class="process-drop-title">' + esc(workspace.process_type.name) + '</div><div class="hint">Drop a lot here or use a material card</div><div class="process-selected">' + inputSummary + '</div></div><div class="process-inline-actions"><button class="btn sm" data-act="process-input-add">+ Add input</button>' + (draft.inputs.length ? '<button class="btn sm" data-act="process-input-clear">Clear inputs</button>' : '') + '</div></section><section class="process-column"><div class="process-column-title">Outputs</div><div class="process-outputs">' + (outputs || '<div class="empty">Configure outputs or add one manually.</div>') + '</div><button class="btn ghost process-add-output" data-act="process-output-add">+ Add output</button><label class="process-godown-label">Destination godown<select data-process-destination>' + [{ value: '', label: 'Choose godown' }].concat((workspace.godowns || []).map(function (godown) { return { value: godown.id, label: godown.name }; })).map(function (godown) { return '<option value="' + esc(godown.value) + '"' + (godown.value === draft.destinationGodownId ? ' selected' : '') + '>' + esc(godown.label) + '</option>'; }).join('') + '</select></label></section></div>' +
+      '<div id="process-balance">' + processBalanceMarkup(balance) + '</div><div class="process-actions"><button class="btn acc" data-act="process-run-post"' + (draft.inputs.length ? '' : ' disabled') + '>Post Run</button><span class="hint">Posting will consume the selected source lot and create traceable output stock.</span></div>';
+  }
+  function bindProcessWorkspace() {
+    if (!S.processDraft || !S.processWorkspace) return;
+    var select = document.querySelector('[data-process-select]');
+    if (select) select.onchange = function () { S.processWorkspace = null; S.processDraft = null; processWorkspaceFor(select.value); };
+    var destination = document.querySelector('[data-process-destination]');
+    if (destination) destination.onchange = function () { S.processDraft.destinationGodownId = destination.value; S.processDraft.outputs.forEach(function (output) { if (!output.godown_id) output.godown_id = destination.value; }); };
+    document.querySelectorAll('[data-process-output]').forEach(function (input) {
+      input.oninput = function () { var index = Number(input.getAttribute('data-process-output')); if (S.processDraft.outputs[index]) S.processDraft.outputs[index].quantity = input.value; updateProcessBalance(); };
+    });
+    document.querySelectorAll('[data-process-unit]').forEach(function (unit) {
+      unit.onchange = function () { var index = Number(unit.getAttribute('data-process-unit')); if (S.processDraft.outputs[index]) { S.processDraft.outputs[index].unit = unit.value; updateProcessBalance(); } };
+    });
+    document.querySelectorAll('[data-process-lot]').forEach(function (card) {
+      card.ondragstart = function (event) { event.dataTransfer.setData('text/plain', card.getAttribute('data-process-lot')); event.dataTransfer.effectAllowed = 'copy'; };
+    });
+    var dropzone = document.querySelector('[data-process-drop]');
+    if (dropzone) {
+      dropzone.ondragover = function (event) { event.preventDefault(); dropzone.classList.add('drag-over'); };
+      dropzone.ondragleave = function () { dropzone.classList.remove('drag-over'); };
+      dropzone.ondrop = function (event) { event.preventDefault(); dropzone.classList.remove('drag-over'); var lot = processLotById(event.dataTransfer.getData('text/plain')); if (lot) processInputModal(lot); };
+    }
+  }
+  function updateProcessBalance() {
+    if (!S.processDraft) return;
+    var balance = processBalance(S.processDraft), node = document.getElementById('process-balance');
+    if (node) node.innerHTML = processBalanceMarkup(balance);
+    S.processDraft.outputs.forEach(function (output, index) { var field = document.querySelector('[data-process-output="' + index + '"]'); if (field && output.auto_calculate) field.value = output.quantity == null ? '' : output.quantity; });
+  }
   function loadTeam() {
     return fetch('/api/team').then(function (r) { return r.json(); }).then(function (j) { S.team = j.members || []; render(); });
   }
   function pageProcessing() {
     if (!S.processTypes || !S.processRuns) { if (!S.processTypes) loadProcessTypes(); if (!S.processRuns) loadProcessRuns(); return '<div class="card pad"><div class="empty">Loading processing…</div></div>'; }
-    var rows = S.processTypes.map(function (p) { var archived = !!p.deleted_at; var action = can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : ''; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + action + '</td></tr>'; }).join('') || '<tr><td colspan="4" class="empty">No process types yet.</td></tr>';
+    var firstType = activeProcessTypes()[0];
+    if (firstType && (!S.processWorkspace || !S.processDraft || S.processDraft.processTypeId !== firstType.id) && !S.processWorkspace) { processWorkspaceFor(firstType.id); return '<div class="card pad"><div class="empty">Loading Process Workspace…</div></div>'; }
     var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
-    return '<div class="card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Define the transformations your mill performs.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' : '') + (can('CREATE') ? '<button class="btn acc" data-act="process-run-new">+ Run</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products are linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
+    return processWorkspaceMarkup() + '<div class="card process-types-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Configure reusable inputs, outputs and defaults for each process.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Template</th><th>Status</th><th></th></tr></thead><tbody>' + (S.processTypes.map(function (p) { var archived = !!p.deleted_at, configured = (p.template_lines || []).length > 0; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (configured ? 'Configured' : 'Manual fallback') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(p.id) + '">Configure</button> ' : '') + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process types yet.</td></tr>') + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products remain linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
+  }
+  function openProcessTemplateEditor(processType) {
+    var old = document.getElementById('process-template-modal'); if (old) old.remove();
+    var dlg = document.createElement('dialog'); dlg.className = 'modal process-template-modal'; dlg.id = 'process-template-modal';
+    var items = (S.ov.items || []).map(function (item) { return { value: item.id, label: item.name }; });
+    var godowns = [{ value: '', label: 'Process default' }].concat((S.ov.godowns || []).map(function (godown) { return { value: godown.id, label: godown.name }; }));
+    var lines = (processType.template_lines || []).map(function (line) { return { line_type: line.line_type, semantic_type: line.semantic_type, item_id: line.item_id, default_unit: line.default_unit || '', default_godown_id: line.default_godown_id || '', required: line.required !== 0, auto_calculate: line.auto_calculate === 1 }; });
+    function selectOptions(options, value) { return options.map(function (option) { return '<option value="' + esc(option.value) + '"' + (String(option.value) === String(value || '') ? ' selected' : '') + '>' + esc(option.label) + '</option>'; }).join(''); }
+    function rowHtml(line) {
+      line = line || { line_type: 'OUTPUT', semantic_type: 'main', item_id: '', default_unit: '', default_godown_id: '', required: true, auto_calculate: false };
+      return '<div class="template-row"><select data-template-field="line_type"><option value="INPUT"' + (line.line_type === 'INPUT' ? ' selected' : '') + '>Input</option><option value="OUTPUT"' + (line.line_type === 'OUTPUT' ? ' selected' : '') + '>Output</option><option value="LOSS"' + (line.line_type === 'LOSS' ? ' selected' : '') + '>Loss</option></select><select data-template-field="semantic_type"><option value="input"' + (line.semantic_type === 'input' ? ' selected' : '') + '>Input</option><option value="main"' + (line.semantic_type === 'main' ? ' selected' : '') + '>Main output</option><option value="byproduct"' + (line.semantic_type === 'byproduct' ? ' selected' : '') + '>By-product</option><option value="waste"' + (line.semantic_type === 'waste' ? ' selected' : '') + '>Waste / loss</option></select><select data-template-field="item_id">' + selectOptions([{ value: '', label: 'Choose item' }].concat(items), line.item_id) + '</select><select data-template-field="default_unit">' + selectOptions([{ value: '', label: 'Default unit' }].concat(processUnitOptions()), line.default_unit) + '</select><select data-template-field="default_godown">' + selectOptions(godowns, line.default_godown_id) + '</select><label class="template-check"><input type="checkbox" data-template-field="required"' + (line.required ? ' checked' : '') + '>Required</label><label class="template-check"><input type="checkbox" data-template-field="auto_calculate"' + (line.auto_calculate ? ' checked' : '') + '>Auto loss</label><button type="button" class="btn sm" data-template-remove>Remove</button></div>';
+    }
+    dlg.innerHTML = '<div class="modal-h">Configure ' + esc(processType.name) + '</div><form class="modal-b"><div class="hint">Define the repeatable inputs and outputs used by the Process Workspace.</div><div class="frow modal-row"><div class="fld"><label>Default unit</label><select name="default_unit">' + selectOptions([{ value: '', label: 'Choose unit' }].concat(processUnitOptions()), processType.default_unit || '') + '</select></div><div class="fld"><label>Default destination godown</label><select name="default_destination_godown_id">' + selectOptions(godowns, processType.default_destination_godown_id || '') + '</select></div></div><div class="template-grid-head"><span>Flow line</span><span>Meaning</span><span>Item</span><span>Unit</span><span>Godown</span><span>Rules</span><span></span></div><div class="template-rows"></div><button type="button" class="btn ghost" data-template-add>+ Add flow line</button><div class="form-err"></div><div class="frow"><button type="button" class="btn ghost" data-template-cancel>Cancel</button><button type="submit" class="btn acc">Save template</button></div></form>';
+    document.body.appendChild(dlg);
+    var rowsEl = dlg.querySelector('.template-rows');
+    function appendRow(line) { rowsEl.insertAdjacentHTML('beforeend', rowHtml(line)); }
+    lines.forEach(appendRow); if (!lines.length) { appendRow({ line_type: 'INPUT', semantic_type: 'input' }); appendRow(); }
+    dlg.querySelector('[data-template-add]').onclick = function () { appendRow(); };
+    dlg.querySelector('[data-template-cancel]').onclick = function () { dlg.close(); dlg.remove(); };
+    rowsEl.addEventListener('click', function (event) { var remove = event.target.closest('[data-template-remove]'); if (remove) remove.parentElement.remove(); });
+    dlg.querySelector('form').onsubmit = function (event) {
+      event.preventDefault();
+      var payload = { default_unit: dlg.querySelector('[name="default_unit"]').value || null, default_destination_godown_id: dlg.querySelector('[name="default_destination_godown_id"]').value || null, lines: [] };
+      rowsEl.querySelectorAll('.template-row').forEach(function (row, index) {
+        var value = function (name) { var field = row.querySelector('[data-template-field="' + name + '"]'); return field.type === 'checkbox' ? field.checked : field.value; };
+        if (!value('item_id')) return;
+        payload.lines.push({ line_type: value('line_type'), semantic_type: value('semantic_type'), item_id: value('item_id'), default_unit: value('default_unit') || null, default_godown_id: value('default_godown') || null, required: value('required'), auto_calculate: value('auto_calculate'), sort_order: index });
+      });
+      apiPost('/api/process-types/' + encodeURIComponent(processType.id) + '/template', payload, 'PUT').then(function () { dlg.close(); dlg.remove(); S.processTypes = null; S.processWorkspace = null; S.processDraft = null; render(); }).catch(function (err) { dlg.querySelector('.form-err').textContent = err.message; });
+    };
+    dlg.showModal();
   }
   function pageTeam() {
     if (!S.team) { loadTeam(); return '<div class="card pad"><div class="empty">Loading team…</div></div>'; }
@@ -768,7 +956,7 @@
     if (!S.documents) { loadDocuments(); return '<div class="card pad"><div class="empty">Loading documents…</div></div>'; }
     var documentPage = pageSlice(filt(S.documents), 'documents');
     var rows = documentPage.rows.map(function (d) { var voidButton = d.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="document-void" data-id="' + esc(d.id) + '">Void</button>' : ''; var printButton = can('EXPORT') ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + printButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No documents yet.</td></tr>';
-    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Posted records remain available for export and printing.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
+    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Posted records remain available for export and printing.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div>' + filterToolbar(S.documents, 'documents') + '<div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
   }
   function parseCsv(text) {
     var rows = [], row = [], cell = '', quoted = false;
@@ -981,13 +1169,15 @@
       var pageKey = el.getAttribute('data-page-key');
       S.pageIndex[pageKey] = Math.max(0, (S.pageIndex[pageKey] || 0) + (act === 'page-next' ? 1 : -1));
       render();
+    } else if (act === 'filters-clear') {
+      S.q = ''; delete S.filters[S.page]; S.pageIndex = {}; render();
     } else if (act === 'party-import') {
       importParties(el.getAttribute('data-kind'));
     } else if (act === 'bugs-refresh') {
       S.bugs = null;
       render();
     } else if (act === 'process-type-new') {
-      modal('New process type', [{ name: 'name', label: 'Name', required: true, placeholder: 'Dehusking' }, { name: 'description', label: 'Description' }], 'Create', function (d) { return apiPost('/api/process-types', d).then(function () { S.processTypes = null; }); });
+      modal('New process type', [{ name: 'name', label: 'Name', required: true, placeholder: 'Dehusking' }, { name: 'description', label: 'Description' }], 'Create', function (d) { return apiPost('/api/process-types', d).then(function () { S.processTypes = null; S.processWorkspace = null; S.processDraft = null; }); });
     } else if (act === 'process-type-archive') {
       if (!confirm('Archive this process type? Existing runs will remain available.')) return;
       return apiPost('/api/process-types/' + encodeURIComponent(el.getAttribute('data-id')), {}, 'DELETE').then(function () { S.processTypes = null; render(); });
@@ -996,6 +1186,28 @@
     } else if (act === 'process-run-void') {
       if (!confirm('Void this process run? Its posted stock movements will be reversed and source-lot quantities restored.')) return;
       return apiPost('/api/process-runs/' + encodeURIComponent(el.getAttribute('data-id')) + '/void', { reason: 'Voided from Processing' }).then(function () { S.processRuns = null; render(); });
+    } else if (act === 'process-template-edit') {
+      var templateType = (S.processTypes || []).find(function (type) { return type.id === el.getAttribute('data-id'); });
+      if (templateType) openProcessTemplateEditor(templateType);
+    } else if (act === 'process-lot-use') {
+      var useLot = processLotById(el.getAttribute('data-id'));
+      if (useLot && S.processDraft) processInputModal(useLot);
+    } else if (act === 'process-input-add') {
+      if (S.processDraft) processInputSelectionModal();
+    } else if (act === 'process-input-clear') {
+      if (S.processDraft) { S.processDraft.inputs = []; render(); }
+    } else if (act === 'process-output-add') {
+      if (S.processDraft) processOutputModal();
+    } else if (act === 'process-output-remove') {
+      if (S.processDraft) { S.processDraft.outputs.splice(Number(el.getAttribute('data-id')), 1); render(); }
+    } else if (act === 'process-run-post') {
+      if (!can('CREATE') || !S.processDraft || !S.processDraft.inputs.length) return;
+      var draft = S.processDraft, balance = processBalance(draft);
+      var missing = draft.outputs.some(function (output) { return output.required && num(output.quantity) <= 0; });
+      if (missing) { window.alert('Enter the actual quantity for every required output.'); return; }
+      if (balance.allMass && balance.difference < -0.001) { window.alert('Accounted output is greater than the selected input. Check the quantities.'); return; }
+      var lines = draft.inputs.map(function (input) { return { line_type: 'INPUT', semantic_type: 'input', item_id: input.item_id, lot_id: input.lot_id, quantity: input.quantity, unit: input.unit }; }).concat(draft.outputs.filter(function (output) { return num(output.quantity) > 0; }).map(function (output) { return { line_type: output.line_type, semantic_type: output.semantic_type, template_line_id: output.template_line_id || null, item_id: output.item_id, godown_id: output.godown_id || draft.destinationGodownId || null, quantity: output.quantity, unit: output.unit }; }));
+      return apiPost('/api/process-runs', { process_type_id: draft.processTypeId, destination_godown_id: draft.destinationGodownId || null, lines: lines }).then(function () { S.processRuns = null; S.processWorkspace = null; S.processDraft = null; return refresh(); });
     } else if (act === 'process-run-new') {
       var itemOptions = optList(ov.items, [{ value: '', label: '—' }]);
       var processUnitOptions = [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }];
@@ -1325,9 +1537,6 @@
       '</div></aside>' +
       '<main class="main">' +
       '<header class="topbar"><button class="menu-trigger" type="button" aria-label="Open application navigation" aria-controls="mobile-nav" aria-expanded="false" data-act="nav-open">☰</button><div class="grow"><h1>' + esc(meta.t) + '</h1><div class="sub">' + esc(meta.s()) + '</div></div>' +
-      (meta.search ? '<div class="search"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><circle cx="11" cy="11" r="7" stroke="#98A2B3" stroke-width="2"/><path d="m20 20-3-3" stroke="#98A2B3" stroke-width="2" stroke-linecap="round"/></svg>' +
-        '<input id="ms-q" placeholder="Search…" value="' + esc(S.q) + '"></div>' : '') +
-      filterControl() +
       periodToggle() + '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
       '<div class="content ms-scroll"><div class="page" id="ms-page"></div></div>' +
       '</main>' +
@@ -1351,22 +1560,14 @@
 
     var q = document.getElementById('ms-q');
     if (q) {
-      q.oninput = function () { S.q = q.value; S.pageIndex = {}; var pg = document.getElementById('ms-page');
-        if (S.page === 'gate') pg.innerHTML = pageGate();
-        else if (S.page === 'purchase') pg.innerHTML = pagePurchase();
-        else if (S.page === 'stock') pg.innerHTML = pageStock();
-        else if (S.page === 'suppliers') pg.innerHTML = partyPage('suppliers');
-        else if (S.page === 'buyers') pg.innerHTML = partyPage('buyers');
-        else if (S.page === 'items') pg.innerHTML = pageItems();
-        else if (S.page === 'processing') pg.innerHTML = pageProcessing();
-        else if (S.page === 'team') pg.innerHTML = pageTeam();
-        else if (S.page === 'documents') pg.innerHTML = pageDocuments();
-        else if (S.page === 'bugs') pg.innerHTML = pageBugReports();
-      };
-      q.focus(); q.setSelectionRange(q.value.length, q.value.length);
+      q.oninput = function () { S.q = q.value; S.focusSearch = true; S.pageIndex = {}; render(); };
+      if (S.focusSearch) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); S.focusSearch = false; }
     }
-    var filter = document.getElementById('ms-filter');
-    if (filter) filter.onchange = function () { S.filter = filter.value; S.pageIndex = {}; render(); };
+    document.querySelectorAll('.table-filter').forEach(function (filter) {
+      var update = function () { var pageFilters = S.filters[S.page] || {}; var key = filter.getAttribute('data-filter-key'); if (!key) return; if (filter.value) pageFilters[key] = filter.value; else delete pageFilters[key]; S.filters[S.page] = pageFilters; S.pageIndex = {}; render(); };
+      filter.onchange = update;
+    });
+    if (S.page === 'processing') bindProcessWorkspace();
   }
   function userName() {
     if (MODE === 'demo') return { owner: 'Ramesh Reddy', manager: 'Suresh Kumar', accountant: 'Prakash Rao' }[S.role] || 'Demo user';
@@ -1419,7 +1620,7 @@
   document.addEventListener('click', function (e) {
     var t = e.target.closest('[data-nav],[data-role],[data-act]');
     if (!t) return;
-    if (t.hasAttribute('data-nav')) { S.page = t.getAttribute('data-nav'); S.q = ''; S.filter = 'all'; S.pageIndex = {}; document.body.classList.remove('nav-open'); render(); }
+    if (t.hasAttribute('data-nav')) { S.page = t.getAttribute('data-nav'); S.q = ''; S.pageIndex = {}; document.body.classList.remove('nav-open'); render(); }
     else if (t.hasAttribute('data-role')) { S.role = t.getAttribute('data-role'); render(); }
     else if (t.getAttribute('data-act') === 'logout') {
       apiPost('/api/auth/logout', {}).then(function () { S.ov = null; render(); });
