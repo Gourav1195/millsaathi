@@ -8,13 +8,21 @@
   var SUPPORT_ADMIN_EMAIL = 'gouravmodi1195@gmail.com';
   var AUTH_CONFIG = null;
   var TURNSTILE_SCRIPT = null;
-  var S = { page: 'dashboard', role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, team: null, documents: null, payments: null, pageIndex: {} };
+  var requestedPage = new URLSearchParams(location.search).get('page');
+  var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, team: null, documents: null, payments: null, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
+  }
+  function toast(message, kind) {
+    var host = document.getElementById('ms-toasts');
+    if (!host) { host = document.createElement('div'); host.id = 'ms-toasts'; host.className = 'ms-toasts'; document.body.appendChild(host); }
+    var item = document.createElement('div'); item.className = 'ms-toast ' + (kind || 'info'); item.textContent = message; host.appendChild(item);
+    setTimeout(function () { item.classList.add('leaving'); setTimeout(function () { item.remove(); }, 220); }, 3600);
   }
   function qtl(kg, dec) {
     if (kg == null) return '—';
@@ -255,7 +263,7 @@
       if (f.type === 'toggle') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><div class="toggle-control" data-toggle-name="' + esc(f.name) + '">' + f.options.map(function (o) { return '<button type="button" class="toggle-option' + (String(o.value) === String(f.value == null ? f.options[0].value : f.value) ? ' on' : '') + '" data-toggle-value="' + esc(o.value) + '" aria-pressed="' + (String(o.value) === String(f.value == null ? f.options[0].value : f.value) ? 'true' : 'false') + '">' + esc(o.label) + '</button>'; }).join('') + '<input type="hidden" name="' + f.name + '" value="' + esc(f.value == null ? f.options[0].value : f.value) + '"></div></div>';
       if (f.type === 'textarea') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><textarea name="' + f.name + '"' + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + '>' + esc(f.value || '') + '</textarea></div>';
       if (f.type === 'info') return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><div class="hint" data-info="' + esc(f.name) + '">' + esc(f.value || '—') + '</div></div>';
-      return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><input name="' + f.name + '" type="' + (f.type || 'text') + '"' + (f.step ? ' step="' + f.step + '"' : '') + (f.required ? ' required' : '') + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + (f.value != null ? ' value="' + esc(f.value) + '"' : '') + '></div>';
+      return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><input name="' + f.name + '" type="' + (f.type || 'text') + '"' + (f.step ? ' step="' + f.step + '"' : '') + (f.min != null ? ' min="' + esc(f.min) + '"' : '') + (f.max != null ? ' max="' + esc(f.max) + '"' : '') + (f.required ? ' required' : '') + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + (f.value != null ? ' value="' + esc(f.value) + '"' : '') + '></div>';
     }
     var formFields = [], openRow = null;
     fields.forEach(function (f, i) {
@@ -787,14 +795,20 @@
   function processQuantityBase(item, quantity, unit) { var m = processUnitBase(item, unit); return m == null ? null : num(quantity) * m; }
   function processItem(id, workspace) { return ((workspace && workspace.items) || (S.ov && S.ov.items) || []).find(function (item) { return String(item.id) === String(id); }) || null; }
   function processTemplateLines(workspace) { return (workspace && workspace.template_lines) || []; }
+  function processDraftKey(typeId) { return 'millsaathi:process-draft:' + String((S.ov && S.ov.mill && S.ov.mill.id) || 'current') + ':' + typeId; }
+  function readProcessDraft(typeId) { try { var raw = localStorage.getItem(processDraftKey(typeId)); return raw ? JSON.parse(raw) : null; } catch (_) { return null; } }
+  function persistProcessDraft() { if (!S.processDraft) return; try { localStorage.setItem(processDraftKey(S.processDraft.processTypeId), JSON.stringify(S.processDraft)); } catch (_) {} }
+  function clearProcessDraft(typeId) { try { localStorage.removeItem(processDraftKey(typeId)); } catch (_) {} }
   function processWorkspaceFor(typeId) {
     return fetch('/api/process-workspace?process_type_id=' + encodeURIComponent(typeId)).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Could not load process workspace'); return j; }); }).then(function (j) {
       S.processWorkspace = j;
-      S.processDraft = { processTypeId: typeId, inputs: [], outputs: processTemplateLines(j).filter(function (line) { return line.line_type === 'OUTPUT' || line.line_type === 'LOSS'; }).map(function (line) {
+      var saved = readProcessDraft(typeId);
+      S.processDraft = saved && saved.processTypeId === typeId ? saved : { processTypeId: typeId, inputs: [], outputs: processTemplateLines(j).filter(function (line) { return line.line_type === 'OUTPUT' || line.line_type === 'LOSS'; }).map(function (line) {
         return { template_line_id: line.id, line_type: line.line_type, semantic_type: line.semantic_type, item_id: line.item_id, item_name: line.item_name, quantity: '', unit: line.default_unit || j.process_type.default_unit || preferredProcessUnit(), auto_calculate: !!line.auto_calculate, required: !!line.required, godown_id: line.default_godown_id || j.process_type.default_destination_godown_id || '' };
       }), destinationGodownId: j.process_type.default_destination_godown_id || '', notes: '' };
+      if (!S.processDraft.destinationGodownId) S.processDraft.destinationGodownId = j.process_type.default_destination_godown_id || '';
       render();
-    }).catch(function (err) { S.processWorkspace = { error: err.message }; S.processDraft = null; render(); });
+    }).catch(function (err) { S.processWorkspace = { error: err.message }; S.processDraft = null; toast(err.message, 'error'); render(); });
   }
   function processLotById(id) { return S.processWorkspace && (S.processWorkspace.lots || []).find(function (lot) { return String(lot.id) === String(id); }); }
   function processInputModal(lot) {
@@ -803,7 +817,7 @@
     var available = Number(lot.qty_kg || 0) / (processUnitBase(item, unit) || 1);
     modal('How much to process?', [
       { name: 'material', label: 'Selected material', type: 'info', value: (lot.item_name || 'Material') + ' · ' + lot.code + ' · ' + available.toLocaleString('en-IN', { maximumFractionDigits: 3 }) + ' ' + String(unit).toLowerCase() + ' available' },
-      { name: 'quantity', label: 'Quantity (' + String(unit).toLowerCase() + ')', type: 'number', step: '0.001', required: true, value: '' },
+      { name: 'quantity', label: 'Quantity (' + String(unit).toLowerCase() + ')', type: 'number', step: '0.001', min: '0', max: available, required: true, value: '' },
       { name: 'unit', label: 'Unit', type: 'select', value: unit, options: processUnitOptions() },
     ], 'Use in process', function (d) {
       var selectedUnit = d.unit || unit, base = processQuantityBase(item, d.quantity, selectedUnit);
@@ -811,6 +825,7 @@
       var existing = S.processDraft.inputs.find(function (input) { return input.lot_id === lot.id; });
       if (existing) { existing.quantity = d.quantity; existing.unit = selectedUnit; existing.quantity_base = base; }
       else S.processDraft.inputs.push({ lot_id: lot.id, lot_code: lot.code, item_id: lot.item_id, item_name: lot.item_name, godown_id: lot.godown_id, godown_name: lot.godown_name, quantity: d.quantity, quantity_base: base, unit: selectedUnit, available_base: Number(lot.qty_kg || 0) });
+      persistProcessDraft();
       render();
     });
     var dlg = document.getElementById('ms-modal');
@@ -830,6 +845,7 @@
       var lot = processLotById(d.lot_id), item = lot && processItem(lot.item_id, S.processWorkspace), base = lot && processQuantityBase(item, d.quantity, d.unit);
       if (!lot || !item || !base || base <= 0 || base > Number(lot.qty_kg || 0)) throw new Error('Enter a positive quantity within the available lot quantity.');
       S.processDraft.inputs.push({ lot_id: lot.id, lot_code: lot.code, item_id: lot.item_id, item_name: lot.item_name, godown_id: lot.godown_id, godown_name: lot.godown_name, quantity: d.quantity, quantity_base: base, unit: d.unit, available_base: Number(lot.qty_kg || 0) });
+      persistProcessDraft();
       render();
     });
   }
@@ -844,6 +860,7 @@
       var item = processItem(d.item_id, S.processWorkspace);
       if (!item || num(d.quantity) <= 0) throw new Error('Choose an item and enter a positive quantity.');
       S.processDraft.outputs.push({ line_type: d.semantic_type === 'waste' ? 'LOSS' : 'OUTPUT', semantic_type: d.semantic_type, item_id: d.item_id, item_name: item.name, quantity: d.quantity, unit: d.unit || preferredProcessUnit(), auto_calculate: false, required: true, godown_id: S.processDraft.destinationGodownId || '' });
+      persistProcessDraft();
       render();
     });
   }
@@ -866,12 +883,13 @@
     var types = activeProcessTypes(), workspace = S.processWorkspace, draft = S.processDraft;
     if (!types.length) return '<div class="card pad"><div class="empty">Create a process type before opening a Process Workspace.</div></div>';
     if (!workspace || !draft || workspace.error) return '<div class="card pad"><div class="empty">' + esc(workspace && workspace.error ? workspace.error : 'Loading Process Workspace…') + '</div></div>';
+    persistProcessDraft();
     var lots = workspace.lots || [], selectedIds = draft.inputs.map(function (input) { return input.lot_id; });
     var materials = lots.map(function (lot) { var used = selectedIds.indexOf(lot.id) >= 0; return '<article class="process-material ' + (used ? 'used' : '') + '" draggable="true" data-process-lot="' + esc(lot.id) + '"><div class="process-material-head"><div><strong>' + esc(lot.item_name || 'Material') + '</strong><span>' + esc(lot.code) + '</span></div>' + (used ? '<span class="pill" style="background:#E6F0E9;color:#256238">Added</span>' : '<button class="btn sm" data-act="process-lot-use" data-id="' + esc(lot.id) + '">Use</button>') + '</div><div class="process-material-qty">' + esc(lotQty(lot)) + ' available</div><div class="hint">' + esc(lot.godown_name || 'No godown') + '</div></article>'; }).join('') || '<div class="empty">No available lots.</div>';
     var inputSummary = draft.inputs.map(function (input) { return '<div class="process-selected-line"><span>' + esc(input.item_name || 'Material') + ' · ' + esc(input.lot_code) + '</span><b>' + esc(input.quantity) + ' ' + esc(String(input.unit).toLowerCase()) + '</b></div>'; }).join('') || '<div class="hint">Drag or select a material card.</div>';
     var balance = processBalance(draft);
     var outputs = draft.outputs.map(function (output, index) { var label = output.semantic_type === 'byproduct' ? 'By-product' : output.semantic_type === 'waste' ? 'Loss' : 'Main output'; return '<div class="process-output-card"><div class="process-output-card-head"><div><strong>' + esc(output.item_name || 'Output') + '</strong><span>' + esc(label) + '</span></div>' + (output.template_line_id ? '' : '<button class="btn sm\" data-act=\"process-output-remove\" data-id=\"' + index + '\">Remove</button>') + '</div><div class=\"process-output-input\"><input data-process-output=\"' + index + '\" type=\"number\" step=\"0.001\" value=\"' + esc(output.quantity == null ? '' : output.quantity) + '\"' + (output.auto_calculate ? ' readonly' : '') + ' placeholder=\"Quantity\"><select data-process-unit=\"' + index + '\">' + processUnitOptions().map(function (unit) { return '<option value=\"' + unit.value + '\"' + (unit.value === output.unit ? ' selected' : '') + '>' + unit.label + '</option>'; }).join('') + '</select></div><div class=\"hint\">' + (output.auto_calculate ? 'Calculated from mass balance' : 'Enter actual quantity') + '</div></div>'; }).join('');
-    return '<div class="process-toolbar"><div><div class="card-h">Process Workspace</div><div class="hint">Select a lot, confirm the quantity, then record the actual outputs.</div></div><div class="process-toolbar-actions"><select class="process-select" data-process-select>' + types.map(function (type) { return '<option value="' + esc(type.id) + '"' + (type.id === draft.processTypeId ? ' selected' : '') + '>' + esc(type.name) + '</option>'; }).join('') + '</select>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(draft.processTypeId) + '">Configure process</button>' : '') + '</div></div>' +
+    return '<div class="process-toolbar"><div><div class="card-h">Process Workspace</div><div class="hint">Select a lot, confirm the quantity, then record the actual outputs.</div></div><div class="process-toolbar-actions"><div class="process-stepper">' + types.map(function (type, index) { return (index ? '<span class="process-step-arrow">→</span>' : '') + '<button class="' + (type.id === draft.processTypeId ? 'on' : '') + '" data-act="process-step" data-id="' + esc(type.id) + '">' + esc(type.name) + '</button>'; }).join('') + '</div><select class="process-select" data-process-select aria-label="Choose process">' + types.map(function (type) { return '<option value="' + esc(type.id) + '"' + (type.id === draft.processTypeId ? ' selected' : '') + '>' + esc(type.name) + '</option>'; }).join('') + '</select>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(draft.processTypeId) + '">Configure process</button>' : '') + '</div></div>' +
       '<div class="process-flow"><section class="process-column"><div class="process-column-title">Available materials <span>' + lots.length + '</span></div><div class="process-materials">' + materials + '</div></section><section class="process-column process-center"><div class="process-column-title">Process</div><div class="process-dropzone" data-process-drop="1"><div class="process-drop-title">' + esc(workspace.process_type.name) + '</div><div class="hint">Drop a lot here or use a material card</div><div class="process-selected">' + inputSummary + '</div></div><div class="process-inline-actions"><button class="btn sm" data-act="process-input-add">+ Add input</button>' + (draft.inputs.length ? '<button class="btn sm" data-act="process-input-clear">Clear inputs</button>' : '') + '</div></section><section class="process-column"><div class="process-column-title">Outputs</div><div class="process-outputs">' + (outputs || '<div class="empty">Configure outputs or add one manually.</div>') + '</div><button class="btn ghost process-add-output" data-act="process-output-add">+ Add output</button><label class="process-godown-label">Destination godown<select data-process-destination>' + [{ value: '', label: 'Choose godown' }].concat((workspace.godowns || []).map(function (godown) { return { value: godown.id, label: godown.name }; })).map(function (godown) { return '<option value="' + esc(godown.value) + '"' + (godown.value === draft.destinationGodownId ? ' selected' : '') + '>' + esc(godown.label) + '</option>'; }).join('') + '</select></label></section></div>' +
       '<div id="process-balance">' + processBalanceMarkup(balance) + '</div><div class="process-actions"><button class="btn acc" data-act="process-run-post"' + (draft.inputs.length ? '' : ' disabled') + '>Post Run</button><span class="hint">Posting will consume the selected source lot and create traceable output stock.</span></div>';
   }
@@ -880,12 +898,12 @@
     var select = document.querySelector('[data-process-select]');
     if (select) select.onchange = function () { S.processWorkspace = null; S.processDraft = null; processWorkspaceFor(select.value); };
     var destination = document.querySelector('[data-process-destination]');
-    if (destination) destination.onchange = function () { S.processDraft.destinationGodownId = destination.value; S.processDraft.outputs.forEach(function (output) { if (!output.godown_id) output.godown_id = destination.value; }); };
+    if (destination) destination.onchange = function () { S.processDraft.destinationGodownId = destination.value; S.processDraft.outputs.forEach(function (output) { if (!output.godown_id) output.godown_id = destination.value; }); persistProcessDraft(); };
     document.querySelectorAll('[data-process-output]').forEach(function (input) {
-      input.oninput = function () { var index = Number(input.getAttribute('data-process-output')); if (S.processDraft.outputs[index]) S.processDraft.outputs[index].quantity = input.value; updateProcessBalance(); };
+      input.oninput = function () { var index = Number(input.getAttribute('data-process-output')); if (S.processDraft.outputs[index]) S.processDraft.outputs[index].quantity = input.value; persistProcessDraft(); updateProcessBalance(); };
     });
     document.querySelectorAll('[data-process-unit]').forEach(function (unit) {
-      unit.onchange = function () { var index = Number(unit.getAttribute('data-process-unit')); if (S.processDraft.outputs[index]) { S.processDraft.outputs[index].unit = unit.value; updateProcessBalance(); } };
+      unit.onchange = function () { var index = Number(unit.getAttribute('data-process-unit')); if (S.processDraft.outputs[index]) { S.processDraft.outputs[index].unit = unit.value; persistProcessDraft(); updateProcessBalance(); } };
     });
     document.querySelectorAll('[data-process-lot]').forEach(function (card) {
       card.ondragstart = function (event) { event.dataTransfer.setData('text/plain', card.getAttribute('data-process-lot')); event.dataTransfer.effectAllowed = 'copy'; };
@@ -911,7 +929,7 @@
     var firstType = activeProcessTypes()[0];
     if (firstType && (!S.processWorkspace || !S.processDraft || S.processDraft.processTypeId !== firstType.id) && !S.processWorkspace) { processWorkspaceFor(firstType.id); return '<div class="card pad"><div class="empty">Loading Process Workspace…</div></div>'; }
     var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
-    return processWorkspaceMarkup() + '<div class="card process-types-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Configure reusable inputs, outputs and defaults for each process.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Template</th><th>Status</th><th></th></tr></thead><tbody>' + (S.processTypes.map(function (p) { var archived = !!p.deleted_at, configured = (p.template_lines || []).length > 0; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (configured ? 'Configured' : 'Manual fallback') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(p.id) + '">Configure</button> ' : '') + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process types yet.</td></tr>') + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products remain linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
+    return processWorkspaceMarkup() + '<div class="card process-types-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Configure reusable inputs, outputs and defaults for each process.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' + (firstType ? '<button class="btn sm icon-btn" title="Edit process flow" aria-label="Edit process flow" data-act="process-template-edit" data-id="' + esc(firstType.id) + '">✎</button>' : '') : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Template</th><th>Status</th><th></th></tr></thead><tbody>' + (S.processTypes.map(function (p) { var archived = !!p.deleted_at, configured = (p.template_lines || []).length > 0; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (configured ? 'Configured' : 'Manual fallback') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(p.id) + '">Configure</button> ' : '') + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process types yet.</td></tr>') + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products remain linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
   }
   function openProcessTemplateEditor(processType) {
     var old = document.getElementById('process-template-modal'); if (old) old.remove();
@@ -927,7 +945,16 @@
     dlg.innerHTML = '<div class="modal-h">Configure ' + esc(processType.name) + '</div><form class="modal-b"><div class="hint">Define the repeatable inputs and outputs used by the Process Workspace.</div><div class="frow modal-row"><div class="fld"><label>Default unit</label><select name="default_unit">' + selectOptions([{ value: '', label: 'Choose unit' }].concat(processUnitOptions()), processType.default_unit || '') + '</select></div><div class="fld"><label>Default destination godown</label><select name="default_destination_godown_id">' + selectOptions(godowns, processType.default_destination_godown_id || '') + '</select></div></div><div class="template-grid-head"><span>Flow line</span><span>Meaning</span><span>Item</span><span>Unit</span><span>Godown</span><span>Rules</span><span></span></div><div class="template-rows"></div><button type="button" class="btn ghost" data-template-add>+ Add flow line</button><div class="form-err"></div><div class="frow"><button type="button" class="btn ghost" data-template-cancel>Cancel</button><button type="submit" class="btn acc">Save template</button></div></form>';
     document.body.appendChild(dlg);
     var rowsEl = dlg.querySelector('.template-rows');
-    function appendRow(line) { rowsEl.insertAdjacentHTML('beforeend', rowHtml(line)); }
+    function bindTemplateRows() {
+      rowsEl.querySelectorAll('.template-row').forEach(function (row) {
+        row.draggable = true;
+        row.ondragstart = function (event) { event.dataTransfer.setData('text/plain', 'template-row'); row.classList.add('dragging'); };
+        row.ondragend = function () { row.classList.remove('dragging'); };
+        row.ondragover = function (event) { event.preventDefault(); };
+        row.ondrop = function (event) { event.preventDefault(); var dragging = rowsEl.querySelector('.template-row.dragging'); if (dragging && dragging !== row) rowsEl.insertBefore(dragging, row); };
+      });
+    }
+    function appendRow(line) { rowsEl.insertAdjacentHTML('beforeend', rowHtml(line)); bindTemplateRows(); }
     lines.forEach(appendRow); if (!lines.length) { appendRow({ line_type: 'INPUT', semantic_type: 'input' }); appendRow(); }
     dlg.querySelector('[data-template-add]').onclick = function () { appendRow(); };
     dlg.querySelector('[data-template-cancel]').onclick = function () { dlg.close(); dlg.remove(); };
@@ -940,7 +967,7 @@
         if (!value('item_id')) return;
         payload.lines.push({ line_type: value('line_type'), semantic_type: value('semantic_type'), item_id: value('item_id'), default_unit: value('default_unit') || null, default_godown_id: value('default_godown') || null, required: value('required'), auto_calculate: value('auto_calculate'), sort_order: index });
       });
-      apiPost('/api/process-types/' + encodeURIComponent(processType.id) + '/template', payload, 'PUT').then(function () { dlg.close(); dlg.remove(); S.processTypes = null; S.processWorkspace = null; S.processDraft = null; render(); }).catch(function (err) { dlg.querySelector('.form-err').textContent = err.message; });
+      apiPost('/api/process-types/' + encodeURIComponent(processType.id) + '/template', payload, 'PUT').then(function () { clearProcessDraft(processType.id); dlg.close(); dlg.remove(); S.processTypes = null; S.processWorkspace = null; S.processDraft = null; toast('Process template saved.', 'success'); render(); }).catch(function (err) { dlg.querySelector('.form-err').textContent = err.message; });
     };
     dlg.showModal();
   }
@@ -1189,17 +1216,20 @@
     } else if (act === 'process-template-edit') {
       var templateType = (S.processTypes || []).find(function (type) { return type.id === el.getAttribute('data-id'); });
       if (templateType) openProcessTemplateEditor(templateType);
+    } else if (act === 'process-step') {
+      var stepId = el.getAttribute('data-id');
+      if (stepId && (!S.processDraft || S.processDraft.processTypeId !== stepId)) { S.processWorkspace = null; S.processDraft = null; processWorkspaceFor(stepId); }
     } else if (act === 'process-lot-use') {
       var useLot = processLotById(el.getAttribute('data-id'));
       if (useLot && S.processDraft) processInputModal(useLot);
     } else if (act === 'process-input-add') {
       if (S.processDraft) processInputSelectionModal();
     } else if (act === 'process-input-clear') {
-      if (S.processDraft) { S.processDraft.inputs = []; render(); }
+      if (S.processDraft) { S.processDraft.inputs = []; persistProcessDraft(); render(); }
     } else if (act === 'process-output-add') {
       if (S.processDraft) processOutputModal();
     } else if (act === 'process-output-remove') {
-      if (S.processDraft) { S.processDraft.outputs.splice(Number(el.getAttribute('data-id')), 1); render(); }
+      if (S.processDraft) { S.processDraft.outputs.splice(Number(el.getAttribute('data-id')), 1); persistProcessDraft(); render(); }
     } else if (act === 'process-run-post') {
       if (!can('CREATE') || !S.processDraft || !S.processDraft.inputs.length) return;
       var draft = S.processDraft, balance = processBalance(draft);
@@ -1207,7 +1237,7 @@
       if (missing) { window.alert('Enter the actual quantity for every required output.'); return; }
       if (balance.allMass && balance.difference < -0.001) { window.alert('Accounted output is greater than the selected input. Check the quantities.'); return; }
       var lines = draft.inputs.map(function (input) { return { line_type: 'INPUT', semantic_type: 'input', item_id: input.item_id, lot_id: input.lot_id, quantity: input.quantity, unit: input.unit }; }).concat(draft.outputs.filter(function (output) { return num(output.quantity) > 0; }).map(function (output) { return { line_type: output.line_type, semantic_type: output.semantic_type, template_line_id: output.template_line_id || null, item_id: output.item_id, godown_id: output.godown_id || draft.destinationGodownId || null, quantity: output.quantity, unit: output.unit }; }));
-      return apiPost('/api/process-runs', { process_type_id: draft.processTypeId, destination_godown_id: draft.destinationGodownId || null, lines: lines }).then(function () { S.processRuns = null; S.processWorkspace = null; S.processDraft = null; return refresh(); });
+      return apiPost('/api/process-runs', { process_type_id: draft.processTypeId, destination_godown_id: draft.destinationGodownId || null, lines: lines }).then(function () { clearProcessDraft(draft.processTypeId); S.processRuns = null; S.processWorkspace = null; S.processDraft = null; toast('Process run posted successfully.', 'success'); return refresh(); });
     } else if (act === 'process-run-new') {
       var itemOptions = optList(ov.items, [{ value: '', label: '—' }]);
       var processUnitOptions = [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }];
@@ -1620,11 +1650,15 @@
   document.addEventListener('click', function (e) {
     var t = e.target.closest('[data-nav],[data-role],[data-act]');
     if (!t) return;
-    if (t.hasAttribute('data-nav')) { S.page = t.getAttribute('data-nav'); S.q = ''; S.pageIndex = {}; document.body.classList.remove('nav-open'); render(); }
+    if (t.hasAttribute('data-nav')) { S.page = t.getAttribute('data-nav'); S.q = ''; S.pageIndex = {}; history.pushState({ page: S.page }, '', '?page=' + encodeURIComponent(S.page)); document.body.classList.remove('nav-open'); render(); }
     else if (t.hasAttribute('data-role')) { S.role = t.getAttribute('data-role'); render(); }
     else if (t.getAttribute('data-act') === 'logout') {
       apiPost('/api/auth/logout', {}).then(function () { S.ov = null; render(); });
-    } else { openAction(t.getAttribute('data-act'), t); }
+    } else { Promise.resolve(openAction(t.getAttribute('data-act'), t)).catch(function (err) { toast(err.message || 'Something went wrong.', 'error'); }); }
+  });
+  window.addEventListener('popstate', function () {
+    var page = new URLSearchParams(location.search).get('page');
+    if (page && ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'team', 'documents', 'digest', 'bugs'].indexOf(page) >= 0) { S.page = page; S.q = ''; S.pageIndex = {}; render(); }
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && document.getElementById('mobile-nav') && document.getElementById('mobile-nav').classList.contains('open')) openAction('nav-close');
