@@ -10,7 +10,7 @@
   var TURNSTILE_SCRIPT = null;
   var requestedPage = new URLSearchParams(location.search).get('page');
   var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
-  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, pageIndex: {} };
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -674,17 +674,20 @@
     var pending = ov.pending_receipts || [];
     var receiptPanel = '';
     if (pending.length) {
-      var g = pending[0];
-      var amount = Math.round(Math.max(0, g.net_kg || 0) * ((g.sauda_rate_paise_per_qtl || 0) / 100));
-      receiptPanel = '<div class="receipt-toast card" data-receipt="' + esc(g.id) + '">' +
-        '<div><div class="card-h">Add incoming truck to stock?</div>' +
-        '<div class="hint">' + esc(g.token_no) + ' · ' + esc(g.supplier_name || 'Supplier') + ' · ' + esc(g.item_name || 'Item') + ' · ' + qtl(g.net_kg) + ' qtl' +
-        (g.moisture_pct != null ? ' · ' + pct(g.moisture_pct) : '') + (pending.length > 1 ? ' · +' + (pending.length - 1) + ' more' : '') + '</div>' +
-        '<div class="hint" style="margin-top:4px">Accept creates a lot in ' + esc(defaultGodown.name || 'your first godown') + '. You can edit quantity, godown or note later.</div></div>' +
-        '<div class="receipt-toast-actions">' +
-        (can('CREATE') ? '<button class="btn acc" data-act="receipt-accept" data-id="' + esc(g.id) + '" data-godown="' + esc(defaultGodown.id || '') + '" data-item="' + esc(g.item_id || '') + '" data-qty="' + esc(g.net_kg || 0) + '" data-moisture="' + esc(g.moisture_pct == null ? '' : g.moisture_pct) + '" data-value="' + esc(amount) + '">Accept</button>' : '') +
-        (can('EDIT') ? '<button class="btn ghost" data-act="receipt-reject" data-id="' + esc(g.id) + '">Reject</button>' : '') +
-        '</div></div>';
+      var shownReceipts = S.stockReceiptsExpanded ? pending : pending.slice(0, 1);
+      receiptPanel = '<div class="receipt-list">' + shownReceipts.map(function (g) {
+        var amount = Math.round(Math.max(0, g.net_kg || 0) * ((g.sauda_rate_paise_per_qtl || 0) / 100));
+        var godownOptions = ov.godowns.map(function (godown) { return '<option value="' + esc(godown.id) + '"' + (godown.id === defaultGodown.id ? ' selected' : '') + '>' + esc(godown.name) + '</option>'; }).join('');
+        return '<div class="receipt-toast card" data-receipt="' + esc(g.id) + '">' +
+          '<div><div class="card-h">Add incoming truck to stock?</div>' +
+          '<div class="hint">' + esc(g.token_no) + ' · ' + esc(g.supplier_name || 'Supplier') + ' · ' + esc(g.item_name || 'Item') + ' · ' + qtl(g.net_kg) + ' qtl' + (g.moisture_pct != null ? ' · ' + pct(g.moisture_pct) : '') + '</div>' +
+          '<div class="hint" style="margin-top:4px">Choose the godown before accepting. This creates a linked lot and keeps the truck traceable.</div></div>' +
+          '<div class="receipt-toast-actions">' +
+          (godownOptions ? '<label class="receipt-godown"><span>Godown</span><select data-receipt-godown>' + godownOptions + '</select></label>' : '') +
+          (can('CREATE') ? '<button class="btn acc" data-act="receipt-accept" data-id="' + esc(g.id) + '" data-item="' + esc(g.item_id || '') + '" data-qty="' + esc(g.net_kg || 0) + '" data-moisture="' + esc(g.moisture_pct == null ? '' : g.moisture_pct) + '" data-value="' + esc(amount) + '">Accept</button>' : '') +
+          (can('EDIT') ? '<button class="btn ghost" data-act="receipt-reject" data-id="' + esc(g.id) + '">Reject</button>' : '') +
+          '</div></div>';
+      }).join('') + (pending.length > 1 ? '<div class="receipt-more"><span class="hint">' + (S.stockReceiptsExpanded ? 'Showing all ' + pending.length : (pending.length - 1) + ' more truck' + (pending.length > 2 ? 's' : '') + ' waiting for stock') + '</span><button class="btn sm" data-act="receipt-toggle">' + (S.stockReceiptsExpanded ? 'Show less' : 'Show all ' + pending.length) + '</button></div>' : '') + '</div>';
     } else if (live) {
       receiptPanel = '<div class="card pad receipt-empty"><div class="card-h">No pending stock receipts</div><div class="hint" style="margin-top:4px">When an incoming truck is marked Done at the gate, it will appear here for one-click accept or reject.</div></div>';
     }
@@ -998,8 +1001,8 @@
   function pageDocuments() {
     if (!S.documents) { loadDocuments(); return '<div class="card pad"><div class="empty">Loading documents…</div></div>'; }
     var documentPage = pageSlice(filt(S.documents), 'documents');
-    var rows = documentPage.rows.map(function (d) { var voidButton = d.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="document-void" data-id="' + esc(d.id) + '">Void</button>' : ''; var printButton = can('EXPORT') ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + printButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No documents yet.</td></tr>';
-    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Posted records remain available for export and printing.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div>' + filterToolbar(S.documents, 'documents') + '<div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
+    var rows = documentPage.rows.map(function (d) { var voidButton = d.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="document-void" data-id="' + esc(d.id) + '">Void</button>' : ''; var printButton = can('EXPORT') ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + printButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No documents yet. Payments remain in Purchases & Saudās; create a document here when you need a printable statement, invoice, receipt, or weighment slip.</td></tr>';
+    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Documents are created here for printing and export. Recording a payment does not automatically create one.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div>' + filterToolbar(S.documents, 'documents') + '<div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
   }
   function parseCsv(text) {
     var rows = [], row = [], cell = '', quoted = false;
@@ -1441,8 +1444,13 @@
       var skipRow = el.closest('[data-receipt]');
       var note = skipRow && skipRow.querySelector('[data-r-note]') ? skipRow.querySelector('[data-r-note]').value : '';
       return apiPost('/api/stock-receipts/' + el.getAttribute('data-id') + '/skip', { note: note || null }).then(refresh);
+    } else if (act === 'receipt-toggle') {
+      S.stockReceiptsExpanded = !S.stockReceiptsExpanded;
+      render();
     } else if (act === 'receipt-accept') {
-      if (!el.getAttribute('data-godown')) {
+      var receiptRow = el.closest('[data-receipt]');
+      var receiptGodown = receiptRow && receiptRow.querySelector('[data-receipt-godown]');
+      if (!receiptGodown) {
         modal('Add godown first', [
           { name: 'name', label: 'Godown name', required: true, value: 'Godown 1' },
           { name: 'capacity_qty', label: 'Capacity quantity (optional)', type: 'number', step: '0.001' },
@@ -1452,7 +1460,7 @@
       }
       return apiPost('/api/lots', {
         gate_entry_id: el.getAttribute('data-id'),
-        godown_id: el.getAttribute('data-godown'),
+        godown_id: receiptGodown.value,
         item_id: el.getAttribute('data-item') || null,
         qty_kg: Math.round(num(el.getAttribute('data-qty'))),
         moisture_pct: el.getAttribute('data-moisture') ? num(el.getAttribute('data-moisture')) : null,

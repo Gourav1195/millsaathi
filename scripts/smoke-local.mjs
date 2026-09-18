@@ -62,6 +62,13 @@ for (const [range, size] of [['daily', 7], ['weekly', 5], ['monthly', 12]]) {
   assert.equal(rangedOverview.body.trend?.range, range, range + ' trend should identify its range');
   assert.equal(rangedOverview.body.trend?.data?.length, size, range + ' trend should have the expected buckets');
 }
+const dailyGateOverview = await request('/api/overview?range=daily', { headers: { cookie: cookieFrom(ownerLogin.response) } });
+const monthlyGateOverview = await request('/api/overview?range=monthly', { headers: { cookie: cookieFrom(ownerLogin.response) } });
+assert.deepEqual(
+  dailyGateOverview.body.gate?.map((gate) => gate.id),
+  monthlyGateOverview.body.gate?.map((gate) => gate.id),
+  'the Gate & Weighbridge list must not be limited by the dashboard trend range',
+);
 const processTypes = await request('/api/process-types', { headers: { cookie: newMillCookie } });
 for (const name of ['Pre-Cleaning', 'De-husking (Hulling)', 'Paddy Separation', 'Whitening and Polishing', 'Grading and Color Sorting', 'Weighing and Packaging']) {
   assert.ok(processTypes.body.process_types?.some((type) => type.name === name), 'default process type should be available: ' + name);

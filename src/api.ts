@@ -240,9 +240,9 @@ api.get('/overview', async (c) => {
          LEFT JOIN suppliers s ON s.id = g.supplier_id
          LEFT JOIN buyers b ON b.id = g.buyer_id
          LEFT JOIN items i ON i.id = g.item_id
-         WHERE g.mill_id = ?1 AND g.entry_date >= ?2
-         ORDER BY g.created_at DESC LIMIT 1000`,
-      ).bind(mill.id, trend.start),
+         WHERE g.mill_id = ?
+         ORDER BY g.entry_date DESC, g.created_at DESC LIMIT 1000`,
+      ).bind(mill.id),
       db.prepare(
         `SELECT entry_date, direction,
                 SUM(MAX(COALESCE(gross_kg,0)-COALESCE(tare_kg,0),0)) AS net_kg
