@@ -10,7 +10,7 @@
   var TURNSTILE_SCRIPT = null;
   var requestedPage = new URLSearchParams(location.search).get('page');
   var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'billing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
-  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, pageIndex: {} };
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -82,6 +82,7 @@
   function canMoney() { return S.role !== 'manager'; }
   function can(permission) { return MODE === 'live' && S.ov && S.ov.me && (S.ov.me.permissions || []).indexOf(permission) >= 0; }
   function canFinance() { return MODE === 'live' && ['owner', 'admin', 'accountant'].indexOf(S.role) >= 0; }
+  function isPrimaryOwner() { return MODE === 'live' && S.ov && S.ov.me && S.ov.me.role === 'owner'; }
   function net(g) {
     if (g.gross_kg == null || g.tare_kg == null) return 0;
     return Math.max(0, g.gross_kg - g.tare_kg);
@@ -370,6 +371,30 @@
     var agreedQty = sauda.agreed_quantity != null && sauda.agreed_unit ? Number(sauda.agreed_quantity).toLocaleString('en-IN', { maximumFractionDigits: 3 }) + ' ' + String(sauda.agreed_unit).toLowerCase() : qtl(sauda.qty_kg) + ' qtl';
     return sauda.code + ' · ' + (sauda.direction === 'out' ? 'Sale' : 'Purchase') + ' · ' + agreedQty + ' · ₹' + Math.round((sauda.rate_paise_per_qtl || 0) / 100).toLocaleString('en-IN') + '/qtl · ' + (party || 'party') + windowText;
   }
+  function saudaCommission(sauda) {
+    if (!sauda.commission_type) return 'None';
+    if (sauda.commission_type === 'fixed') return 'Fixed · ' + money(sauda.commission_paise || 0);
+    if (sauda.commission_type === 'per_unit') return '₹' + (Number(sauda.commission_value || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 }) + ' / quintal';
+    if (sauda.commission_type === 'percentage') return Number(sauda.commission_value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }) + '% of deal value';
+    return String(sauda.commission_type);
+  }
+  function saudaDetails(sauda, showMoney) {
+    var delivery = sauda.delivery_start || sauda.delivery_end ? (dstr(sauda.delivery_start) + ' → ' + dstr(sauda.delivery_end)) : 'Not set';
+    var rows = [
+      ['Broker', sauda.broker_name || 'Direct'],
+      ['Agreement date', dstr(sauda.agreement_date)],
+      ['Delivery window', delivery],
+      ['Over-delivery limit', sauda.delivery_tolerance_pct != null ? pct(Number(sauda.delivery_tolerance_pct)) : '5.0%'],
+    ];
+    if (showMoney) {
+      rows.splice(1, 0, ['Broker commission', saudaCommission(sauda)], ['Advance', money(sauda.advance_paise || 0)]);
+    }
+    if (sauda.note) rows.push(['Terms', sauda.note]);
+    return '<span class="sauda-detail"><button type="button" class="sauda-info" aria-label="Show details for ' + esc(sauda.code) + '">i</button>' +
+      '<span class="sauda-detail-popover" role="tooltip"><strong>' + esc(sauda.code) + ' details</strong>' + rows.map(function (row) {
+        return '<span><b>' + esc(row[0]) + '</b><em>' + esc(row[1]) + '</em></span>';
+      }).join('') + '</span></span>';
+  }
 
   // ---------- page renderers ----------
   var PAGES = {
@@ -600,10 +625,11 @@
     var openVal = ov.saudas.filter(function (s) { return s.status === 'open' || s.status === 'advance_paid'; })
       .reduce(function (a, s) { return a + (s.value_paise || 0); }, 0);
     var m = canMoney();
+    var owner = isPrimaryOwner(), selected = Object.keys(S.saudaSelected).filter(function (id) { return S.saudaSelected[id]; });
     var body = rows.map(function (p) {
       var fulfilled = Number(p.fulfilled_qty_base || 0);
       var agreement = Number(p.qty_kg || 0);
-      return '<tr><td class="tok">' + esc(p.code) + '</td>' +
+      return '<tr>' + (owner ? '<td><input type="checkbox" data-act="sauda-select" data-id="' + esc(p.id) + '" aria-label="Select ' + esc(p.code) + '"' + (S.saudaSelected[p.id] ? ' checked' : '') + '></td>' : '') + '<td class="tok">' + esc(p.code) + saudaDetails(p, m) + '</td>' +
         '<td><div class="b6">' + (p.direction === 'out' ? 'Sale' : 'Purchase') + '</div><div style="font-size:12px;color:var(--muted)">' + esc(p.buyer_name || p.supplier_name || '') + '</div></td>' +
         '<td>' + esc(p.item_name || '—') + '</td>' +
         '<td class="b7">' + esc(saudaQty(p)) + '</td>' +
@@ -614,13 +640,15 @@
         (MODE === 'live' && m && (p.status === 'open' || p.status === 'advance_paid' || p.status === 'disputed')
           ? ' <button class="btn sm" data-act="sauda-upd" data-id="' + esc(p.id) + '">Update</button><button class="btn sm" data-act="delivery-new" data-id="' + esc(p.id) + '">Delivery</button>' : '') +
         (MODE === 'live' ? ' <button class="btn sm" data-act="delivery-history" data-id="' + esc(p.id) + '">History</button>' : '') + '</td></tr>';
-    }).join('') || '<tr><td colspan="8" class="empty">No saudas yet.</td></tr>';
+    }).join('') || '<tr><td colspan="' + (owner ? 9 : 8) + '" class="empty">No saudas yet.</td></tr>';
     return '<div class="card"><div class="card-top"><div class="card-h">Saudas &amp; purchases</div>' +
-      '<div style="display:flex;gap:10px;align-items:center">' + (m ? '<span class="hint">Open value: ' + money(openVal) + '</span>' : '') +
-      (canFinance() && m ? '<button class="btn acc" data-act="sauda-new">+ New sauda</button>' : '') + '</div></div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">' + (m ? '<span class="hint">Open value: ' + money(openVal) + '</span>' : '') +
+      (can('EXPORT') ? '<a class="btn sm" href="/api/saudas/export.csv">Export CSV</a>' : '') +
+      (canFinance() && m ? '<a class="btn sm" href="/api/saudas/import/template.csv">CSV template</a><button class="btn sm" data-act="sauda-import">Import CSV</button><button class="btn acc" data-act="sauda-new">+ New sauda</button>' : '') +
+      (owner ? '<button class="btn sm sauda-archive-btn" data-act="sauda-bulk-archive"' + (selected.length ? '' : ' disabled') + '>Archive selected' + (selected.length ? ' (' + selected.length + ')' : '') + '</button>' : '') + '</div></div>' +
       filterToolbar(ov.saudas, 'saudas') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:' + (m ? 900 : 700) + 'px"><thead><tr>' +
-      '<th>Sauda</th><th>Direction / Party</th><th>Item</th><th>Qty</th>' + (m ? '<th>Rate</th>' : '') + '<th>Moisture</th>' + (m ? '<th>Value</th>' : '') + '<th>Status / deliveries</th>' +
+      (owner ? '<th><input type="checkbox" data-act="sauda-select-all" aria-label="Select all saudas on this page"' + (rows.length && rows.every(function (p) { return S.saudaSelected[p.id]; }) ? ' checked' : '') + '></th>' : '') + '<th>Sauda</th><th>Direction / Party</th><th>Item</th><th>Qty</th>' + (m ? '<th>Rate</th>' : '') + '<th>Moisture</th>' + (m ? '<th>Value</th>' : '') + '<th>Status / deliveries</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table></div>' +
       (!m ? '<div class="note-locked">🔒 Purchase rates and values are hidden for the Manager role.</div>' : '') + pager(page, 'purchase') + '</div>';
   }
@@ -1122,6 +1150,17 @@
     }
     input.onchange = function () { var file = input.files && input.files[0]; if (!file || file.size > 2 * 1024 * 1024) return alert('Choose a CSV or XLSX file up to 2 MB.'); var isXlsx = /\.xlsx$/i.test(file.name); file.arrayBuffer().then(function (buffer) { if (isXlsx && new Uint8Array(buffer)[0] !== 80) throw new Error('The selected XLSX file is invalid.'); return isXlsx ? parseXlsx(buffer) : Promise.resolve(parseCsv(new TextDecoder().decode(buffer))); }).then(validateAndCommit).then(function (result) { if (result) { alert('Imported ' + result.imported + ', skipped ' + result.skipped + ', failed ' + result.failed + '.'); refresh(); } }).catch(function (err) { alert(err.message); }); }; input.click();
   }
+  function mapSaudaImportRows(rows) {
+    var aliases = { direction: ['direction', 'type'], party: ['party', 'supplier', 'buyer', 'party_name'], item: ['item', 'material', 'item_name'], quantity: ['quantity', 'qty'], unit: ['unit'], rate: ['rate', 'rate_qtl', 'rate_qtl_'], broker: ['broker', 'broker_name'], moisture_pct: ['moisture_pct', 'moisture'], agreement_date: ['agreement_date', 'date'], delivery_start: ['delivery_start'], delivery_end: ['delivery_end'], delivery_tolerance_pct: ['delivery_tolerance_pct', 'tolerance_pct'], commission_type: ['commission_type'], commission_value: ['commission_value', 'fixed_commission', 'fixed_commission_'], advance: ['advance', 'advance_rs'], note: ['note', 'terms'] };
+    var keys = []; rows.forEach(function (row) { Object.keys(row).forEach(function (key) { if (keys.indexOf(key) < 0) keys.push(key); }); });
+    var mapping = {}; Object.keys(aliases).forEach(function (target) { mapping[target] = aliases[target].find(function (candidate) { return keys.indexOf(candidate) >= 0; }) || ''; });
+    return { rows: rows.map(function (row) { var out = {}; Object.keys(mapping).forEach(function (target) { if (mapping[target]) out[target] = row[mapping[target]] || ''; }); return out; }), summary: Object.keys(mapping).filter(function (target) { return mapping[target]; }).map(function (target) { return mapping[target] + ' → ' + target; }) };
+  }
+  function importSaudas() {
+    var input = document.createElement('input'), mappedRows = []; input.type = 'file'; input.accept = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    input.onchange = function () { var file = input.files && input.files[0]; if (!file || file.size > 2 * 1024 * 1024) return alert('Choose a CSV or XLSX file up to 2 MB.'); var xlsx = /\.xlsx$/i.test(file.name); file.arrayBuffer().then(function (buffer) { return xlsx ? parseXlsx(buffer) : parseCsv(new TextDecoder().decode(buffer)); }).then(function (raw) { var mapped = mapSaudaImportRows(raw); mappedRows = mapped.rows; if (!mapped.rows.length || !mapped.summary.length) throw new Error('No recognised Sauda columns found. Download the CSV template and use party and item names exactly as they appear in MillSaathi.'); if (mapped.rows.length > 200) throw new Error('A Sauda import can contain up to 200 rows.'); if (!confirm('Detected column mapping:\n' + mapped.summary.join('\n') + '\n\nValidate this import?')) return null; return apiPost('/api/saudas/import/validate', { rows: mappedRows }); }).then(function (check) { if (!check) return null; if (check.errors) { var examples = check.rows.filter(function (row) { return row.error; }).slice(0, 5).map(function (row) { return 'Row ' + row.row_number + ': ' + row.error; }); throw new Error(check.errors + ' row(s) need correction:\n' + examples.join('\n')); } if (!confirm('Preview: all ' + check.valid + ' rows are valid. Import them?')) return null; return apiPost('/api/saudas/import/commit', { rows: mappedRows }); }).then(function (result) { if (result) { alert('Imported ' + result.imported + ' Sauda(s).'); refresh(); } }).catch(function (err) { alert(err.message); }); };
+    input.click();
+  }
 
   function pageBugReports() {
     if (!isSupportAdmin()) return '<div class="empty">Not found.</div>';
@@ -1231,6 +1270,16 @@
       S.q = ''; delete S.filters[S.page]; S.pageIndex = {}; render();
     } else if (act === 'party-import') {
       importParties(el.getAttribute('data-kind'));
+    } else if (act === 'sauda-import') {
+      importSaudas();
+    } else if (act === 'sauda-select') {
+      var selectedId = el.getAttribute('data-id'); if (selectedId) S.saudaSelected[selectedId] = el.checked; render();
+    } else if (act === 'sauda-select-all') {
+      filt(ov.saudas).forEach(function (sauda) { S.saudaSelected[sauda.id] = el.checked; }); render();
+    } else if (act === 'sauda-bulk-archive') {
+      var selectedSaudas = Object.keys(S.saudaSelected).filter(function (id) { return S.saudaSelected[id]; });
+      if (!selectedSaudas.length || !confirm('Archive ' + selectedSaudas.length + ' selected Sauda(s)? This only hides them from the active list. Their historical records are kept.')) return;
+      return apiPost('/api/saudas/bulk-archive', { ids: selectedSaudas }).then(function (result) { S.saudaSelected = {}; toast(result.archived + ' Sauda(s) archived. Historical data was kept.', 'success'); return refresh(); });
     } else if (act === 'bugs-refresh') {
       S.bugs = null;
       render();

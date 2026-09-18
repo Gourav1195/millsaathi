@@ -259,7 +259,7 @@ api.get('/overview', async (c) => {
          LEFT JOIN suppliers s ON s.id = sa.supplier_id
          LEFT JOIN buyers b ON b.id = sa.buyer_id
          LEFT JOIN items i ON i.id = sa.item_id
-         WHERE sa.mill_id = ?1 ORDER BY sa.created_at DESC LIMIT 1000`,
+         WHERE sa.mill_id = ?1 AND sa.deleted_at IS NULL ORDER BY sa.created_at DESC LIMIT 1000`,
       ).bind(mill.id),
       db.prepare(
         `SELECT l.*, gd.name AS godown_name, i.name AS item_name
@@ -793,6 +793,100 @@ api.post('/sauda-deliveries/:id/void', async (c) => {
   ]);
   await audit(c, 'sauda_delivery', delivery.id, 'VOID', reason);
   return c.json({ ok: true });
+});
+
+api.get('/saudas/export.csv', async (c) => {
+  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const { mill } = c.get('session');
+  const result = await c.env.DB.prepare(`SELECT sa.code, sa.direction, COALESCE(b.name, s.name) AS party, i.name AS item, sa.agreed_quantity AS quantity, sa.agreed_unit AS unit, sa.rate_paise_per_qtl, sa.broker_name, sa.moisture_pct, sa.agreement_date, sa.delivery_start, sa.delivery_end, sa.delivery_tolerance_pct, sa.commission_type, sa.commission_value, sa.commission_paise, sa.advance_paise, sa.status, sa.note FROM saudas sa LEFT JOIN suppliers s ON s.id = sa.supplier_id LEFT JOIN buyers b ON b.id = sa.buyer_id LEFT JOIN items i ON i.id = sa.item_id WHERE sa.mill_id = ? AND sa.deleted_at IS NULL ORDER BY sa.created_at DESC`).bind(mill.id).all<Record<string, unknown>>();
+  const safe = (value: unknown) => { const text = String(value ?? ''); return /^[=+\-@]/.test(text) ? "'" + text : text; };
+  const cell = (value: unknown) => '"' + safe(value).replaceAll('"', '""') + '"';
+  const header = ['Code', 'Direction', 'Party', 'Item', 'Quantity', 'Unit', 'Rate (₹/qtl)', 'Broker', 'Moisture %', 'Agreement date', 'Delivery start', 'Delivery end', 'Tolerance %', 'Commission type', 'Commission value', 'Fixed commission (₹)', 'Advance (₹)', 'Status', 'Terms'];
+  const rows = result.results.map((row) => [row.code, row.direction, row.party, row.item, row.quantity, row.unit, Number(row.rate_paise_per_qtl || 0) / 100, row.broker_name, row.moisture_pct, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_value, Number(row.commission_paise || 0) / 100, Number(row.advance_paise || 0) / 100, row.status, row.note]);
+  return new Response([header, ...rows].map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n', { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="millsaathi-saudas.csv"' } });
+});
+
+api.get('/saudas/import/template.csv', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const header = 'direction,party,item,quantity,unit,rate,broker,moisture_pct,agreement_date,delivery_start,delivery_end,delivery_tolerance_pct,commission_type,commission_value,advance,note\r\n';
+  return new Response(header, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="millsaathi-saudas-import-template.csv"' } });
+});
+
+type SaudaImportRow = { direction: string; supplier_id: string | null; buyer_id: string | null; item_id: string; quantity: number; unit: string; rate_paise_per_qtl: number; broker_name: string; moisture_pct: number | null; agreement_date: string; delivery_start: string | null; delivery_end: string | null; delivery_tolerance_pct: number; commission_type: string | null; commission_value: number; advance_paise: number; note: string | null };
+async function parseSaudaImportRows(db: D1Database, millId: string, rows: Record<string, unknown>[]) {
+  const [suppliers, buyers, items] = await db.batch([
+    db.prepare(`SELECT id, name FROM suppliers WHERE mill_id = ? AND deleted_at IS NULL`).bind(millId),
+    db.prepare(`SELECT id, name FROM buyers WHERE mill_id = ? AND deleted_at IS NULL`).bind(millId),
+    db.prepare(`SELECT id, name FROM items WHERE mill_id = ? AND deleted_at IS NULL`).bind(millId),
+  ]);
+  const byName = (records: { id: string; name: string }[]) => new Map(records.map((record) => [record.name.trim().toLowerCase(), record.id]));
+  const supplierIds = byName(suppliers.results as { id: string; name: string }[]), buyerIds = byName(buyers.results as { id: string; name: string }[]), itemIds = byName(items.results as { id: string; name: string }[]);
+  return rows.map((raw, index) => {
+    const direction = String(raw.direction || '').trim().toLowerCase();
+    const party = String(raw.party || '').trim().toLowerCase(), itemName = String(raw.item || '').trim().toLowerCase();
+    const quantity = Number(raw.quantity), unit = String(raw.unit || 'QUINTAL').trim().toUpperCase(), rate = Number(raw.rate);
+    const tolerance = raw.delivery_tolerance_pct === '' || raw.delivery_tolerance_pct == null ? 5 : Number(raw.delivery_tolerance_pct);
+    const commissionType = String(raw.commission_type || '').trim().toLowerCase();
+    const commissionValue = Number(raw.commission_value || 0), moisture = raw.moisture_pct === '' || raw.moisture_pct == null ? null : Number(raw.moisture_pct);
+    const start = String(raw.delivery_start || '').trim() || null, end = String(raw.delivery_end || '').trim() || null;
+    let error = '';
+    if (!['in', 'out'].includes(direction)) error = 'direction must be in or out';
+    else if (!party || !(direction === 'in' ? supplierIds : buyerIds).has(party)) error = `${direction === 'in' ? 'supplier' : 'buyer'} party was not found`;
+    else if (!itemIds.has(itemName)) error = 'item was not found';
+    else if (!Number.isFinite(quantity) || quantity <= 0 || !['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(unit)) error = 'quantity must be positive and use a supported unit';
+    else if (!Number.isFinite(rate) || rate < 0) error = 'rate must be a non-negative ₹/qtl value';
+    else if (moisture != null && (!Number.isFinite(moisture) || moisture < 0 || moisture > 100)) error = 'moisture must be between 0 and 100';
+    else if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance > 100) error = 'tolerance must be between 0 and 100';
+    else if (start && end && start > end) error = 'delivery start must be before delivery end';
+    else if (commissionType && !['fixed', 'per_unit', 'percentage'].includes(commissionType)) error = 'invalid commission type';
+    else if (commissionType && (!Number.isFinite(commissionValue) || commissionValue < 0)) error = 'commission value must be non-negative';
+    const row: SaudaImportRow | null = error ? null : { direction, supplier_id: direction === 'in' ? supplierIds.get(party)! : null, buyer_id: direction === 'out' ? buyerIds.get(party)! : null, item_id: itemIds.get(itemName)!, quantity, unit, rate_paise_per_qtl: Math.round(rate * 100), broker_name: String(raw.broker || 'Direct').trim() || 'Direct', moisture_pct: moisture, agreement_date: String(raw.agreement_date || istToday()).trim() || istToday(), delivery_start: start, delivery_end: end, delivery_tolerance_pct: tolerance, commission_type: commissionType || null, commission_value: commissionValue, advance_paise: Math.round(Number(raw.advance || 0) * 100), note: String(raw.note || '').trim() || null };
+    return { row_number: index + 1, error: error || null, row };
+  });
+}
+
+api.post('/saudas/import/validate', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const rows = Array.isArray(body.rows) ? body.rows as Record<string, unknown>[] : [];
+  if (!rows.length || rows.length > 200) return c.json({ error: 'upload between 1 and 200 rows' }, 400);
+  const checked = await parseSaudaImportRows(c.env.DB, mill.id, rows);
+  return c.json({ rows: checked, valid: checked.filter((entry) => !entry.error).length, errors: checked.filter((entry) => entry.error).length });
+});
+
+api.post('/saudas/import/commit', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const rows = Array.isArray(body.rows) ? body.rows as Record<string, unknown>[] : [];
+  if (!rows.length || rows.length > 200) return c.json({ error: 'upload between 1 and 200 rows' }, 400);
+  const checked = await parseSaudaImportRows(c.env.DB, mill.id, rows);
+  const valid = checked.filter((entry): entry is { row_number: number; error: null; row: SaudaImportRow } => !entry.error && !!entry.row).map((entry) => entry.row);
+  if (checked.some((entry) => entry.error)) return c.json({ error: 'import contains invalid rows', rows: checked }, 400);
+  for (const row of valid) {
+    const quantity = await normalizeItemQuantity(c.env.DB, mill.id, row.item_id, row.quantity, row.unit);
+    if (!quantity || quantity.base <= 0) return c.json({ error: 'one or more quantities cannot be converted for its item' }, 400);
+    const code = await nextCode(c.env.DB, mill.id, 'sauda', 'SAU');
+    await c.env.DB.prepare(`INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(uuid(), mill.id, code, row.direction, row.supplier_id, row.buyer_id, row.broker_name, row.item_id, Math.round(quantity.base), quantity.quantity, quantity.unit, row.rate_paise_per_qtl, row.moisture_pct, row.advance_paise, row.note, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_type === 'fixed' ? null : row.commission_value, row.commission_type === 'fixed' ? Math.round(row.commission_value * 100) : null).run();
+  }
+  await audit(c, 'sauda_import', mill.id, 'CREATE', `${valid.length} saudas imported`);
+  return c.json({ imported: valid.length });
+});
+
+api.post('/saudas/bulk-archive', async (c) => {
+  const { user, mill } = c.get('session');
+  if (effectiveRole(user) !== 'owner') return c.json({ error: 'only the owner can archive saudas' }, 403);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const ids = [...new Set(Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [])].slice(0, 200);
+  if (!ids.length) return c.json({ error: 'select at least one sauda' }, 400);
+  const placeholders = ids.map(() => '?').join(',');
+  const result = await c.env.DB.prepare(`UPDATE saudas SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), deleted_by = ? WHERE mill_id = ? AND id IN (${placeholders}) AND deleted_at IS NULL`).bind(user.id, mill.id, ...ids).run();
+  await audit(c, 'sauda', mill.id, 'BULK_ARCHIVE', `${result.meta.changes || 0} saudas archived`);
+  return c.json({ archived: result.meta.changes || 0 });
 });
 
 api.patch('/lots/:id', async (c) => {

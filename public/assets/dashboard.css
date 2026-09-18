@@ -134,6 +134,7 @@ html[data-theme="dark"] .fld input, html[data-theme="dark"] .fld select, html[da
 html[data-theme="dark"] .btn.ghost { background:#18222D; color:var(--ink); border-color:var(--muted2); }
 html[data-theme="dark"] .btn.sm { background:#243241; color:#F2F4F7; border-color:#405163; }
 html[data-theme="dark"] .btn.sm:hover { background:var(--active-action); color:#1B2431; border-color:var(--active-action); }
+html[data-theme="dark"] .sauda-detail-popover { background:#18222D; }
 html[data-theme="dark"] .gate-row.gate-in td { background:#14251D; color:#E5F4EA; }
 html[data-theme="dark"] .gate-row.gate-out td { background:#152235; color:#E4EEFC; }
 html[data-theme="dark"] .gate-row.gate-in .dir { background:#245437; color:#D7F1DE; }
@@ -157,6 +158,15 @@ html[data-theme="dark"] input::placeholder { color:#8492A3; }
 .btn.sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; background: #EEF1F5; color: var(--muted2); }
 .btn.sm:hover { background: var(--ink); color: #fff; }
 .btn:disabled { opacity: .5; cursor: default; }
+.sauda-detail { position:relative; display:inline-flex; margin-left:6px; vertical-align:middle; }
+.sauda-info { width:18px; height:18px; padding:0; border:1px solid var(--muted2); border-radius:50%; background:var(--bg); color:var(--muted2); font:800 12px/16px Georgia,serif; cursor:help; }
+.sauda-info:hover, .sauda-info:focus { border-color:var(--ink); color:var(--ink); outline:none; }
+.sauda-detail-popover { position:absolute; z-index:100; left:0; top:calc(100% + 8px); width:278px; padding:12px; border:1px solid var(--border); border-radius:9px; background:#fff; color:var(--ink); box-shadow:0 12px 28px rgba(16,20,27,.18); font:500 12px/1.35 'IBM Plex Sans',system-ui,sans-serif; opacity:0; visibility:hidden; pointer-events:none; transform:translateY(-3px); transition:opacity .14s ease, transform .14s ease, visibility .14s; }
+.sauda-detail:hover .sauda-detail-popover, .sauda-detail:focus-within .sauda-detail-popover { opacity:1; visibility:visible; pointer-events:auto; transform:translateY(0); }
+.sauda-detail-popover > strong { display:block; margin-bottom:8px; font:800 13px 'IBM Plex Sans',system-ui,sans-serif; }
+.sauda-detail-popover > span { display:grid; grid-template-columns:112px minmax(0,1fr); gap:8px; padding:3px 0; }
+.sauda-detail-popover b { color:var(--muted2); font-weight:700; }
+.sauda-detail-popover em { font-style:normal; overflow-wrap:anywhere; }
 
 dialog.modal { border: 1px solid var(--border); border-radius: 14px; padding: 0; width: min(440px, 92vw); box-shadow: 0 30px 70px rgba(16,20,27,.3); }
 dialog.modal::backdrop { background: rgba(27,36,49,.45); }
