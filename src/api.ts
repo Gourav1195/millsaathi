@@ -221,7 +221,6 @@ api.get('/overview', async (c) => {
   const db = c.env.DB;
   const today = istToday();
   const weekAgo = istToday(-6);
-  const monthAgo = istToday(-30);
   const trend = trendConfig(c.req.query('range'));
   const [gateColumnsRes, lotColumnsRes] = await db.batch([
     db.prepare(`PRAGMA table_info(gate_entries)`),
@@ -231,7 +230,7 @@ api.get('/overview', async (c) => {
   const lotColumns = new Set((lotColumnsRes.results as { name: string }[]).map((col) => col.name));
   const hasStockReceiptFields = gateColumns.has('stock_status') && lotColumns.has('gate_entry_id');
 
-  const [gateRes, gateWeekRes, saudasRes, lotsRes, godownsRes, suppliersRes, buyersRes, itemsRes, prodRes, payTodayRes, pendingReceiptsRes, activityRes] =
+  const [gateRes, gateWeekRes, saudasRes, lotsRes, godownsRes, suppliersRes, buyersRes, itemsRes, prodRes, payTodayRes, pendingReceiptsRes, rejectedReceiptsRes, activityRes] =
     await db.batch([
       db.prepare(
         `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
@@ -322,12 +321,28 @@ api.get('/overview', async (c) => {
                AND g.direction = 'in'
                AND g.status = 'done'
                AND g.stock_status = 'pending'
-               AND g.entry_date >= ?2
                AND COALESCE(g.gross_kg,0) > COALESCE(g.tare_kg,0)
                AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
              ORDER BY g.entry_date DESC, g.updated_at DESC
              LIMIT 20`,
-          ).bind(mill.id, monthAgo)
+          ).bind(mill.id)
+        : db.prepare(`SELECT NULL AS id WHERE 0`),
+      hasStockReceiptFields
+        ? db.prepare(
+            `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
+                    s.name AS supplier_name, i.name AS item_name
+             FROM gate_entries g
+             LEFT JOIN suppliers s ON s.id = g.supplier_id
+             LEFT JOIN items i ON i.id = g.item_id
+             WHERE g.mill_id = ?
+               AND g.direction = 'in'
+               AND g.status = 'done'
+               AND g.stock_status = 'skipped'
+               AND g.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
+               AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
+             ORDER BY g.updated_at DESC
+             LIMIT 20`,
+          ).bind(mill.id)
         : db.prepare(`SELECT NULL AS id WHERE 0`),
       db.prepare(
         `SELECT COUNT(*) AS gate_count,
@@ -463,8 +478,9 @@ api.get('/overview', async (c) => {
     trend: { range: trend.range, label: trend.label, data: trendData },
     alerts,
     pending_receipts: pendingReceiptsRes.results,
+    rejected_receipts: rejectedReceiptsRes.results,
     onboarding: { gate_count: activity.gate_count ?? 0, first_gate_date: activity.first_gate_date ?? null },
-    gate: gateToday,
+    gate: gateAll,
     saudas,
     lots,
     godowns: godownsRes.results,
@@ -847,6 +863,20 @@ api.post('/stock-receipts/:id/skip', async (c) => {
   return c.json({ ok: true });
 });
 
+api.post('/stock-receipts/:id/reopen', async (c) => {
+  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
+  const { mill } = c.get('session');
+  const res = await c.env.DB.prepare(
+    `UPDATE gate_entries
+     SET stock_status = 'pending', stock_note = 'Reopened for stock receipt', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE id = ? AND mill_id = ? AND direction = 'in' AND status = 'done' AND stock_status = 'skipped'
+       AND updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
+       AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = gate_entries.id)`,
+  ).bind(c.req.param('id'), mill.id).run();
+  if (!res.meta.changes) return c.json({ error: 'this rejected truck can no longer be reopened' }, 409);
+  return c.json({ ok: true });
+});
+
 api.post('/production', async (c) => {
   const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
   const { mill } = c.get('session');
@@ -878,14 +908,16 @@ api.post('/payments', async (c) => {
   if (b.party_kind !== 'supplier' && b.party_kind !== 'buyer') return c.json({ error: 'invalid party_kind' }, 400);
   const partyTable = b.party_kind === 'supplier' ? 'suppliers' : 'buyers';
   if (!await c.env.DB.prepare(`SELECT id FROM ${partyTable} WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(b.party_id, mill.id).first()) return c.json({ error: 'party not found' }, 400);
+  const documentId = String(b.document_id ?? '') || null;
+  if (documentId && !await c.env.DB.prepare(`SELECT id FROM documents WHERE id = ? AND mill_id = ? AND party_kind = ? AND party_id = ? AND status = 'POSTED'`).bind(documentId, mill.id, b.party_kind, b.party_id).first()) return c.json({ error: 'invoice not found for this party' }, 400);
   const id = uuid();
   await c.env.DB.prepare(
-    `INSERT INTO payments (id, mill_id, party_kind, party_id, direction, amount_paise, method, note, pay_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO payments (id, mill_id, party_kind, party_id, direction, amount_paise, method, note, pay_date, document_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(id, mill.id, b.party_kind, String(b.party_id ?? ''),
       b.party_kind === 'supplier' ? 'paid' : 'received', amount,
-      (b.method as string) || 'cash', (b.note as string) || null, (b.pay_date as string) || istToday())
+      (b.method as string) || 'cash', (b.note as string) || null, (b.pay_date as string) || istToday(), documentId)
     .run();
   await audit(c, 'payment', id, 'CREATE');
   return c.json({ id }, 201);
@@ -1489,29 +1521,60 @@ api.post('/documents', async (c) => {
   const financialYear = /^\d{4}-\d{2}$/.test(requestedFinancialYear) ? requestedFinancialYear : financialYearFor(issueDate);
   const sequence = await nextCode(c.env.DB, mill.id, `document_${prefix}_${financialYear}`, prefix);
   const documentNo = `${prefix}-${financialYear}-${sequence.slice(prefix.length + 1)}`;
-  const normalizedLines = lines.map((line) => ({ item_id: String(line.item_id ?? '') || null, description: String(line.description ?? '').trim(), hsn: String(line.hsn ?? '').trim() || null, quantity: line.quantity == null ? null : Number(line.quantity), unit: String(line.unit ?? '').trim() || null, rate: Number(line.rate_paise ?? 0), taxable: Number(line.taxable_paise ?? 0) })).filter((line) => line.description);
+  const normalizedLines = lines.map((line) => ({ item_id: String(line.item_id ?? '') || null, description: String(line.description ?? '').trim(), hsn: String(line.hsn ?? '').trim() || null, quantity: line.quantity == null ? null : Number(line.quantity), unit: String(line.unit ?? '').trim() || null, rate: Number(line.rate_paise ?? 0), taxable: Number(line.taxable_paise ?? 0), gstRate: Number(line.gst_rate_pct ?? b.gst_rate_pct ?? 0) })).filter((line) => line.description);
   if (!normalizedLines.length) return c.json({ error: 'at least one line description is required' }, 400);
   if (normalizedLines.some((line) => (line.quantity != null && (!Number.isFinite(line.quantity) || line.quantity < 0)) || !Number.isFinite(line.rate) || line.rate < 0 || !Number.isFinite(line.taxable) || line.taxable < 0)) return c.json({ error: 'document quantities and amounts must be non-negative numbers' }, 400);
   normalizedLines.forEach((line) => { line.rate = Math.round(line.rate); line.taxable = Math.round(line.taxable); });
   const subtotal = normalizedLines.reduce((sum, line) => sum + line.taxable, 0);
+  if (normalizedLines.some((line) => !Number.isFinite(line.gstRate) || line.gstRate < 0 || line.gstRate > 100)) return c.json({ error: 'GST rate must be between 0 and 100' }, 400);
   const discount = Number(b.discount_paise ?? 0);
   const nonNegativeMoney = ['cgst_paise', 'sgst_paise', 'igst_paise', 'cess_paise'];
   if (!Number.isFinite(discount) || discount < 0 || discount > subtotal || nonNegativeMoney.some((key) => !Number.isFinite(Number(b[key] ?? 0)) || Number(b[key] ?? 0) < 0) || !Number.isFinite(Number(b.rounding_paise ?? 0))) return c.json({ error: 'document amounts are invalid' }, 400);
-  const tax = ['cgst_paise', 'sgst_paise', 'igst_paise', 'cess_paise', 'rounding_paise'].reduce((sum, key) => sum + Math.round(Number(b[key] ?? 0)), 0);
+  const requestedTaxRate = Number(b.gst_rate_pct ?? NaN);
+  const calculatedTax = Number.isFinite(requestedTaxRate) ? Math.round(subtotal * requestedTaxRate / 100) : null;
+  const intraState = String(b.tax_mode ?? '') === 'INTRA';
+  const cgst = calculatedTax == null ? Math.round(Number(b.cgst_paise ?? 0)) : intraState ? Math.floor(calculatedTax / 2) : 0;
+  const sgst = calculatedTax == null ? Math.round(Number(b.sgst_paise ?? 0)) : intraState ? calculatedTax - cgst : 0;
+  const igst = calculatedTax == null ? Math.round(Number(b.igst_paise ?? 0)) : intraState ? 0 : calculatedTax;
+  const tax = cgst + sgst + igst + Math.round(Number(b.cess_paise ?? 0)) + Math.round(Number(b.rounding_paise ?? 0));
   const total = subtotal - discount + tax;
   const statements: D1PreparedStatement[] = [c.env.DB.prepare(`INSERT INTO documents (id, mill_id, document_type, document_no, financial_year, issue_date, party_kind, party_id, sauda_id, gate_entry_id, subtotal_paise, discount_paise, cgst_paise, sgst_paise, igst_paise, cess_paise, rounding_paise, total_paise, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(documentId, mill.id, type, documentNo, financialYear, issueDate, partyKind || null, partyId || null, String(b.sauda_id ?? '') || null, String(b.gate_entry_id ?? '') || null, subtotal, Math.round(discount), Math.round(Number(b.cgst_paise ?? 0)), Math.round(Number(b.sgst_paise ?? 0)), Math.round(Number(b.igst_paise ?? 0)), Math.round(Number(b.cess_paise ?? 0)), Math.round(Number(b.rounding_paise ?? 0)), total, String(b.notes ?? '') || null, user.id)];
-  for (const line of normalizedLines) statements.push(c.env.DB.prepare(`INSERT INTO document_lines (id, mill_id, document_id, item_id, description, hsn, quantity, unit, rate_paise, taxable_paise) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(uuid(), mill.id, documentId, line.item_id, line.description, line.hsn, line.quantity, line.unit, line.rate, line.taxable));
+    .bind(documentId, mill.id, type, documentNo, financialYear, issueDate, partyKind || null, partyId || null, String(b.sauda_id ?? '') || null, String(b.gate_entry_id ?? '') || null, subtotal, Math.round(discount), cgst, sgst, igst, Math.round(Number(b.cess_paise ?? 0)), Math.round(Number(b.rounding_paise ?? 0)), total, String(b.notes ?? '') || null, user.id)];
+  for (const line of normalizedLines) statements.push(c.env.DB.prepare(`INSERT INTO document_lines (id, mill_id, document_id, item_id, description, hsn, quantity, unit, rate_paise, taxable_paise, gst_rate_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(uuid(), mill.id, documentId, line.item_id, line.description, line.hsn, line.quantity, line.unit, line.rate, line.taxable, line.gstRate));
   await c.env.DB.batch(statements);
   await audit(c, 'document', documentId, 'CREATE');
   return c.json({ id: documentId, document_no: documentNo, total_paise: total }, 201);
 });
 
+api.post('/documents/upload', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const form = await c.req.formData();
+  const file = form.get('file');
+  if (!(file instanceof File) || !file.size) return c.json({ error: 'choose a file to upload' }, 400);
+  if (file.size > 1024 * 1024) return c.json({ error: 'uploads are limited to 1 MB in V1' }, 400);
+  const documentType = String(form.get('document_type') || 'PAYMENT_RECEIPT');
+  if (!['PURCHASE_STATEMENT', 'SALES_INVOICE', 'PAYMENT_RECEIPT', 'WEIGHMENT_SLIP'].includes(documentType)) return c.json({ error: 'invalid document type' }, 400);
+  const id = uuid();
+  const number = `UPL-${(await nextCode(c.env.DB, mill.id, 'uploaded_document', 'UPL')).slice(4)}`;
+  await c.env.DB.prepare(`INSERT INTO documents (id, mill_id, document_type, document_no, issue_date, source, upload_name, upload_mime, upload_data, notes, created_by) VALUES (?, ?, ?, ?, ?, 'UPLOADED', ?, ?, ?, ?, ?)`)
+    .bind(id, mill.id, documentType, number, String(form.get('issue_date') || istToday()), file.name, file.type || 'application/octet-stream', await file.arrayBuffer(), String(form.get('notes') || '') || null, user.id).run();
+  await audit(c, 'document', id, 'CREATE', 'Uploaded document');
+  return c.json({ id, document_no: number }, 201);
+});
+
 api.get('/documents', async (c) => {
   const { user, mill } = c.get('session');
-  const result = await c.env.DB.prepare(`SELECT * FROM documents WHERE mill_id = ? ORDER BY issue_date DESC, created_at DESC LIMIT 500`).bind(mill.id).all();
+  const result = await c.env.DB.prepare(`SELECT d.*, COALESCE(b.name, s.name) AS party_name, COALESCE((SELECT SUM(p.amount_paise) FROM payments p WHERE p.mill_id = d.mill_id AND p.document_id = d.id AND p.status = 'POSTED'), 0) AS paid_paise FROM documents d LEFT JOIN buyers b ON d.party_kind='buyer' AND b.id=d.party_id LEFT JOIN suppliers s ON d.party_kind='supplier' AND s.id=d.party_id WHERE d.mill_id = ? ORDER BY d.issue_date DESC, d.created_at DESC LIMIT 500`).bind(mill.id).all();
   const body = { documents: result.results };
   return c.json(user.role_code === 'manager' || user.role === 'manager' ? stripMoney(body) : body);
+});
+
+api.get('/documents/:id/file', async (c) => {
+  const { mill } = c.get('session');
+  const file = await c.env.DB.prepare(`SELECT upload_name, upload_mime, upload_data FROM documents WHERE id = ? AND mill_id = ? AND source = 'UPLOADED'`).bind(c.req.param('id'), mill.id).first<{ upload_name: string; upload_mime: string; upload_data: ArrayBuffer }>();
+  if (!file?.upload_data) return c.json({ error: 'uploaded file not found' }, 404);
+  return new Response(file.upload_data, { headers: { 'content-type': file.upload_mime, 'content-disposition': `inline; filename="${file.upload_name.replace(/["\\]/g, '')}"` } });
 });
 
 api.get('/documents/export.csv', async (c) => {

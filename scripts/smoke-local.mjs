@@ -69,6 +69,11 @@ assert.deepEqual(
   monthlyGateOverview.body.gate?.map((gate) => gate.id),
   'the Gate & Weighbridge list must not be limited by the dashboard trend range',
 );
+assert.equal(
+  dailyGateOverview.body.gate?.length,
+  dailyGateOverview.body.onboarding?.gate_count,
+  'the Gate & Weighbridge list should include every gate entry for the mill',
+);
 const processTypes = await request('/api/process-types', { headers: { cookie: newMillCookie } });
 for (const name of ['Pre-Cleaning', 'De-husking (Hulling)', 'Paddy Separation', 'Whitening and Polishing', 'Grading and Color Sorting', 'Weighing and Packaging']) {
   assert.ok(processTypes.body.process_types?.some((type) => type.name === name), 'default process type should be available: ' + name);

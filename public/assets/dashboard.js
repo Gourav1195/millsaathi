@@ -9,8 +9,8 @@
   var AUTH_CONFIG = null;
   var TURNSTILE_SCRIPT = null;
   var requestedPage = new URLSearchParams(location.search).get('page');
-  var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
-  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, pageIndex: {} };
+  var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'billing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -108,7 +108,7 @@
     else if (page === 'stock') fields = optionsFrom(rows, 'godown_name', 'godowns') + optionsFrom(rows, 'item_name', 'materials');
     else if (page === 'suppliers' || page === 'buyers') fields = optionsFrom(rows, 'type', 'types') + optionsFrom(rows, 'location', 'locations', function (r) { return page === 'suppliers' ? r.place : r.location; });
     else if (page === 'items') fields = optionsFrom(rows, 'category', 'categories', function (r) { return r.category_code || r.category; });
-    else if (page === 'documents') fields = optionsFrom(rows, 'status', 'statuses', function (r) { return String(r.status || '').toLowerCase(); }) + optionsFrom(rows, 'document_type', 'types');
+    else if (page === 'documents') fields = '<select class="table-filter" data-filter-key="source"><option value="">All documents</option><option value="GENERATED"' + (f.source === 'GENERATED' ? ' selected' : '') + '>Generated</option><option value="UPLOADED"' + (f.source === 'UPLOADED' ? ' selected' : '') + '>Uploaded</option></select>' + optionsFrom(rows, 'status', 'statuses', function (r) { return String(r.status || '').toLowerCase(); }) + optionsFrom(rows, 'document_type', 'types');
     var quantity = ['gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items'].indexOf(page) >= 0;
     var dates = page === 'documents';
     return '<div class="table-filters"><div class="filter-title"><span>⌕</span><div><strong>Filter ' + esc(kind) + '</strong><small>Search and narrow the results</small></div></div><div class="filter-fields"><label class="filter-search"><span>⌕</span><input id="ms-q" placeholder="Search ' + esc(kind.toLowerCase()) + '…" value="' + esc(S.q) + '"></label>' + fields + (quantity ? '<label class="range-field"><span>Qty qtl</span><input class="table-filter" data-filter-key="min_qty" type="number" min="0" step="0.01" placeholder="Min" value="' + esc(f.min_qty || '') + '"><span>–</span><input class="table-filter" data-filter-key="max_qty" type="number" min="0" step="0.01" placeholder="Max" value="' + esc(f.max_qty || '') + '"></label>' : '') + (dates ? '<input class="table-filter" data-filter-key="from_date" type="date" value="' + esc(f.from_date || '') + '"><input class="table-filter" data-filter-key="to_date" type="date" value="' + esc(f.to_date || '') + '">' : '') + '<button class="clear-filters" data-act="filters-clear"' + ((!S.q && !Object.keys(f).length) ? ' disabled' : '') + '>Clear</button></div></div>';
@@ -118,7 +118,7 @@
     return rows.filter(function (r) {
       var qty = quantityFor(r), location = S.page === 'suppliers' ? r.place : r.location;
       var matchesSearch = !q || Object.keys(r).some(function (k) { return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(q) >= 0; });
-      var matchesFields = (!f.direction || f.direction === r.direction) && (!f.status || f.status === String(r.status || '').toLowerCase()) && (!f.item_name || f.item_name === r.item_name) && (!f.godown_name || f.godown_name === r.godown_name) && (!f.type || f.type === r.type) && (!f.location || f.location === location) && (!f.category || f.category === (r.category_code || r.category)) && (!f.document_type || f.document_type === r.document_type);
+      var matchesFields = (!f.direction || f.direction === r.direction) && (!f.status || f.status === String(r.status || '').toLowerCase()) && (!f.item_name || f.item_name === r.item_name) && (!f.godown_name || f.godown_name === r.godown_name) && (!f.type || f.type === r.type) && (!f.location || f.location === location) && (!f.category || f.category === (r.category_code || r.category)) && (!f.document_type || f.document_type === r.document_type) && (!f.source || f.source === (r.source || 'GENERATED'));
       var matchesRange = (qty == null || (!f.min_qty || qty >= Number(f.min_qty)) && (!f.max_qty || qty <= Number(f.max_qty))) && (!f.from_date || String(r.issue_date || '') >= f.from_date) && (!f.to_date || String(r.issue_date || '') <= f.to_date);
       return matchesSearch && matchesFields && matchesRange;
     });
@@ -381,6 +381,7 @@
     buyers: { t: 'Buyers', s: function () { return 'Rice and by-product customers'; }, search: true },
     items: { t: 'Items', s: function () { return 'Varieties, SKUs and by-products'; }, search: true },
     processing: { t: 'Processing', s: function () { return 'Transform inputs into traceable outputs'; }, search: false },
+    billing: { t: 'Billing', s: function () { return 'Sales invoices, GST and collections'; }, search: true },
     team: { t: 'Team', s: function () { return 'Members and access'; }, search: false },
     documents: { t: 'Documents', s: function () { return 'Purchase, sales and weighment records'; }, search: true },
     bugs: { t: 'Bug Reports', s: function () { return 'Private support queue'; }, search: true },
@@ -671,7 +672,7 @@
         '<div class="s">' + (cap > 0 ? 'of ' + qtl(cap) + ' qtl compatible capacity' : 'Capacity utilisation unavailable for this unit') + '</div>' +
         '<div class="gd-fill"><div style="width:' + fill + '%;background:' + color + '"></div></div></div>';
     }).join('');
-    var pending = ov.pending_receipts || [];
+    var pending = ov.pending_receipts || [], rejected = ov.rejected_receipts || [];
     var receiptPanel = '';
     if (pending.length) {
       var shownReceipts = S.stockReceiptsExpanded ? pending : pending.slice(0, 1);
@@ -691,6 +692,9 @@
     } else if (live) {
       receiptPanel = '<div class="card pad receipt-empty"><div class="card-h">No pending stock receipts</div><div class="hint" style="margin-top:4px">When an incoming truck is marked Done at the gate, it will appear here for one-click accept or reject.</div></div>';
     }
+    var rejectedShown = S.stockRejectedExpanded ? rejected : rejected.slice(0, 3);
+    var rejectedPanel = rejected.length && S.stockRejectedOpen ? '<div class="card rejected-receipts"><div class="card-top"><div><div class="card-h">Recently rejected trucks</div><div class="hint">A rejection can be reopened for two days, then it is kept as an audit decision.</div></div><span class="hint">' + rejectedShown.length + ' shown</span></div><div class="rejected-receipt-list">' + rejectedShown.map(function (g) { return '<div class="rejected-receipt"><div><strong>' + esc(g.token_no) + '</strong><span>' + esc(g.supplier_name || 'Supplier') + ' · ' + esc(g.item_name || 'Item') + ' · ' + qtl(g.net_kg) + ' qtl</span></div>' + (can('EDIT') ? '<button class="btn sm" data-act="receipt-reopen" data-id="' + esc(g.id) + '">Restore to stock</button>' : '') + '</div>'; }).join('') + '</div>' + (rejected.length > 3 ? '<div class="receipt-more"><span class="hint">' + (S.stockRejectedExpanded ? 'Showing all ' + rejected.length : (rejected.length - 3) + ' more rejected truck' + (rejected.length > 4 ? 's' : '')) + '</span><button class="btn sm" data-act="receipt-rejected-more">' + (S.stockRejectedExpanded ? 'Show less' : 'Show all ' + rejected.length) + '</button></div>' : '') + '</div>' : '';
+    var rejectedToggle = rejected.length ? '<button class="btn sm" data-act="receipt-rejected-toggle">' + (S.stockRejectedOpen ? 'Hide rejected trucks' : 'See rejected trucks (' + rejected.length + ')') + '</button>' : '';
     var rows = filt(ov.lots), page = pageSlice(rows, 'stock'); rows = page.rows;
     var body = rows.map(function (s) {
       return '<tr><td class="tok">' + esc(s.code) + '</td><td class="b6">' + esc(s.godown_name || '—') + '</td>' +
@@ -701,7 +705,7 @@
         (can('EDIT') ? '<td><button class="btn sm" data-act="lot-edit" data-id="' + esc(s.id) + '">Edit</button></td>' : '') + '</tr>';
     }).join('') || '<tr><td colspan="7" class="empty">No lots on hand.</td></tr>';
     return '<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:18px">' + cards + '</div>' +
-      (live ? receiptPanel : '') +
+      (live ? receiptPanel + (rejectedToggle ? '<div class="receipt-controls">' + rejectedToggle + '</div>' : '') + rejectedPanel : '') +
       '<div class="card"><div class="card-top"><div class="card-h">Lots on hand</div>' +
       '<div style="display:flex;gap:10px;align-items:center"><span class="hint">' + rows.length + ' lots</span>' +
       (can('CREATE') ? '<button class="btn acc" data-act="lot-new">+ New lot</button>' : '') + '</div></div>' +
@@ -894,9 +898,10 @@
     var inputSummary = draft.inputs.map(function (input) { return '<div class="process-selected-line"><span>' + esc(input.item_name || 'Material') + ' · ' + esc(input.lot_code) + '</span><b>' + esc(input.quantity) + ' ' + esc(String(input.unit).toLowerCase()) + '</b></div>'; }).join('') || '<div class="hint">No input lot selected.</div>';
     var balance = processBalance(draft);
     var outputs = draft.outputs.map(function (output, index) { var label = output.semantic_type === 'byproduct' ? 'By-product' : output.semantic_type === 'waste' ? 'Loss' : 'Main output'; return '<div class="process-output-card"><div class="process-output-card-head"><div><strong>' + esc(output.item_name || 'Output') + '</strong><span>' + esc(label) + '</span></div>' + (output.template_line_id ? '' : '<button class="btn sm\" data-act=\"process-output-remove\" data-id=\"' + index + '\">Remove</button>') + '</div><div class=\"process-output-input\"><input data-process-output=\"' + index + '\" type=\"number\" step=\"0.001\" value=\"' + esc(output.quantity == null ? '' : output.quantity) + '\"' + (output.auto_calculate ? ' readonly' : '') + ' placeholder=\"Quantity\"><select data-process-unit=\"' + index + '\">' + processUnitOptions().map(function (unit) { return '<option value=\"' + unit.value + '\"' + (unit.value === output.unit ? ' selected' : '') + '>' + unit.label + '</option>'; }).join('') + '</select></div><div class=\"hint\">' + (output.auto_calculate ? 'Calculated from mass balance' : 'Enter actual quantity') + '</div></div>'; }).join('');
-    return '<div class="process-toolbar"><div class="process-toolbar-actions"><div class="process-stepper">' + types.map(function (type, index) { return (index ? '<span class="process-step-arrow">→</span>' : '') + '<button class="' + (type.id === draft.processTypeId ? 'on' : '') + '" data-act="process-step" data-id="' + esc(type.id) + '">' + esc(type.name) + '</button>'; }).join('') + '</div><select class="process-select" data-process-select aria-label="Choose process">' + types.map(function (type) { return '<option value="' + esc(type.id) + '"' + (type.id === draft.processTypeId ? ' selected' : '') + '>' + esc(type.name) + '</option>'; }).join('') + '</select>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-catalog-toggle">Edit processes</button>' : '') + '</div></div>' +
-      '<div class="process-flow"><section class="process-column"><div class="process-column-title">Available materials <span>' + lots.length + '</span></div><div class="process-materials">' + materials + '</div></section><section class="process-column process-center"><div class="process-column-title">Process</div><div class="process-dropzone" data-process-drop="1"><div class="process-drop-title">' + esc(workspace.process_type.name) + '</div><div class="hint">Drop a lot here or use a material card</div><div class="process-selected">' + inputSummary + '</div></div><div class="process-inline-actions"><button class="btn sm" data-act="process-input-add">+ Add input</button>' + (draft.inputs.length ? '<button class="btn sm" data-act="process-input-clear">Clear inputs</button>' : '') + '</div></section><section class="process-column"><div class="process-column-title">Outputs</div><div class="process-outputs">' + (outputs || '<div class="empty">Configure outputs or add one manually.</div>') + '</div><button class="btn ghost process-add-output" data-act="process-output-add">+ Add output</button><label class="process-godown-label">Destination godown<select data-process-destination>' + [{ value: '', label: 'Choose godown' }].concat((workspace.godowns || []).map(function (godown) { return { value: godown.id, label: godown.name }; })).map(function (godown) { return '<option value="' + esc(godown.value) + '"' + (godown.value === draft.destinationGodownId ? ' selected' : '') + '>' + esc(godown.label) + '</option>'; }).join('') + '</select></label></section></div>' +
-       '<div class="process-balance-row"><div id="process-balance">' + processBalanceMarkup(balance) + '</div><div class="process-actions"><button class="btn acc process-post-btn" data-act="process-run-post"' + (draft.inputs.length ? '' : ' disabled') + '>Post Run</button></div></div>' + processCatalogMarkup();
+    var postHint = draft.outputs.length ? '<div class="process-post-hint">Review outputs, then use <b>Post Run</b> below to save this process and update stock.</div>' : '';
+    return '<div class="process-toolbar"><div class="process-toolbar-actions"><div class="process-stepper' + (S.processStepsExpanded ? ' expanded' : '') + '">' + types.map(function (type, index) { return (index ? '<span class="process-step-arrow">→</span>' : '') + '<button class="' + (type.id === draft.processTypeId ? 'on' : '') + '" data-act="process-step" data-id="' + esc(type.id) + '">' + esc(type.name) + '</button>'; }).join('') + '</div><select class="process-select" data-process-select aria-label="Choose process">' + types.map(function (type) { return '<option value="' + esc(type.id) + '"' + (type.id === draft.processTypeId ? ' selected' : '') + '>' + esc(type.name) + '</option>'; }).join('') + '</select>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm process-catalog-toggle" data-act="process-catalog-toggle">Edit processes</button>' : '') + '</div></div>' + (types.length > 1 ? '<div class="process-step-reveal"><button class="process-step-arrow-button" data-act="process-steps-toggle" aria-label="' + (S.processStepsExpanded ? 'Show compact process list' : 'Show all process steps') + '">' + (S.processStepsExpanded ? '⌃' : '⌄') + '</button></div>' : '') + processCatalogMarkup() +
+      '<div class="process-flow"><section class="process-column"><div class="process-column-title">Available materials <span>' + lots.length + '</span></div><div class="process-materials">' + materials + '</div></section><section class="process-column process-center"><div class="process-column-title">Process</div><div class="process-dropzone" data-process-drop="1"><div class="process-drop-title">' + esc(workspace.process_type.name) + '</div><div class="hint">Drop a lot here or use a material card</div><div class="process-selected">' + inputSummary + '</div></div><div class="process-inline-actions"><button class="btn sm" data-act="process-input-add">+ Add input</button>' + (draft.inputs.length ? '<button class="btn sm" data-act="process-input-clear">Clear inputs</button>' : '') + '</div></section><section class="process-column"><div class="process-column-title">Outputs</div><div class="process-outputs">' + (outputs || '<div class="empty">Configure outputs or add one manually.</div>') + '</div><button class="btn ghost process-add-output" data-act="process-output-add">+ Add output</button><label class="process-godown-label">Destination godown<select data-process-destination>' + [{ value: '', label: 'Choose godown' }].concat((workspace.godowns || []).map(function (godown) { return { value: godown.id, label: godown.name }; })).map(function (godown) { return '<option value="' + esc(godown.value) + '"' + (godown.value === draft.destinationGodownId ? ' selected' : '') + '>' + esc(godown.label) + '</option>'; }).join('') + '</select></label>' + postHint + '</section></div>' +
+       '<div class="process-balance-row"><div id="process-balance">' + processBalanceMarkup(balance) + '</div><div class="process-actions"><button class="btn acc process-post-btn" data-act="process-run-post"' + (draft.inputs.length ? '' : ' disabled') + '>Post Run</button></div></div>';
   }
   function bindProcessWorkspace() {
     if (!S.processDraft || !S.processWorkspace) return;
@@ -1002,7 +1007,14 @@
     if (!S.documents) { loadDocuments(); return '<div class="card pad"><div class="empty">Loading documents…</div></div>'; }
     var documentPage = pageSlice(filt(S.documents), 'documents');
     var rows = documentPage.rows.map(function (d) { var voidButton = d.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="document-void" data-id="' + esc(d.id) + '">Void</button>' : ''; var printButton = can('EXPORT') ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + printButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No documents yet. Payments remain in Purchases & Saudās; create a document here when you need a printable statement, invoice, receipt, or weighment slip.</td></tr>';
-    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Documents are created here for printing and export. Recording a payment does not automatically create one.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div>' + filterToolbar(S.documents, 'documents') + '<div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
+    return '<div class="card"><div class="card-top"><div><div class="card-h">Document library</div><div class="hint">All includes generated invoices and uploaded files. Billing is where sales invoices are created.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (can('CREATE') ? '<button class="btn sm" data-act="document-upload">+ Upload document</button><button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div>' + filterToolbar(S.documents, 'documents') + '<div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number / file</th><th>Type</th><th>Source</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + documentPage.rows.map(function (d) { var view = d.source === 'UPLOADED' ? '<a class="btn sm" target="_blank" href="/api/documents/' + encodeURIComponent(d.id) + '/file">View</a>' : (can('EXPORT') ? '<a class="btn sm" target="_blank" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''); return '<tr><td class="tok">' + esc(d.upload_name || d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.source === 'UPLOADED' ? 'Uploaded' : 'Generated') + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + view + '</td></tr>'; }).join('') + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
+  }
+  function pageBilling() {
+    if (!S.documents) { loadDocuments(); return '<div class="card pad"><div class="empty">Loading invoices…</div></div>'; }
+    var invoices = S.documents.filter(function (d) { return d.document_type === 'SALES_INVOICE' && d.source !== 'UPLOADED'; });
+    var page = pageSlice(filt(invoices), 'billing');
+    var rows = page.rows.map(function (d) { var paid = Number(d.paid_paise || 0), total = Number(d.total_paise || 0), status = paid >= total && total > 0 ? 'Paid' : paid > 0 ? 'Part Paid' : 'Due'; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.party_name || '—') + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + money(total) + '</td><td class="billing-status">' + status + '</td><td><a class="btn sm" target="_blank" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a> ' + (status !== 'Paid' && canFinance() ? '<button class="btn sm" data-act="invoice-payment" data-id="' + esc(d.id) + '" data-buyer="' + esc(d.party_id || '') + '" data-due="' + esc(Math.max(0, total - paid)) + '">Record payment</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No sales invoices yet.</td></tr>';
+    return '<div class="card"><div class="card-top"><div><div class="card-h">Sales invoices</div><div class="hint">Invoices reuse your buyers, items, sales Saudas and outbound gate records.</div></div>' + (can('CREATE') ? '<button class="btn acc" data-act="invoice-new">+ New invoice</button>' : '') + '</div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Invoice</th><th>Buyer</th><th>Date</th><th>Total</th><th>Payment</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(page, 'billing') + '</div>';
   }
   function parseCsv(text) {
     var rows = [], row = [], cell = '', quoted = false;
@@ -1224,6 +1236,8 @@
       render();
     } else if (act === 'process-catalog-toggle') {
       S.processCatalogOpen = !S.processCatalogOpen; S.processEditingTypeId = null; S.processNewType = false; render();
+    } else if (act === 'process-steps-toggle') {
+      S.processStepsExpanded = !S.processStepsExpanded; render();
     } else if (act === 'process-type-new') {
       S.processCatalogOpen = true; S.processEditingTypeId = null; S.processNewType = true; render();
     } else if (act === 'process-type-create') {
@@ -1295,6 +1309,17 @@
       var member = (S.team || []).find(function (m) { return m.id === el.getAttribute('data-id'); });
       if (!member) return;
       modal('Manage ' + member.name, [{ name: 'role', label: 'Role', type: 'select', options: [{ value: 'admin', label: 'Admin' }, { value: 'manager', label: 'Manager' }, { value: 'accountant', label: 'Accountant' }, { value: 'gate_operator', label: 'Gate operator' }, { value: 'production_operator', label: 'Production operator' }, { value: 'viewer', label: 'Viewer' }], value: member.role }, { name: 'active', label: 'Access', type: 'select', options: [{ value: '1', label: 'Active' }, { value: '0', label: 'Deactivate access' }], value: member.active ? '1' : '0' }], 'Save access', function (d) { return apiPost('/api/team/' + encodeURIComponent(member.id), { role: d.role, active: Number(d.active) }, 'PATCH').then(function () { S.team = null; }); });
+    } else if (act === 'invoice-new') {
+      var invoiceBuyers = optList(ov.buyers, [{ value: '', label: 'Choose buyer' }]);
+      var saleSaudas = [{ value: '', label: '—' }].concat((ov.saudas || []).filter(function (s) { return s.direction === 'out'; }).map(function (s) { return { value: s.id, label: s.code + ' · ' + (s.item_name || '') }; }));
+      var outboundGates = [{ value: '', label: '—' }].concat((ov.gate || []).filter(function (g) { return g.direction === 'out'; }).map(function (g) { return { value: g.id, label: g.token_no + ' · ' + (g.item_name || '') }; }));
+      modal('New sales invoice', [{ name: 'buyer_id', label: 'Buyer', type: 'select', options: invoiceBuyers, required: true }, { name: 'sauda_id', label: 'Sales Sauda (optional)', type: 'select', options: saleSaudas }, { name: 'gate_entry_id', label: 'Outbound gate (optional)', type: 'select', options: outboundGates }, { name: 'item_id', label: 'Item', type: 'select', options: optList(ov.items, [{ value: '', label: 'Choose item' }]), required: true }, { name: 'quantity', label: 'Quantity', type: 'number', step: '0.001', required: true }, { name: 'unit', label: 'Unit', type: 'select', value: 'KG', options: processUnitOptions() }, { name: 'rate', label: 'Rate (₹)', type: 'number', step: '0.01', required: true }, { name: 'gst_rate', label: 'GST rate %', type: 'number', step: '0.01', value: '5', required: true }, { name: 'tax_mode', label: 'Tax type', type: 'select', options: [{ value: 'INTRA', label: 'CGST + SGST' }, { value: 'INTER', label: 'IGST' }] }, { name: 'issue_date', label: 'Invoice date', type: 'date' }, { name: 'notes', label: 'Notes', type: 'textarea' }], 'Create invoice', function (d) { var item = (ov.items || []).find(function (i) { return i.id === d.item_id; }); var taxable = Math.round(num(d.quantity) * num(d.rate) * 100); return apiPost('/api/documents', { document_type: 'SALES_INVOICE', party_kind: 'buyer', party_id: d.buyer_id, sauda_id: d.sauda_id || null, gate_entry_id: d.gate_entry_id || null, issue_date: d.issue_date || null, gst_rate_pct: num(d.gst_rate), tax_mode: d.tax_mode, lines: [{ item_id: d.item_id, description: (item && item.name) || 'Sale item', hsn: (item && item.hsn) || '', quantity: num(d.quantity), unit: d.unit, rate_paise: Math.round(num(d.rate) * 100), taxable_paise: taxable, gst_rate_pct: num(d.gst_rate) }], notes: d.notes || null }).then(function () { S.documents = null; }); });
+    } else if (act === 'invoice-payment') {
+      modal('Record invoice payment', [{ name: 'amount', label: 'Amount received (₹)', type: 'number', step: '0.01', required: true, value: (num(el.getAttribute('data-due')) / 100).toFixed(2) }, { name: 'method', label: 'Method', type: 'select', options: [{ value: 'bank', label: 'Bank' }, { value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }] }, { name: 'pay_date', label: 'Received date', type: 'date' }], 'Record payment', function (d) { return apiPost('/api/payments', { party_kind: 'buyer', party_id: el.getAttribute('data-buyer'), document_id: el.getAttribute('data-id'), amount_paise: Math.round(num(d.amount) * 100), method: d.method, pay_date: d.pay_date || null }).then(function () { S.documents = null; }); });
+    } else if (act === 'document-upload') {
+      var input = document.createElement('input'); input.type = 'file'; input.accept = '.pdf,image/*,.csv,.xlsx,.xls,.doc,.docx';
+      input.onchange = function () { var file = input.files && input.files[0]; if (!file) return; var form = new FormData(); form.append('file', file); form.append('document_type', 'PAYMENT_RECEIPT'); fetch('/api/documents/upload', { method: 'POST', body: form }).then(function (res) { return res.json().then(function (json) { if (!res.ok) throw new Error(json.error || 'Upload failed'); return json; }); }).then(function () { S.documents = null; toast('Document uploaded.', 'success'); render(); }).catch(function (err) { toast(err.message, 'error'); }); };
+      input.click();
     } else if (act === 'document-new') {
       var partyOptions = [{ value: '', label: '—' }].concat((ov.suppliers || []).map(function (p) { return { value: 'supplier:' + p.id, label: 'Supplier · ' + p.name }; })).concat((ov.buyers || []).map(function (p) { return { value: 'buyer:' + p.id, label: 'Buyer · ' + p.name }; }));
       var saudaOptions = [{ value: '', label: '—' }].concat((ov.saudas || []).map(function (s) { return { value: s.id, label: s.code + ' · ' + (s.item_name || '') }; }));
@@ -1447,6 +1472,12 @@
     } else if (act === 'receipt-toggle') {
       S.stockReceiptsExpanded = !S.stockReceiptsExpanded;
       render();
+    } else if (act === 'receipt-rejected-toggle') {
+      S.stockRejectedOpen = !S.stockRejectedOpen;
+      render();
+    } else if (act === 'receipt-rejected-more') {
+      S.stockRejectedExpanded = !S.stockRejectedExpanded;
+      render();
     } else if (act === 'receipt-accept') {
       var receiptRow = el.closest('[data-receipt]');
       var receiptGodown = receiptRow && receiptRow.querySelector('[data-receipt-godown]');
@@ -1468,6 +1499,8 @@
       }).then(refresh);
     } else if (act === 'receipt-reject') {
       return apiPost('/api/stock-receipts/' + el.getAttribute('data-id') + '/skip', { note: 'Rejected from stock page' }).then(refresh);
+    } else if (act === 'receipt-reopen') {
+      return apiPost('/api/stock-receipts/' + el.getAttribute('data-id') + '/reopen').then(refresh);
     } else if (act === 'lot-edit') {
       var lot = ov.lots.find(function (x) { return x.id === el.getAttribute('data-id'); });
       if (!lot) return;
@@ -1542,10 +1575,10 @@
   // ---------- shell ----------
   var NAV = [
     ['dashboard', 'Dashboard'], ['gate', 'Gate & Weighbridge'], ['purchase', 'Purchase & Saudas'],
-    ['stock', 'Stock & Lots'], ['suppliers', 'Suppliers'], ['buyers', 'Buyers'], ['items', 'Items'], ['processing', 'Processing'], ['team', 'Team'], ['documents', 'Documents'], ['digest', 'Night Digest'],
+    ['stock', 'Stock & Lots'], ['suppliers', 'Suppliers'], ['buyers', 'Buyers'], ['items', 'Items'], ['processing', 'Processing'], ['billing', 'Billing'], ['team', 'Team'], ['documents', 'Documents'], ['digest', 'Night Digest'],
   ];
   var NAV_PERMS = { team: 'MANAGE_MEMBERS' };
-  var NAV_ROLES = { dashboard: ['owner','admin','manager','accountant','gate_operator','production_operator','operator','viewer'], gate: ['owner','admin','manager','gate_operator','operator'], purchase: ['owner','admin','manager','accountant'], stock: ['owner','admin','manager','accountant','production_operator'], suppliers: ['owner','admin','manager','accountant'], buyers: ['owner','admin','manager','accountant'], items: ['owner','admin','manager','accountant','production_operator'], processing: ['owner','admin','manager','production_operator','operator'], team: ['owner','admin'], documents: ['owner','admin','manager','accountant'], digest: ['owner','admin','manager','accountant'] };
+  var NAV_ROLES = { dashboard: ['owner','admin','manager','accountant','gate_operator','production_operator','operator','viewer'], gate: ['owner','admin','manager','gate_operator','operator'], purchase: ['owner','admin','manager','accountant'], stock: ['owner','admin','manager','accountant','production_operator'], suppliers: ['owner','admin','manager','accountant'], buyers: ['owner','admin','manager','accountant'], items: ['owner','admin','manager','accountant','production_operator'], processing: ['owner','admin','manager','production_operator','operator'], billing: ['owner','admin','manager','accountant'], team: ['owner','admin'], documents: ['owner','admin','manager','accountant'], digest: ['owner','admin','manager','accountant'] };
   function navItems() {
     var all = isSupportAdmin() ? NAV.concat([['bugs', 'Bug Reports']]) : NAV;
     var role = S.ov && S.ov.me ? S.ov.me.role : '';
@@ -1553,7 +1586,7 @@
   }
   function navMarkup() {
     return navItems().map(function (n) {
-      return '<button data-nav="' + n[0] + '" class="' + (S.page === n[0] ? 'on' : '') + '" aria-current="' + (S.page === n[0] ? 'page' : 'false') + '">' + ICONS[n[0]] + n[1] + '</button>';
+      return (n[0] === 'billing' ? '<div class="nav-divider" role="separator"></div>' : '') + '<button data-nav="' + n[0] + '" class="' + (S.page === n[0] ? 'on' : '') + '" aria-current="' + (S.page === n[0] ? 'page' : 'false') + '">' + ICONS[n[0]] + n[1] + '</button>';
     }).join('');
   }
   function periodToggle() {
@@ -1572,6 +1605,7 @@
     buyers: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 8h16l-1.4 10.5A2 2 0 0 1 16.6 20H7.4a2 2 0 0 1-2-1.5L4 8Z" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M9 8a3 3 0 0 1 6 0" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     items: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 7h16v13H4z" stroke="currentColor" stroke-width="1.9"/><path d="M9 7V4h6v3M4 12h16" stroke="currentColor" stroke-width="1.9"/></svg>',
     processing: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 5h6v6H4zM14 13h6v6h-6zM10 8h4v8h-4z" stroke="currentColor" stroke-width="1.9"/></svg>',
+    billing: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="18" rx="2" stroke="currentColor" stroke-width="1.9"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     team: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="1.9"/><circle cx="17" cy="9" r="2.5" stroke="currentColor" stroke-width="1.9"/><path d="M3 20a6 6 0 0 1 12 0M15 20a4 4 0 0 1 6 0" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     documents: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M6 3h9l3 3v15H6z" stroke="currentColor" stroke-width="1.9"/><path d="M9 11h6M9 15h6M9 7h4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     digest: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2" stroke="currentColor" stroke-width="1.9"/><path d="M10 5h4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
@@ -1622,6 +1656,7 @@
     else if (S.page === 'buyers') page.innerHTML = partyPage('buyers');
     else if (S.page === 'items') page.innerHTML = pageItems();
     else if (S.page === 'processing') page.innerHTML = pageProcessing();
+    else if (S.page === 'billing') page.innerHTML = pageBilling();
     else if (S.page === 'team') page.innerHTML = pageTeam();
     else if (S.page === 'documents') page.innerHTML = pageDocuments();
     else if (S.page === 'bugs') page.innerHTML = pageBugReports();
@@ -1697,7 +1732,7 @@
   });
   window.addEventListener('popstate', function () {
     var page = new URLSearchParams(location.search).get('page');
-    if (page && ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'team', 'documents', 'digest', 'bugs'].indexOf(page) >= 0) { S.page = page; S.q = ''; S.pageIndex = {}; render(); }
+    if (page && ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'billing', 'team', 'documents', 'digest', 'bugs'].indexOf(page) >= 0) { S.page = page; S.q = ''; S.pageIndex = {}; render(); }
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && document.getElementById('mobile-nav') && document.getElementById('mobile-nav').classList.contains('open')) openAction('nav-close');
