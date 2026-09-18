@@ -8,7 +8,7 @@
   var SUPPORT_ADMIN_EMAIL = 'gouravmodi1195@gmail.com';
   var AUTH_CONFIG = null;
   var TURNSTILE_SCRIPT = null;
-  var S = { page: 'dashboard', role: 'owner', q: '', period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, team: null, documents: null, payments: null };
+  var S = { page: 'dashboard', role: 'owner', q: '', filter: 'all', period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, team: null, documents: null, payments: null, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -79,11 +79,18 @@
     return Math.max(0, g.gross_kg - g.tare_kg);
   }
   function filt(rows) {
-    if (!S.q) return rows;
     var q = S.q.toLowerCase();
     return rows.filter(function (r) {
-      return Object.keys(r).some(function (k) { return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(q) >= 0; });
+      var matchesSearch = !q || Object.keys(r).some(function (k) { return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(q) >= 0; });
+      var status = String(r.status == null ? '' : r.status).toLowerCase();
+      var matchesFilter = S.filter === 'all' || (S.page === 'gate' && (S.filter === r.direction || S.filter === status)) || (S.page === 'purchase' && S.filter === status) || (S.page === 'documents' && S.filter === status);
+      return matchesSearch && matchesFilter;
     });
+  }
+  function filterControl() {
+    var options = { gate: [['all', 'All gate entries'], ['in', 'Incoming'], ['out', 'Outgoing'], ['done', 'Done'], ['at_gate', 'At gate']], purchase: [['all', 'All saudas'], ['open', 'Open'], ['advance_paid', 'Advance paid'], ['settled', 'Settled'], ['disputed', 'Disputed']], documents: [['all', 'All documents'], ['posted', 'Posted'], ['void', 'Void']] }[S.page];
+    if (!options) return '';
+    return '<select id="ms-filter" class="list-filter" aria-label="Filter list">' + options.map(function (option) { return '<option value="' + option[0] + '"' + (S.filter === option[0] ? ' selected' : '') + '>' + option[1] + '</option>'; }).join('') + '</select>';
   }
 
   // ---------- data ----------
@@ -133,6 +140,16 @@
       { name: 'gstin', label: 'GSTIN (optional)' },
       { name: 'address', label: 'Address', type: 'textarea' },
     ];
+  }
+  function pageSlice(rows, key) {
+    var size = 25, total = rows.length, pages = Math.max(1, Math.ceil(total / size));
+    var index = Math.min(Math.max(0, S.pageIndex[key] || 0), pages - 1);
+    S.pageIndex[key] = index;
+    return { rows: rows.slice(index * size, (index + 1) * size), total: total, index: index, pages: pages };
+  }
+  function pager(page, key) {
+    if (page.total <= 25) return '';
+    return '<div class="pager"><span class="hint">Showing ' + (page.index * 25 + 1) + '–' + Math.min(page.total, (page.index + 1) * 25) + ' of ' + page.total + '</span><span class="pager-actions"><button class="btn sm" data-act="page-prev" data-page-key="' + esc(key) + '" ' + (page.index === 0 ? 'disabled' : '') + '>Previous</button><span class="hint">Page ' + (page.index + 1) + ' of ' + page.pages + '</span><button class="btn sm" data-act="page-next" data-page-key="' + esc(key) + '" ' + (page.index >= page.pages - 1 ? 'disabled' : '') + '>Next</button></span></div>';
   }
   function mountTurnstile(root) {
     if (!AUTH_CONFIG || !AUTH_CONFIG.turnstile_site_key) return;
@@ -334,7 +351,7 @@
     items: { t: 'Items', s: function () { return 'Varieties, SKUs and by-products'; }, search: true },
     processing: { t: 'Processing', s: function () { return 'Transform inputs into traceable outputs'; }, search: false },
     team: { t: 'Team', s: function () { return 'Members and access'; }, search: false },
-    documents: { t: 'Documents', s: function () { return 'Purchase, sales and weighment records'; }, search: false },
+    documents: { t: 'Documents', s: function () { return 'Purchase, sales and weighment records'; }, search: true },
     bugs: { t: 'Bug Reports', s: function () { return 'Private support queue'; }, search: true },
     digest: { t: 'Night Digest', s: function () { return 'The owner’s day on one screen'; }, search: false },
   };
@@ -517,7 +534,7 @@
 
   function pageGate() {
     var ov = S.ov, k = ov.kpis;
-    var rows = filt(ov.gate);
+    var rows = filt(ov.gate), page = pageSlice(rows, 'gate'); rows = page.rows;
     var live = MODE === 'live';
     var body = rows.map(function (g) {
       var canAct = can('EDIT') && g.status !== 'done';
@@ -541,12 +558,12 @@
       (can('CREATE') ? '<button class="btn acc" data-act="gate-new">+ New gate entry</button>' : '') + '</div></div>' +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:860px"><thead><tr>' +
       '<th>Token</th><th>Vehicle</th><th>Party</th><th>Material</th><th>Gross</th><th>Net</th><th>Moisture</th><th>Status</th></tr></thead><tbody>' +
-      body + '</tbody></table></div></div>';
+      body + '</tbody></table></div>' + pager(page, 'gate') + '</div>';
   }
 
   function pagePurchase() {
     var ov = S.ov;
-    var rows = filt(ov.saudas);
+    var rows = filt(ov.saudas), page = pageSlice(rows, 'purchase'); rows = page.rows;
     var openVal = ov.saudas.filter(function (s) { return s.status === 'open' || s.status === 'advance_paid'; })
       .reduce(function (a, s) { return a + (s.value_paise || 0); }, 0);
     var m = canMoney();
@@ -571,7 +588,7 @@
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:' + (m ? 900 : 700) + 'px"><thead><tr>' +
       '<th>Sauda</th><th>Direction / Party</th><th>Item</th><th>Qty</th>' + (m ? '<th>Rate</th>' : '') + '<th>Moisture</th>' + (m ? '<th>Value</th>' : '') + '<th>Status / deliveries</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table></div>' +
-      (!m ? '<div class="note-locked">🔒 Purchase rates and values are hidden for the Manager role.</div>' : '') + '</div>';
+      (!m ? '<div class="note-locked">🔒 Purchase rates and values are hidden for the Manager role.</div>' : '') + pager(page, 'purchase') + '</div>';
   }
 
   function showDeliveryHistory(sauda) {
@@ -638,7 +655,7 @@
     } else if (live) {
       receiptPanel = '<div class="card pad receipt-empty"><div class="card-h">No pending stock receipts</div><div class="hint" style="margin-top:4px">When an incoming truck is marked Done at the gate, it will appear here for one-click accept or reject.</div></div>';
     }
-    var rows = filt(ov.lots);
+    var rows = filt(ov.lots), page = pageSlice(rows, 'stock'); rows = page.rows;
     var body = rows.map(function (s) {
       return '<tr><td class="tok">' + esc(s.code) + '</td><td class="b6">' + esc(s.godown_name || '—') + '</td>' +
         '<td>' + esc(s.item_name || '—') + '</td><td class="b7">' + esc(lotQty(s)) + '</td>' +
@@ -654,7 +671,7 @@
       (can('CREATE') ? '<button class="btn acc" data-act="lot-new">+ New lot</button>' : '') + '</div></div>' +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:800px"><thead><tr>' +
       '<th>Lot</th><th>Godown</th><th>Item</th><th>Qty</th><th>Moisture</th><th>In date</th>' + (m ? '<th>Value</th>' : '') + '<th>Note</th>' + (can('EDIT') ? '<th></th>' : '') +
-      '</tr></thead><tbody>' + body + '</tbody></table></div></div>';
+      '</tr></thead><tbody>' + body + '</tbody></table></div>' + pager(page, 'stock') + '</div></div>';
   }
 
   function partyPage(kind) {
@@ -662,7 +679,7 @@
     if (!S.payments) loadPayments();
     var m = canMoney();
     var isSup = kind === 'suppliers';
-    var rows = filt(isSup ? ov.suppliers : ov.buyers);
+    var rows = filt(isSup ? ov.suppliers : ov.buyers), page = pageSlice(rows, kind); rows = page.rows;
     var body = rows.map(function (s) {
       var t = isSup ? (SUPTYPE[s.type] || [s.type, '#EEF1F5', '#475467']) : [s.type, '#EEF1F5', '#475467'];
       var out = isSup ? s.outstanding_paise : s.receivable_paise;
@@ -683,7 +700,7 @@
       (can('CREATE') ? '<a class="btn sm" href="/api/parties/import/template.csv?kind=' + (isSup ? 'supplier' : 'buyer') + '">CSV template</a><button class="btn sm" data-act="party-import" data-kind="' + (isSup ? 'supplier' : 'buyer') + '">Import CSV</button><button class="btn acc" data-act="' + (isSup ? 'sup-new' : 'buy-new') + '">+ Add</button>' : '') + '</div></div>' +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:760px"><thead><tr>' +
       '<th>Name</th><th>Type</th><th>' + (isSup ? 'Village / Place' : 'Location') + '</th><th>' + (isSup ? 'Supplied (season)' : 'Bought (season)') + '</th>' +
-      (m ? '<th>' + (isSup ? 'Outstanding' : 'Receivable') + '</th>' : '') + '<th>Last</th><th></th></tr></thead><tbody>' + body + '</tbody></table></div></div>' + paymentSection;
+      (m ? '<th>' + (isSup ? 'Outstanding' : 'Receivable') + '</th>' : '') + '<th>Last</th><th></th></tr></thead><tbody>' + body + '</tbody></table></div>' + pager(page, kind) + '</div></div>' + paymentSection;
   }
 
   function loadPayments() {
@@ -691,7 +708,7 @@
   }
 
   function pageItems() {
-    var rows = filt(S.ov.items);
+    var rows = filt(S.ov.items), page = pageSlice(rows, 'items'); rows = page.rows;
     var body = rows.map(function (i) {
       var genericCategory = { RAW_MATERIAL: ['Raw material', '#FEF3D6', '#8A6A16'], FINISHED_GOOD: ['Finished good', '#E6F0E9', '#256238'], BYPRODUCT: ['By-product', '#EEF1F5', '#475467'], PACKAGING: ['Packaging', '#EAF2F8', '#2A5CA8'], CONSUMABLE: ['Consumable', '#F3EAF8', '#6941C6'], OTHER: ['Other', '#EEF1F5', '#475467'] };
       var ct = genericCategory[i.category_code] || CAT[i.category] || [i.category, '#EEF1F5', '#475467'];
@@ -706,7 +723,7 @@
       '<div class="hint" style="font-weight:500;margin-top:2px">Paddy varieties, rice SKUs &amp; by-products. OTR = out-turn ratio.</div></div>' +
       (can('CREATE') ? '<button class="btn acc" data-act="item-new">+ Add item</button>' : '') + '</div>' +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:720px"><thead><tr>' +
-      '<th>Item</th><th>Category</th><th>HSN</th><th>Stock</th><th>Typical OTR</th><th>Unit</th><th></th></tr></thead><tbody>' + body + '</tbody></table></div></div>';
+      '<th>Item</th><th>Category</th><th>HSN</th><th>Stock</th><th>Typical OTR</th><th>Unit</th><th></th></tr></thead><tbody>' + body + '</tbody></table></div>' + pager(page, 'items') + '</div>';
   }
 
   function loadBugReports() {
@@ -749,8 +766,9 @@
   }
   function pageDocuments() {
     if (!S.documents) { loadDocuments(); return '<div class="card pad"><div class="empty">Loading documents…</div></div>'; }
-    var rows = S.documents.map(function (d) { var voidButton = d.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="document-void" data-id="' + esc(d.id) + '">Void</button>' : ''; var printButton = can('EXPORT') ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + printButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No documents yet.</td></tr>';
-    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Posted records remain available for export and printing.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    var documentPage = pageSlice(filt(S.documents), 'documents');
+    var rows = documentPage.rows.map(function (d) { var voidButton = d.status === 'POSTED' && can('VOID') ? ' <button class="btn sm" data-act="document-void" data-id="' + esc(d.id) + '">Void</button>' : ''; var printButton = can('EXPORT') ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/documents/' + encodeURIComponent(d.id) + '/print">Print / PDF</a>' : ''; return '<tr><td class="tok">' + esc(d.document_no) + '</td><td>' + esc(d.document_type) + '</td><td>' + esc(d.issue_date) + '</td><td class="b7">' + (canMoney() ? money(d.total_paise) : '—') + '</td><td>' + pill(String(d.status || '').toLowerCase()) + '</td><td>' + printButton + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="6" class="empty">No documents yet.</td></tr>';
+    return '<div class="card"><div class="card-top"><div><div class="card-h">Business documents</div><div class="hint">Posted records remain available for export and printing.</div></div><div style="display:flex;gap:8px">' + (can('EXPORT') ? '<a class="btn sm" href="/api/documents/export.csv">CSV</a><a class="btn sm" href="/api/documents/export.xls">Excel</a>' : '') + (['owner', 'admin', 'manager', 'accountant'].indexOf(S.role) >= 0 && can('CREATE') ? '<button class="btn acc" data-act="document-new">+ New document</button>' : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Number</th><th>Type</th><th>Issue date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' + pager(documentPage, 'documents') + '</div>';
   }
   function parseCsv(text) {
     var rows = [], row = [], cell = '', quoted = false;
@@ -959,6 +977,10 @@
     } else if (act === 'period') {
       var nextPeriod = el.getAttribute('data-period');
       if (nextPeriod && nextPeriod !== S.period) { S.period = nextPeriod; loadOverview().then(render); }
+    } else if (act === 'page-prev' || act === 'page-next') {
+      var pageKey = el.getAttribute('data-page-key');
+      S.pageIndex[pageKey] = Math.max(0, (S.pageIndex[pageKey] || 0) + (act === 'page-next' ? 1 : -1));
+      render();
     } else if (act === 'party-import') {
       importParties(el.getAttribute('data-kind'));
     } else if (act === 'bugs-refresh') {
@@ -1305,10 +1327,11 @@
       '<header class="topbar"><button class="menu-trigger" type="button" aria-label="Open application navigation" aria-controls="mobile-nav" aria-expanded="false" data-act="nav-open">☰</button><div class="grow"><h1>' + esc(meta.t) + '</h1><div class="sub">' + esc(meta.s()) + '</div></div>' +
       (meta.search ? '<div class="search"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><circle cx="11" cy="11" r="7" stroke="#98A2B3" stroke-width="2"/><path d="m20 20-3-3" stroke="#98A2B3" stroke-width="2" stroke-linecap="round"/></svg>' +
         '<input id="ms-q" placeholder="Search…" value="' + esc(S.q) + '"></div>' : '') +
+      filterControl() +
       periodToggle() + '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
       '<div class="content ms-scroll"><div class="page" id="ms-page"></div></div>' +
       '</main>' +
-      '<div class="nav-backdrop" data-act="nav-close"></div><aside class="mobile-nav" id="mobile-nav" aria-label="Application navigation"><div class="mobile-nav-head"><div><div class="name">MillSaathi</div><div class="mill">' + esc(S.ov.mill.name) + '</div></div><button class="nav-close" type="button" aria-label="Close application navigation" data-act="nav-close">×</button></div><nav class="nav">' + navMarkup() + '</nav></aside>' +
+      '<div class="nav-backdrop" data-act="nav-close"></div><aside class="mobile-nav" id="mobile-nav" aria-label="Application navigation"><div class="mobile-nav-head"><div><div class="name">MillSaathi</div><div class="mill">' + esc(S.ov.mill.name) + '</div></div><button class="nav-close" type="button" aria-label="Close application navigation" data-act="nav-close">×</button></div><nav class="nav">' + navMarkup() + '</nav><div class="mobile-profile"><button class="side-profile" data-act="profile" aria-label="Open your profile"><div class="av">' + esc(initials(userName())) + '</div><div style="min-width:0"><div class="nm">' + esc(userName()) + '</div><div class="ds">' + esc(roleDesc()) + '</div></div></button>' + (MODE === 'live' ? '<button class="out" data-act="logout">Log out</button>' : '<a class="out" style="text-decoration:none" href="/">Exit demo</a>') + '</div></aside>' +
       (MODE === 'live' ? '<button class="help-fab" data-act="feedback">Need help?</button>' : '') +
       '</div>';
 
@@ -1328,7 +1351,7 @@
 
     var q = document.getElementById('ms-q');
     if (q) {
-      q.oninput = function () { S.q = q.value; var pg = document.getElementById('ms-page');
+      q.oninput = function () { S.q = q.value; S.pageIndex = {}; var pg = document.getElementById('ms-page');
         if (S.page === 'gate') pg.innerHTML = pageGate();
         else if (S.page === 'purchase') pg.innerHTML = pagePurchase();
         else if (S.page === 'stock') pg.innerHTML = pageStock();
@@ -1342,6 +1365,8 @@
       };
       q.focus(); q.setSelectionRange(q.value.length, q.value.length);
     }
+    var filter = document.getElementById('ms-filter');
+    if (filter) filter.onchange = function () { S.filter = filter.value; S.pageIndex = {}; render(); };
   }
   function userName() {
     if (MODE === 'demo') return { owner: 'Ramesh Reddy', manager: 'Suresh Kumar', accountant: 'Prakash Rao' }[S.role] || 'Demo user';
@@ -1394,7 +1419,7 @@
   document.addEventListener('click', function (e) {
     var t = e.target.closest('[data-nav],[data-role],[data-act]');
     if (!t) return;
-    if (t.hasAttribute('data-nav')) { S.page = t.getAttribute('data-nav'); S.q = ''; document.body.classList.remove('nav-open'); render(); }
+    if (t.hasAttribute('data-nav')) { S.page = t.getAttribute('data-nav'); S.q = ''; S.filter = 'all'; S.pageIndex = {}; document.body.classList.remove('nav-open'); render(); }
     else if (t.hasAttribute('data-role')) { S.role = t.getAttribute('data-role'); render(); }
     else if (t.getAttribute('data-act') === 'logout') {
       apiPost('/api/auth/logout', {}).then(function () { S.ov = null; render(); });

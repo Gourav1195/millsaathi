@@ -4,6 +4,10 @@ import { Hono } from 'hono';
 import type { AppEnv } from './index';
 import { hashPassword, hashToken } from './auth';
 
+const printStyles = `<style>
+  :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#182230;font:14px/1.5 'IBM Plex Sans',Arial,sans-serif}.sheet{max-width:820px;margin:32px auto;padding:40px;background:#fff;box-shadow:0 12px 36px rgba(20,30,40,.12);border-top:7px solid #e8b93b}.brand{display:flex;justify-content:space-between;gap:24px;border-bottom:1px solid #e4e7ec;padding-bottom:22px}.brand h1{font:800 27px/1.1 Archivo,Arial,sans-serif;margin:0 0 6px}.muted{color:#667085}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#667085;font-weight:700}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.meta>div{background:#f7f8fa;border:1px solid #e4e7ec;border-radius:8px;padding:12px}.title{font:800 20px Archivo,Arial,sans-serif;margin:24px 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th{background:#182230;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left}th,td{padding:11px 12px;border-bottom:1px solid #e4e7ec}td:last-child,th:last-child{text-align:right}.total{margin:20px 0 0 auto;max-width:270px;background:#fff8e1;border:1px solid #efd98d;border-radius:8px;padding:16px;display:flex;justify-content:space-between;font-weight:800;font-size:17px}.notes{margin-top:24px;padding-top:16px;border-top:1px solid #e4e7ec;white-space:pre-line}.actions{text-align:right;margin-bottom:14px}.actions button{border:0;border-radius:7px;padding:9px 14px;background:#c0451c;color:#fff;font-weight:700;cursor:pointer}@media(max-width:700px){body{background:#fff}.sheet{margin:0;padding:24px;box-shadow:none}.brand{display:block}.meta{grid-template-columns:1fr 1fr}}@media print{body{background:#fff}.sheet{margin:0;max-width:none;padding:0;box-shadow:none;border-top:0}.actions{display:none}}
+</style>`;
+
 // India runs the mill day on IST regardless of where the Worker executes.
 export function istToday(offsetDays = 0): string {
   return new Date(Date.now() + 5.5 * 3600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -237,7 +241,7 @@ api.get('/overview', async (c) => {
          LEFT JOIN buyers b ON b.id = g.buyer_id
          LEFT JOIN items i ON i.id = g.item_id
          WHERE g.mill_id = ?1 AND g.entry_date >= ?2
-         ORDER BY g.created_at DESC LIMIT 200`,
+         ORDER BY g.created_at DESC LIMIT 1000`,
       ).bind(mill.id, trend.start),
       db.prepare(
         `SELECT entry_date, direction,
@@ -254,14 +258,14 @@ api.get('/overview', async (c) => {
          LEFT JOIN suppliers s ON s.id = sa.supplier_id
          LEFT JOIN buyers b ON b.id = sa.buyer_id
          LEFT JOIN items i ON i.id = sa.item_id
-         WHERE sa.mill_id = ?1 ORDER BY sa.created_at DESC LIMIT 200`,
+         WHERE sa.mill_id = ?1 ORDER BY sa.created_at DESC LIMIT 1000`,
       ).bind(mill.id),
       db.prepare(
         `SELECT l.*, gd.name AS godown_name, i.name AS item_name
          FROM lots l
          LEFT JOIN godowns gd ON gd.id = l.godown_id
          LEFT JOIN items i ON i.id = l.item_id
-         WHERE l.mill_id = ?1 ORDER BY l.in_date DESC, l.code DESC LIMIT 300`,
+         WHERE l.mill_id = ?1 ORDER BY l.in_date DESC, l.code DESC LIMIT 1000`,
       ).bind(mill.id),
       db.prepare(
         `SELECT gd.*, CASE UPPER(COALESCE(gd.capacity_unit, 'QUINTAL')) WHEN 'KG' THEN COALESCE(gd.capacity_qty, gd.capacity_qtl * 100) WHEN 'QUINTAL' THEN COALESCE(gd.capacity_qty, gd.capacity_qtl) * 100 WHEN 'TONNE' THEN COALESCE(gd.capacity_qty, gd.capacity_qtl / 10) * 1000 ELSE NULL END AS capacity_kg,
@@ -901,7 +905,7 @@ api.post('/payments/:id/void', async (c) => {
 
 api.get('/payments', async (c) => {
   const { user, mill } = c.get('session');
-  const result = await c.env.DB.prepare(`SELECT p.id, p.party_kind, p.party_id, p.direction, p.amount_paise, p.method, p.note, p.pay_date, p.status, p.created_at, COALESCE(s.name, b.name) AS party_name FROM payments p LEFT JOIN suppliers s ON p.party_kind = 'supplier' AND s.id = p.party_id AND s.mill_id = p.mill_id LEFT JOIN buyers b ON p.party_kind = 'buyer' AND b.id = p.party_id AND b.mill_id = p.mill_id WHERE p.mill_id = ? ORDER BY p.pay_date DESC, p.created_at DESC LIMIT 200`).bind(mill.id).all<Record<string, unknown>>();
+  const result = await c.env.DB.prepare(`SELECT p.id, p.party_kind, p.party_id, p.direction, p.amount_paise, p.method, p.note, p.pay_date, p.status, p.created_at, COALESCE(s.name, b.name) AS party_name FROM payments p LEFT JOIN suppliers s ON p.party_kind = 'supplier' AND s.id = p.party_id AND s.mill_id = p.mill_id LEFT JOIN buyers b ON p.party_kind = 'buyer' AND b.id = p.party_id AND b.mill_id = p.mill_id WHERE p.mill_id = ? ORDER BY p.pay_date DESC, p.created_at DESC LIMIT 1000`).bind(mill.id).all<Record<string, unknown>>();
   const body = { payments: result.results };
   return c.json(user.role_code === 'manager' || user.role === 'manager' ? stripMoney(body) : body);
 });
@@ -914,7 +918,7 @@ api.get('/payments/:id/print', async (c) => {
   const escHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[ch]);
   const amount = (Number(payment.amount_paise || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const direction = payment.direction === 'paid' ? 'Payment made to supplier' : 'Receipt received from buyer';
-  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>Receipt · ${escHtml(mill.name)}</title><style>body{font:14px system-ui;margin:40px;color:#1b2431;max-width:760px}.watermark{position:fixed;inset:40% 0;text-align:center;font-size:48px;font-weight:800;color:#1b2431;opacity:.06;transform:rotate(-25deg)}table{border-collapse:collapse;width:100%;margin-top:24px}td{border:1px solid #d0d5dd;padding:12px}td:first-child{font-weight:700;width:35%}@media print{button{display:none}}</style></head><body><div class="watermark">millsaathi.com</div><button onclick="print()">Print / Save PDF</button><h1>${escHtml(mill.name)}</h1><p>${escHtml(mill.address || '')}${mill.phone ? ` · ${escHtml(mill.phone)}` : ''}</p><h2>Payment receipt</h2><table><tr><td>Receipt date</td><td>${escHtml(payment.pay_date)}</td></tr><tr><td>Party</td><td>${escHtml(payment.party_name)}</td></tr><tr><td>Transaction</td><td>${escHtml(direction)}</td></tr><tr><td>Amount</td><td>₹${escHtml(amount)}</td></tr><tr><td>Method</td><td>${escHtml(payment.method)}</td></tr><tr><td>Note</td><td>${escHtml(payment.note || '—')}</td></tr></table><p style="margin-top:36px;color:#667085">Generated with millsaathi.com</p></body></html>`);
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>Receipt · ${escHtml(mill.name)}</title>${printStyles}</head><body><main class="sheet"><div class="actions"><button onclick="print()">Print / Save PDF</button></div><div class="brand"><div><h1>${escHtml(mill.name)}</h1><div class="muted">${escHtml(mill.address || '')}${mill.phone ? ` · ${escHtml(mill.phone)}` : ''}</div></div><div class="label">MillSaathi</div></div><h2 class="title">Payment receipt</h2><div class="meta"><div><div class="label">Receipt date</div><strong>${escHtml(payment.pay_date)}</strong></div><div><div class="label">Party</div><strong>${escHtml(payment.party_name)}</strong></div><div><div class="label">Method</div><strong>${escHtml(payment.method)}</strong></div></div><table><tbody><tr><td>Transaction</td><td>${escHtml(direction)}</td></tr><tr><td>Amount</td><td>₹${escHtml(amount)}</td></tr><tr><td>Note</td><td>${escHtml(payment.note || '—')}</td></tr></tbody></table><div class="total"><span>Total</span><span>₹${escHtml(amount)}</span></div><p class="muted">Generated with MillSaathi · millsaathi.com</p></main></body></html>`);
 });
 
 // ---- Masters ----
@@ -1139,7 +1143,7 @@ api.patch('/process-types/:id/restore', async (c) => {
 
 api.get('/process-runs', async (c) => {
   const { mill } = c.get('session');
-  const runs = await c.env.DB.prepare(`SELECT r.*, pt.name AS process_type_name, u.name AS creator_name FROM process_runs r LEFT JOIN process_types pt ON pt.id = r.process_type_id LEFT JOIN users u ON u.id = r.created_by WHERE r.mill_id = ? ORDER BY r.run_date DESC, r.created_at DESC LIMIT 200`).bind(mill.id).all<Record<string, unknown>>();
+  const runs = await c.env.DB.prepare(`SELECT r.*, pt.name AS process_type_name, u.name AS creator_name FROM process_runs r LEFT JOIN process_types pt ON pt.id = r.process_type_id LEFT JOIN users u ON u.id = r.created_by WHERE r.mill_id = ? ORDER BY r.run_date DESC, r.created_at DESC LIMIT 1000`).bind(mill.id).all<Record<string, unknown>>();
   const runIds = runs.results.map((run) => String(run.id));
   const lines = runIds.length
     ? await c.env.DB.prepare(`SELECT l.*, i.name AS item_name FROM process_run_lines l LEFT JOIN items i ON i.id = l.item_id WHERE l.mill_id = ? AND l.run_id IN (${runIds.map(() => '?').join(',')}) ORDER BY l.created_at`).bind(mill.id, ...runIds).all<Record<string, unknown>>()
@@ -1476,7 +1480,7 @@ api.get('/documents/:id/print', async (c) => {
   const escHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[ch]);
   const rupees = (value: unknown) => (Number(value || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const lineHtml = lines.results.map((line) => `<tr><td>${escHtml(line.item_name || line.description)}${line.item_name && line.description !== line.item_name ? `<br><small>${escHtml(line.description)}</small>` : ''}</td><td>${escHtml(line.hsn)}</td><td>${escHtml(line.quantity)} ${escHtml(line.unit)}</td>${showMoney ? `<td>₹${escHtml(rupees(line.rate_paise))}</td><td>₹${escHtml(rupees(line.taxable_paise))}</td>` : ''}</tr>`).join('');
-  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(document.document_no)} · ${escHtml(mill.name)}</title><style>body{font:14px system-ui;margin:40px;color:#1b2431}h1{margin-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:24px}th,td{border:1px solid #d0d5dd;padding:9px;text-align:left}.identity{white-space:pre-line}@media print{button{display:none}}</style></head><body><button onclick="print()">Print / Save PDF</button><h1>${escHtml(mill.name)}</h1><div class="identity">${escHtml(mill.address)}${mill.place_of_supply ? `\nPlace of supply: ${escHtml(mill.place_of_supply)}` : ''}${mill.gstin ? `\nGSTIN: ${escHtml(mill.gstin)}` : ''}${mill.phone ? `\n${escHtml(mill.phone)}` : ''}${mill.email ? ` · ${escHtml(mill.email)}` : ''}</div><p>${escHtml(document.document_type)} · ${escHtml(document.document_no)} · ${escHtml(document.issue_date)}</p>${party ? `<p><strong>${escHtml(document.party_kind === 'supplier' ? 'Supplier' : 'Buyer')}:</strong> ${escHtml(party.name)}${party.address ? ` · ${escHtml(party.address)}` : ''}${party.gstin ? ` · GSTIN: ${escHtml(party.gstin)}` : ''}</p>` : ''}<table><thead><tr><th>Description</th><th>HSN</th><th>Quantity</th>${showMoney ? '<th>Rate (₹)</th><th>Taxable (₹)</th>' : ''}</tr></thead><tbody>${lineHtml}</tbody></table>${showMoney ? `<h2>Total: ₹${escHtml(rupees(document.total_paise))}</h2>` : ''}<p>${escHtml(document.notes)}</p></body></html>`);
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(document.document_no)} · ${escHtml(mill.name)}</title>${printStyles}</head><body><main class="sheet"><div class="actions"><button onclick="print()">Print / Save PDF</button></div><div class="brand"><div><h1>${escHtml(mill.name)}</h1><div class="muted">${escHtml(mill.address)}${mill.place_of_supply ? ` · ${escHtml(mill.place_of_supply)}` : ''}${mill.phone ? ` · ${escHtml(mill.phone)}` : ''}</div><div class="muted">${mill.gstin ? `GSTIN: ${escHtml(mill.gstin)} · ` : ''}${escHtml(mill.email || '')}</div></div><div class="label">MillSaathi</div></div><h2 class="title">${escHtml(document.document_type)}</h2><div class="meta"><div><div class="label">Document no.</div><strong>${escHtml(document.document_no)}</strong></div><div><div class="label">Issue date</div><strong>${escHtml(document.issue_date)}</strong></div><div><div class="label">Party</div><strong>${escHtml(party?.name || '—')}</strong></div></div><table><thead><tr><th>Description</th><th>HSN</th><th>Quantity</th>${showMoney ? '<th>Rate (₹)</th><th>Taxable (₹)</th>' : ''}</tr></thead><tbody>${lineHtml}</tbody></table>${showMoney ? `<div class="total"><span>Total</span><span>₹${escHtml(rupees(document.total_paise))}</span></div>` : ''}${document.notes ? `<div class="notes"><strong>Notes</strong><br>${escHtml(document.notes)}</div>` : ''}<p class="muted">Generated with MillSaathi · millsaathi.com</p></main></body></html>`);
 });
 
 api.post('/feedback', async (c) => {
@@ -1509,7 +1513,7 @@ api.get('/feedback/tickets', async (c) => {
      LEFT JOIN mills m ON m.id = f.mill_id
      LEFT JOIN users u ON u.id = f.user_id
      ORDER BY f.created_at DESC
-     LIMIT 200`,
+LIMIT 1000`,
   ).all();
   return c.json({ tickets: res.results });
 });
