@@ -75,6 +75,31 @@ npm run db:migrate:remote   # only when migrations change
 npm run deploy              # wrangler deploy → millsaathi.com
 ```
 
+## MillSaathi AI Assistant
+
+The **Need help?** button opens two tabs: a read-only AI assistant and human support.
+The assistant is tool-first: it uses verified, mill-scoped tools to summarize stock and posted
+production, retrieve relevant document metadata/notes with citations, and make a transparent
+historical-average forecast. Gemini is used only for explanatory knowledge answers, never to
+calculate or override operational numbers. It has no write tools and never gives a model direct
+database access.
+
+It works without an API key using local deterministic analysis. To enable Gemini, add Worker
+secrets (the browser never receives the key):
+
+```sh
+wrangler secret put GEMINI_API_KEY
+wrangler secret put GEMINI_MODEL  # optional; defaults to gemini-3-flash-preview
+```
+
+For local Wrangler development, put the same values in the ignored `.dev.vars` file. `.env` is
+also ignored for local tooling that uses it. If Gemini is unavailable or rate-limited, the
+assistant falls back to local analysis.
+Uploaded file bytes are not included in provider requests; only selected document metadata and
+notes can be used as retrieval context. The forecast uses up to 28 recent production days, with
+the latest seven days weighted 2×, and labels confidence based on data depth. Add new
+capabilities as read-only, mill-scoped tools in `src/ai.ts` before exposing any action to a model.
+
 ## Status
 
 Currently **free** — ₹0, all shipped modules, unlimited users. Paid tiers are written but parked in

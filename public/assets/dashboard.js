@@ -10,7 +10,7 @@
   var TURNSTILE_SCRIPT = null;
   var requestedPage = new URLSearchParams(location.search).get('page');
   var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'billing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
-  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processChains: null, chainRuns: null, chainRunDetail: null, processingView: 'chains', processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processChains: null, chainRuns: null, chainRunDetail: null, processingView: 'runs', processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -362,6 +362,35 @@
 
   function isSupportAdmin() {
     return MODE === 'live' && S.ov && S.ov.me && String(S.ov.me.email || '').toLowerCase() === SUPPORT_ADMIN_EMAIL;
+  }
+
+  // The assistant is a read-only workspace. Human support remains available in
+  // the adjacent tab so operators can reach the team without leaving the flow.
+  function assistantDialog() {
+    var old = document.getElementById('ms-assistant'); if (old) old.remove();
+    var dlg = document.createElement('dialog'); dlg.className = 'modal assistant-modal'; dlg.id = 'ms-assistant';
+    dlg.innerHTML = '<div class="modal-h">MillSaathi AI Assistant</div><div class="assistant-sub">Ask about your mill data, documents, or a simple forecast.</div>' +
+      '<div class="assistant-tabs" role="tablist"><button type="button" class="on" role="tab" aria-selected="true" data-assistant-tab="ai">AI assistant</button><button type="button" role="tab" aria-selected="false" data-assistant-tab="human">Human support</button></div>' +
+      '<div class="assistant-body"><section data-assistant-panel="ai"><div class="assistant-chat" aria-live="polite"><div class="assistant-message">Hi — I can review current stock, posted production, documents, and a historical-average forecast. I never make changes to your mill data.</div></div><form class="assistant-form"><textarea name="message" maxlength="2000" placeholder="e.g. Forecast tomorrow’s rice output"></textarea><div class="form-err"></div><div class="frow"><button type="button" class="btn ghost" data-assistant-close style="flex:1">Close</button><button type="submit" class="btn acc" style="flex:1">Ask AI</button></div></form></section>' +
+      '<section data-assistant-panel="human" hidden><form class="assistant-human"><div class="fld"><label>What do you need help with?</label><textarea name="message" required placeholder="Tell us what is stuck or confusing."></textarea></div><div class="fld"><label>Phone or WhatsApp (optional)</label><input name="contact" placeholder="So we can reply if needed"></div><div class="form-err"></div><div class="frow"><button type="button" class="btn ghost" data-assistant-close style="flex:1">Close</button><button type="submit" class="btn acc" style="flex:1">Send to support</button></div></form></section></div>';
+    document.body.appendChild(dlg); dlg.showModal();
+    function switchTab(tab) {
+      dlg.querySelectorAll('[data-assistant-tab]').forEach(function (button) { var on = button.getAttribute('data-assistant-tab') === tab; button.classList.toggle('on', on); button.setAttribute('aria-selected', on ? 'true' : 'false'); });
+      dlg.querySelectorAll('[data-assistant-panel]').forEach(function (panel) { panel.hidden = panel.getAttribute('data-assistant-panel') !== tab; });
+    }
+    dlg.querySelectorAll('[data-assistant-tab]').forEach(function (button) { button.onclick = function () { switchTab(button.getAttribute('data-assistant-tab')); }; });
+    dlg.querySelectorAll('[data-assistant-close]').forEach(function (button) { button.onclick = function () { dlg.close(); dlg.remove(); }; });
+    dlg.querySelector('.assistant-form').onsubmit = function (event) {
+      event.preventDefault(); var form = event.target; var message = form.message.value.trim(); var error = form.querySelector('.form-err'); if (!message) return;
+      var chat = dlg.querySelector('.assistant-chat'); var submit = form.querySelector('[type="submit"]'); error.textContent = ''; submit.disabled = true; submit.textContent = 'Thinking…';
+      chat.insertAdjacentHTML('beforeend', '<div class="assistant-message user">' + esc(message) + '</div>'); form.message.value = '';
+      apiPost('/api/assistant/chat', { message: message }).then(function (reply) {
+        var citations = (reply.citations || []).map(function (citation) { return '<li><strong>' + esc(citation.label) + '</strong><span>' + esc(citation.detail) + '</span></li>'; }).join('');
+        var provenance = reply.provider === 'tool' ? 'Verified ' + (reply.capability || 'read-only') + ' calculation' : reply.provider === 'gemini' ? 'Gemini explanation; verify important decisions against the cited records.' : 'Local read-only guidance';
+        chat.insertAdjacentHTML('beforeend', '<div class="assistant-message"><div>' + esc(reply.answer) + '</div>' + (citations ? '<div class="assistant-sources"><b>Sources</b><ul>' + citations + '</ul></div>' : '') + '<small>' + esc(provenance) + '</small></div>'); chat.scrollTop = chat.scrollHeight;
+      }).catch(function (err) { error.textContent = err.message || 'The assistant could not answer right now.'; }).finally(function () { submit.disabled = false; submit.textContent = 'Ask AI'; });
+    };
+    dlg.querySelector('.assistant-human').onsubmit = function (event) { event.preventDefault(); var form = event.target; var error = form.querySelector('.form-err'); var submit = form.querySelector('[type="submit"]'); submit.disabled = true; error.textContent = ''; apiPost('/api/feedback', { kind: 'help', message: form.message.value, contact: form.contact.value || null, page: S.page }).then(function () { dlg.close(); dlg.remove(); toast('Your support request was sent.', 'success'); }).catch(function (err) { error.textContent = err.message; }).finally(function () { submit.disabled = false; }); };
   }
   function saudaSummary(id, ov) {
     var sauda = (ov.saudas || []).find(function (s) { return s.id === id; });
@@ -983,12 +1012,10 @@
   }
   function bindProcessCatalog() { var rows = document.querySelector('.inline-template-rows'); if (!rows) return; rows.querySelectorAll('.inline-template-row').forEach(function (row) { row.ondragstart = function () { row.classList.add('dragging'); }; row.ondragend = function () { row.classList.remove('dragging'); }; row.ondragover = function (event) { event.preventDefault(); }; row.ondrop = function (event) { event.preventDefault(); var dragging = rows.querySelector('.inline-template-row.dragging'); if (dragging && dragging !== row) rows.insertBefore(dragging, row); }; }); }
   function chainWorkspaceMarkup() {
-    var tabs = '<div class="processing-tabs"><button class="' + (S.processingView === 'chains' ? 'on' : '') + '" data-act="processing-view" data-view="chains">Chain view</button><button class="' + (S.processingView === 'runs' ? 'on' : '') + '" data-act="processing-view" data-view="runs">Run log</button></div>';
-    if (S.processingView === 'runs') return tabs;
     var cards = S.chainRuns.map(function (run) { var total = Number(run.total_steps) || 0, completed = Number(run.completed_steps) || 0, progress = total ? Math.round(completed * 100 / total) : 0; return '<article class="chain-card"><div><strong>' + esc(run.code) + ' · ' + esc(run.chain_name) + '</strong><div class="hint">' + esc(run.current_step_name || (run.status === 'COMPLETED' ? 'Completed' : 'Not started')) + ' · ' + completed + '/' + total + ' steps</div><div class="chain-progress"><i style="width:' + progress + '%"></i></div></div><div>' + pill(String(run.status || '').toLowerCase()) + ' <button class="btn sm" data-act="chain-open" data-id="' + esc(run.id) + '">Open</button></div></article>'; }).join('') || '<div class="empty">No chain runs yet. Start a pipeline to track work-in-progress across steps.</div>';
     var detail = S.chainRunDetail, selected = detail && detail.chain_run;
     var active = selected ? '<div class="chain-detail"><strong>' + esc(selected.code) + ' · ' + esc(selected.chain_name) + '</strong><div class="hint">Post the current workspace step to pass its output lots to the next step.</div><div class="chain-step-list">' + (detail.steps || []).map(function (step) { var state = step.run_id ? 'done' : (String(step.id) === String(selected.current_step_id) ? 'current' : 'pending'); return '<span class="' + state + '">' + Number(step.step_number) + '. ' + esc(step.process_type_name) + '</span>'; }).join('') + '</div><div class="chain-balance">Input ' + qtl(detail.chain_mass_balance.original_input_base) + ' qtl · Final output ' + qtl(detail.chain_mass_balance.final_output_base) + ' qtl · Yield ' + detail.chain_mass_balance.yield_pct + '%</div><div><button class="btn sm" data-act="chain-complete" data-id="' + esc(selected.id) + '">Complete</button> ' + (can('VOID') ? '<button class="btn sm" data-act="chain-void" data-id="' + esc(selected.id) + '">Void chain</button>' : '') + '</div></div>' : '';
-    return tabs + '<div class="card pad"><div class="card-top"><div><div class="card-h">Processing chains</div><div class="hint">Each completed step passes its output lots to the next one.</div></div>' + (can('CREATE') ? '<button class="btn acc" data-act="chain-start">Start chain run</button>' : '') + '</div>' + cards + '</div>' + active;
+    return '<div class="card pad"><div class="card-top"><div><div class="card-h">Processing chains</div><div class="hint">Each completed step passes its output lots to the next one.</div></div>' + (can('CREATE') ? '<button class="btn acc" data-act="chain-start">Start chain run</button>' : '') + '</div>' + cards + '</div>' + active;
   }
   function pageProcessing() {
     if (!S.processTypes || !S.processRuns || !S.processChains || !S.chainRuns) { if (!S.processTypes) loadProcessTypes(); if (!S.processRuns) loadProcessRuns(); if (!S.processChains) loadProcessingChains(); if (!S.chainRuns) loadChainRuns(); return '<div class="card pad"><div class="empty">Loading processing…</div></div>'; }
@@ -996,7 +1023,6 @@
     if (firstType && (!S.processWorkspace || !S.processDraft || S.processDraft.processTypeId !== firstType.id) && !S.processWorkspace) { processWorkspaceFor(firstType.id); return '<div class="card pad"><div class="empty">Loading Process Workspace…</div></div>'; }
     if (S.processingView === 'chains') return chainWorkspaceMarkup() + processWorkspaceMarkup();
     var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; var chainBadge = run.chain_name ? '<div class="hint">' + esc(run.chain_name) + ' · Step ' + esc(run.chain_step_number) + '</div>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + chainBadge + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
-    setTimeout(function () { var header = document.querySelector('.process-types-card .card-top'); if (header && !header.querySelector('.processing-tabs')) { var tabs = document.createElement('div'); tabs.className = 'processing-tabs processing-tabs-header'; tabs.innerHTML = '<button data-act="processing-view" data-view="chains">Chain view</button><button class="on" data-act="processing-view" data-view="runs">Run log</button>'; header.appendChild(tabs); } }, 0);
     return processWorkspaceMarkup() + '<div class="card process-types-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Configure reusable inputs, outputs and defaults for each process.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' + (firstType ? '<button class="btn sm icon-btn" title="Edit process flow" aria-label="Edit process flow" data-act="process-template-edit" data-id="' + esc(firstType.id) + '">✎</button>' : '') : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Template</th><th>Status</th><th></th></tr></thead><tbody>' + (S.processTypes.map(function (p) { var archived = !!p.deleted_at, configured = (p.template_lines || []).length > 0; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (configured ? 'Configured' : 'Manual fallback') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(p.id) + '">Configure</button> ' : '') + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process types yet.</td></tr>') + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products remain linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
   }
   function openProcessTemplateEditor(processType) {
@@ -1300,7 +1326,7 @@
       S.bugs = null;
       render();
     } else if (act === 'processing-view') {
-      S.processingView = el.getAttribute('data-view') || 'chains'; render();
+      S.processingView = el.getAttribute('data-view') || 'runs'; render();
     } else if (act === 'chain-start') {
       var options = (S.processChains || []).filter(function (chain) { return !chain.deleted_at && Number(chain.active) !== 0 && (chain.steps || []).length; }).map(function (chain) { return { value: chain.id, label: chain.name + ' · ' + chain.steps.length + ' steps' }; });
       if (!options.length) { toast('Create a chain with at least one step first.', 'error'); return; }
@@ -1643,13 +1669,7 @@
     } else if (act === 'godown-new') {
       modal('Add godown', godownFields(), 'Add', function (d) { return apiPost('/api/godowns', d); });
     } else if (act === 'feedback') {
-      modal('Tell us what is stuck', [
-        { name: 'kind', label: 'Type', type: 'select', options: [{ value: 'help', label: 'Need help' }, { value: 'bug', label: 'Bug' }, { value: 'feature', label: 'Missing feature' }] },
-        { name: 'message', label: 'Message', type: 'textarea', placeholder: 'What were you trying to do? What was confusing or missing?' },
-        { name: 'contact', label: 'Phone or WhatsApp (optional)', placeholder: 'So we can reply if needed' },
-      ], 'Send', function (d) {
-        return apiPost('/api/feedback', { kind: d.kind, message: d.message, contact: d.contact || null, page: S.page });
-      });
+      assistantDialog();
     }
   }
 
@@ -1676,6 +1696,12 @@
       [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(function (p) {
         return '<button type="button" data-act="period" data-period="' + p[0] + '" class="' + (S.period === p[0] ? 'on' : '') + '" aria-pressed="' + (S.period === p[0] ? 'true' : 'false') + '">' + p[1] + '</button>';
       }).join('') + '</div>';
+  }
+  function processingHeaderTabs() {
+    if (S.page !== 'processing') return '';
+    return '<div class="processing-tabs processing-header-tabs" role="tablist" aria-label="Processing view">' +
+      '<button type="button" class="' + (S.processingView === 'chains' ? 'on' : '') + '" data-act="processing-view" data-view="chains" role="tab" aria-selected="' + (S.processingView === 'chains' ? 'true' : 'false') + '">Chain view</button>' +
+      '<button type="button" class="' + (S.processingView === 'runs' ? 'on' : '') + '" data-act="processing-view" data-view="runs" role="tab" aria-selected="' + (S.processingView === 'runs' ? 'true' : 'false') + '">Run log</button></div>';
   }
   var ICONS = {
     dashboard: '<svg width="19" height="19" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" stroke-width="1.9"/><rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" stroke-width="1.9"/><rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" stroke-width="1.9"/><rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" stroke-width="1.9"/></svg>',
@@ -1720,8 +1746,8 @@
       (MODE === 'live' ? '<button class="out" data-act="logout">Log out</button>' : '<a class="out" style="text-decoration:none" href="/">Exit demo</a>') +
       '</div></aside>' +
       '<main class="main">' +
-      '<header class="topbar"><button class="menu-trigger" type="button" aria-label="Open application navigation" aria-controls="mobile-nav" aria-expanded="false" data-act="nav-open">☰</button><div class="grow"><h1>' + esc(meta.t) + '</h1><div class="sub">' + esc(meta.s()) + '</div></div>' +
-      periodToggle() + '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
+      '<header class="topbar' + (S.page === 'processing' ? ' processing-topbar' : '') + '"><button class="menu-trigger" type="button" aria-label="Open application navigation" aria-controls="mobile-nav" aria-expanded="false" data-act="nav-open">☰</button><div class="grow"><h1>' + esc(meta.t) + '</h1><div class="sub">' + esc(meta.s()) + '</div></div>' +
+      processingHeaderTabs() + periodToggle() + '<div class="date-chip"><div class="d">' + today + '</div><div class="s">' + esc(S.ov.mill.season_label || '') + '</div></div></header>' +
       '<div class="content ms-scroll"><div class="page" id="ms-page"></div></div>' +
       '</main>' +
       '<div class="nav-backdrop" data-act="nav-close"></div><aside class="mobile-nav" id="mobile-nav" aria-label="Application navigation"><div class="mobile-nav-head"><div><div class="name">MillSaathi</div><div class="mill">' + esc(S.ov.mill.name) + '</div></div><button class="nav-close" type="button" aria-label="Close application navigation" data-act="nav-close">×</button></div><nav class="nav">' + navMarkup() + '</nav><div class="mobile-profile"><button class="side-profile" data-act="profile" aria-label="Open your profile"><div class="av">' + esc(initials(userName())) + '</div><div style="min-width:0"><div class="nm">' + esc(userName()) + '</div><div class="ds">' + esc(roleDesc()) + '</div></div></button>' + (MODE === 'live' ? '<button class="out" data-act="logout">Log out</button>' : '<a class="out" style="text-decoration:none" href="/">Exit demo</a>') + '</div></aside>' +

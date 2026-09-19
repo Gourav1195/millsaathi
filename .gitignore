@@ -2,6 +2,7 @@ node_modules/
 .wrangler/
 dist/
 .dev.vars
+.env
 worker-configuration.d.ts
 
 # Local knowledge graph — rebuilt by `graphify update .`, not source of truth.

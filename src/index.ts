@@ -14,7 +14,7 @@ export type MillRow = {
   id: string; name: string; slug: string; plan: string; language: string; loss_limit_pct: number; season_label: string; created_at: string;
   address?: string | null; phone?: string | null; email?: string | null; gstin?: string | null; place_of_supply?: string | null;
 };
-type AppBindings = Env & { TURNSTILE_SECRET_KEY?: string; TURNSTILE_SITE_KEY?: string };
+type AppBindings = Env & { TURNSTILE_SECRET_KEY?: string; TURNSTILE_SITE_KEY?: string; GEMINI_API_KEY?: string; GEMINI_MODEL?: string };
 export type AppEnv = {
   Bindings: AppBindings;
   Variables: { session: { user: UserRow; mill: MillRow } };

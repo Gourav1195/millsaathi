@@ -53,6 +53,24 @@ assert.equal(ownerRoot.response.headers.get('location'), '/app', 'authenticated 
 
 const ownerOverview = await request('/api/overview', { headers: { cookie: cookieFrom(ownerLogin.response) } });
 assert.equal(ownerOverview.response.status, 200, 'owner should be able to view the overview');
+const assistantReply = await request('/api/assistant/chat', {
+  method: 'POST',
+  headers: { cookie: cookieFrom(ownerLogin.response), 'content-type': 'application/json' },
+  body: JSON.stringify({ message: 'What is our current stock?' }),
+});
+assert.equal(assistantReply.response.status, 200, 'owner should be able to use the read-only assistant');
+assert.equal(typeof assistantReply.body.answer, 'string', 'assistant should return an answer');
+assert.ok(Array.isArray(assistantReply.body.citations), 'assistant should return source citations');
+assert.ok(['tool', 'local', 'gemini'].includes(assistantReply.body.provider), 'assistant should identify its response provider');
+const forecastReply = await request('/api/assistant/chat', {
+  method: 'POST',
+  headers: { cookie: cookieFrom(ownerLogin.response), 'content-type': 'application/json' },
+  body: JSON.stringify({ message: "Forecast tomorrow's rice production" }),
+});
+assert.equal(forecastReply.response.status, 200, 'forecast tool should be available to the owner');
+assert.equal(forecastReply.body.provider, 'tool', 'forecast must use the verified calculation tool, not Gemini');
+assert.equal(forecastReply.body.capability, 'forecast', 'forecast should identify the tool used');
+assert.match(forecastReply.body.answer, /Rice output forecast:|cannot produce a responsible forecast/i, 'forecast must contain a calculated result or an explicit data-sufficiency warning');
 assert.ok(Array.isArray(ownerOverview.body.processing_today), 'overview should expose generic processing totals for the current day');
 assert.equal(ownerOverview.body.kpis.incoming_today_kg, ownerOverview.body.kpis.paddy_in_today_kg, 'generic inbound KPI should preserve the legacy alias');
 assert.equal(ownerOverview.body.kpis.outgoing_today_kg, ownerOverview.body.kpis.rice_out_today_kg, 'generic outbound KPI should preserve the legacy alias');

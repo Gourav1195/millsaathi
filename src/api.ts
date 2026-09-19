@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from './index';
 import { hashPassword, hashToken } from './auth';
+import { answerAssistantQuestion } from './ai';
 
 const printStyles = `<style>
   :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#182230;font:14px/1.5 'IBM Plex Sans',Arial,sans-serif}.sheet{max-width:820px;margin:32px auto;padding:40px;background:#fff;box-shadow:0 12px 36px rgba(20,30,40,.12);border-top:7px solid #e8b93b}.brand{display:flex;justify-content:space-between;gap:24px;border-bottom:1px solid #e4e7ec;padding-bottom:22px}.brand h1{font:800 27px/1.1 Archivo,Arial,sans-serif;margin:0 0 6px}.muted{color:#667085}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#667085;font-weight:700}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.meta>div{background:#f7f8fa;border:1px solid #e4e7ec;border-radius:8px;padding:12px}.title{font:800 20px Archivo,Arial,sans-serif;margin:24px 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th{background:#182230;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left}th,td{padding:11px 12px;border-bottom:1px solid #e4e7ec}td:last-child,th:last-child{text-align:right}.total{margin:20px 0 0 auto;max-width:270px;background:#fff8e1;border:1px solid #efd98d;border-radius:8px;padding:16px;display:flex;justify-content:space-between;font-weight:800;font-size:17px}.notes{margin-top:24px;padding-top:16px;border-top:1px solid #e4e7ec;white-space:pre-line}.actions{text-align:right;margin-bottom:14px}.actions button{border:0;border-radius:7px;padding:9px 14px;background:#c0451c;color:#fff;font-weight:700;cursor:pointer}@media(max-width:700px){body{background:#fff}.sheet{margin:0;padding:24px;box-shadow:none}.brand{display:block}.meta{grid-template-columns:1fr 1fr}}@media print{body{background:#fff}.sheet{margin:0;max-width:none;padding:0;box-shadow:none;border-top:0}.actions{display:none}}
@@ -2219,6 +2220,22 @@ api.get('/documents/:id/print', async (c) => {
   const rupees = (value: unknown) => (Number(value || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const lineHtml = lines.results.map((line) => `<tr><td>${escHtml(line.item_name || line.description)}${line.item_name && line.description !== line.item_name ? `<br><small>${escHtml(line.description)}</small>` : ''}</td><td>${escHtml(line.hsn)}</td><td>${escHtml(line.quantity)} ${escHtml(line.unit)}</td>${showMoney ? `<td>₹${escHtml(rupees(line.rate_paise))}</td><td>₹${escHtml(rupees(line.taxable_paise))}</td>` : ''}</tr>`).join('');
   return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(document.document_no)} · ${escHtml(mill.name)}</title>${printStyles}</head><body><main class="sheet"><div class="actions"><button onclick="print()">Print / Save PDF</button></div><div class="brand"><div><h1>${escHtml(mill.name)}</h1><div class="muted">${escHtml(mill.address)}${mill.place_of_supply ? ` · ${escHtml(mill.place_of_supply)}` : ''}${mill.phone ? ` · ${escHtml(mill.phone)}` : ''}</div><div class="muted">${mill.gstin ? `GSTIN: ${escHtml(mill.gstin)} · ` : ''}${escHtml(mill.email || '')}</div></div><div class="label">MillSaathi</div></div><h2 class="title">${escHtml(document.document_type)}</h2><div class="meta"><div><div class="label">Document no.</div><strong>${escHtml(document.document_no)}</strong></div><div><div class="label">Issue date</div><strong>${escHtml(document.issue_date)}</strong></div><div><div class="label">Party</div><strong>${escHtml(party?.name || '—')}</strong></div></div><table><thead><tr><th>Description</th><th>HSN</th><th>Quantity</th>${showMoney ? '<th>Rate (₹)</th><th>Taxable (₹)</th>' : ''}</tr></thead><tbody>${lineHtml}</tbody></table>${showMoney ? `<div class="total"><span>Total</span><span>₹${escHtml(rupees(document.total_paise))}</span></div>` : ''}${document.notes ? `<div class="notes"><strong>Notes</strong><br>${escHtml(document.notes)}</div>` : ''}<p class="muted">Generated with MillSaathi · millsaathi.com</p></main></body></html>`);
+});
+
+// Assistant requests are deliberately read-only and scoped to the signed-in mill.
+// The optional Gemini key stays in the Worker environment, never the browser.
+api.post('/assistant/chat', async (c) => {
+  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const message = String(body.message ?? '').trim();
+  if (!message || message.length > 2000) return c.json({ error: 'Ask a question between 1 and 2,000 characters.' }, 400);
+  const { mill } = c.get('session');
+  const reply = await answerAssistantQuestion({
+    db: c.env.DB, millId: mill.id, message,
+    geminiApiKey: c.env.GEMINI_API_KEY,
+    geminiModel: c.env.GEMINI_MODEL,
+  });
+  return c.json(reply);
 });
 
 api.post('/feedback', async (c) => {
