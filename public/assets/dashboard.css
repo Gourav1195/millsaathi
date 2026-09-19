@@ -207,6 +207,19 @@ html[data-region="intl"] .deva { display: none; }
 .note-locked { padding: 12px 22px; background: #FAFBFC; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .empty { padding: 34px 22px; text-align: center; color: var(--muted); font-weight: 600; font-size: 14px; }
 .process-toolbar { display:flex; align-items:flex-start; gap:16px; margin-bottom:14px; }
+.processing-tabs { display:flex; gap:6px; margin:0 0 14px; }
+.processing-tabs button { border:1px solid var(--border); border-radius:8px; padding:8px 12px; background:var(--bg); color:var(--muted2); font:700 13px 'IBM Plex Sans',system-ui,sans-serif; cursor:pointer; }
+.processing-tabs button.on { background:var(--ink); border-color:var(--ink); color:#fff; }
+.chain-card { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:13px 0; border-top:1px solid var(--line); }
+.chain-card strong { display:block; font-size:14px; }
+.chain-progress { width:min(330px,100%); height:6px; margin-top:9px; overflow:hidden; border-radius:999px; background:var(--line); }
+.chain-progress i { display:block; height:100%; border-radius:inherit; background:var(--green); }
+.chain-detail { display:flex; flex-direction:column; gap:10px; margin:14px 0; padding:16px; border:1px solid #BCD8C4; border-left:4px solid var(--green); border-radius:10px; background:#F5FBF7; }
+.chain-step-list { display:flex; flex-wrap:wrap; gap:7px; }
+.chain-step-list span { padding:6px 9px; border-radius:999px; background:#EEF1F5; color:var(--muted2); font-size:12px; font-weight:700; }
+.chain-step-list span.done { background:#DCEEE1; color:#256238; }
+.chain-step-list span.current { background:#FEF3D6; color:#8A6A16; }
+.chain-balance { color:var(--muted2); font-size:13px; font-weight:700; }
 .process-toolbar-actions { display:flex; width:100%; gap:8px; align-items:center; min-width:0; }
 .process-select, .process-godown-label select, .process-output-input select { min-height:36px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--ink); font:600 13px 'IBM Plex Sans',system-ui,sans-serif; }
 .process-stepper { display:flex; flex:1; min-width:0; align-items:center; gap:5px; overflow-x:auto; }

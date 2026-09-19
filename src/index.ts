@@ -119,11 +119,13 @@ app.post('/api/auth/signup', async (c) => {
   const name = (b.name ?? '').trim();
   const email = (b.email ?? '').trim().toLowerCase();
   const password = b.password ?? '';
+  const preferredUnit = String(b.preferred_unit ?? 'QUINTAL').toUpperCase();
   const ip = c.req.header('CF-Connecting-IP') || 'unknown';
   if (!await rateLimit(c.env.DB, `signup:${ip}`, 10)) return c.json({ error: 'Too many signup attempts. Please try again later.' }, 429);
   if (!await verifyTurnstile(c, b.turnstile_token)) return c.json({ error: 'Please complete the security check and try again.' }, 403);
   if (!millName || !name || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: 'Mill name, your name and a valid email are required.' }, 400);
   if (password.length < 8) return c.json({ error: 'Password must be at least 8 characters.' }, 400);
+  if (!['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(preferredUnit)) return c.json({ error: 'Choose a supported preferred unit.' }, 400);
 
   const existing = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
   if (existing) return c.json({ error: 'An account with this email already exists.' }, 409);
@@ -136,8 +138,8 @@ app.post('/api/auth/signup', async (c) => {
   // New mill starts usable: standard rice item graph + one godown.
   const defaults: D1PreparedStatement[] = [
     c.env.DB.prepare(`INSERT INTO mills (id, name, slug) VALUES (?, ?, ?)`).bind(millId, millName, slug),
-    c.env.DB.prepare(`INSERT INTO users (id, mill_id, name, email, role, pass_hash, pass_salt) VALUES (?, ?, ?, ?, 'owner', ?, ?)`)
-      .bind(userId, millId, name, email, hash, salt),
+    c.env.DB.prepare(`INSERT INTO users (id, mill_id, name, email, role, preferred_unit, pass_hash, pass_salt) VALUES (?, ?, ?, ?, 'owner', ?, ?, ?)`)
+      .bind(userId, millId, name, email, preferredUnit, hash, salt),
     c.env.DB.prepare(`INSERT INTO billing_accounts (id, mill_id, provider) VALUES (?, ?, 'razorpay')`).bind(crypto.randomUUID(), millId),
     c.env.DB.prepare(`INSERT INTO godowns (id, mill_id, name, capacity_qtl) VALUES (?, ?, 'Godown 1', 2000)`).bind(crypto.randomUUID(), millId),
   ];
@@ -149,10 +151,20 @@ app.post('/api/auth/signup', async (c) => {
     ['Grading and Color Sorting', 'Grade kernels and remove discolored grains.'],
     ['Weighing and Packaging', 'Weigh, pack and prepare finished goods for dispatch.'],
   ];
-  for (const [name, description] of defaultProcesses) {
-    defaults.push(c.env.DB.prepare(`INSERT INTO process_types (id, mill_id, name, description) VALUES (?, ?, ?, ?)`)
-      .bind(crypto.randomUUID(), millId, name, description));
+  const defaultProcessIds = defaultProcesses.map(() => crypto.randomUUID());
+  for (const [index, [name, description]] of defaultProcesses.entries()) {
+    defaults.push(c.env.DB.prepare(`INSERT INTO process_types (id, mill_id, name, description, default_unit) VALUES (?, ?, ?, ?, ?)`)
+      .bind(defaultProcessIds[index], millId, name, description, preferredUnit));
   }
+  // A new mill can begin using the linear rice pipeline immediately. The chain
+  // remains optional: standalone process runs keep working unchanged.
+  const defaultChainId = crypto.randomUUID();
+  defaults.push(c.env.DB.prepare(`INSERT INTO processing_chains (id, mill_id, name, description, input_category, expected_yield_pct) VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(defaultChainId, millId, 'Rice Milling Pipeline', 'Default end-to-end rice milling chain: Pre-Cleaning through Packaging.', 'paddy', 67));
+  defaultProcessIds.forEach((processTypeId, index) => {
+    defaults.push(c.env.DB.prepare(`INSERT INTO processing_chain_steps (id, mill_id, chain_id, process_type_id, step_number) VALUES (?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), millId, defaultChainId, processTypeId, index + 1));
+  });
   const defaultItems: [string, string, string, number | null][] = [
     ['Paddy (common)', 'paddy', '1006', null],
     ['Raw Rice', 'rice', '1006', 67],

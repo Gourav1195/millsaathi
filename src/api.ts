@@ -376,12 +376,41 @@ api.get('/overview', async (c) => {
      FROM process_run_lines l JOIN process_runs r ON r.id = l.run_id AND r.mill_id = l.mill_id
      WHERE l.mill_id = ? AND r.run_date = ? AND r.status = 'POSTED' GROUP BY l.line_type`,
   ).bind(mill.id, today).all();
+  // Active chain runs for the overview
+  const activeChainRunsRes = await db.prepare(
+    `SELECT cr.id, cr.code, cr.status, cr.start_date, cr.total_input_base, cr.total_output_base, cr.total_loss_base,
+            pc.name AS chain_name,
+            cs.step_number AS current_step_number, pt.name AS current_step_name,
+            (SELECT COUNT(*) FROM processing_chain_steps WHERE chain_id = cr.chain_id AND mill_id = cr.mill_id) AS total_steps,
+            (SELECT COUNT(*) FROM process_runs pr WHERE pr.chain_run_id = cr.id AND pr.mill_id = cr.mill_id AND pr.status = 'POSTED') AS completed_steps
+     FROM processing_chain_runs cr
+     LEFT JOIN processing_chains pc ON pc.id = cr.chain_id
+     LEFT JOIN processing_chain_steps cs ON cs.id = cr.current_step_id
+     LEFT JOIN process_types pt ON pt.id = cs.process_type_id
+     WHERE cr.mill_id = ? AND cr.status IN ('IN_PROGRESS','PAUSED')
+     ORDER BY cr.created_at DESC LIMIT 10`,
+  ).bind(mill.id).all();
+  const chainYieldSummaryRes = await db.prepare(
+    `SELECT COUNT(*) AS completed_runs,
+            COALESCE(ROUND(AVG(CASE WHEN total_input_base > 0 THEN total_output_base * 100.0 / total_input_base END), 1), 0) AS average_yield_pct,
+            COALESCE(SUM(total_input_base), 0) AS total_input_base,
+            COALESCE(SUM(total_output_base), 0) AS total_output_base
+     FROM processing_chain_runs WHERE mill_id = ? AND status = 'COMPLETED'`,
+  ).bind(mill.id).first<Record<string, unknown>>();
 
   const gateAll = gateRes.results as Record<string, unknown>[];
   const gateToday = gateAll.filter((g) => g.entry_date === today);
   const prodRuns = prodRes.results as { run_date: string; paddy_in_kg: number; rice_out_kg: number; bran_out_kg: number; husk_out_kg: number; broken_out_kg: number }[];
   const todayRun = prodRuns.filter((r) => r.run_date === today).at(-1) ?? null;
-  const mb = massBalance(todayRun);
+  // Prefer generic mass balance from process_run_lines when available, fall back to legacy.
+  const processToday: Record<string, number> = {};
+  for (const r of processTodayRes.results as { line_type: string; quantity_base: number }[]) processToday[r.line_type] = r.quantity_base;
+  const hasProcessRunToday = (processToday.INPUT || 0) > 0;
+  const mb = hasProcessRunToday
+    ? { in_kg: processToday.INPUT || 0, rice_kg: processToday.OUTPUT || 0, bran_kg: 0, husk_kg: 0, broken_kg: 0,
+        unexplained_kg: Math.max(0, (processToday.INPUT || 0) - (processToday.OUTPUT || 0) - (processToday.LOSS || 0)),
+        unexplained_pct: (processToday.INPUT || 0) > 0 ? Math.round((Math.max(0, (processToday.INPUT || 0) - (processToday.OUTPUT || 0) - (processToday.LOSS || 0)) / (processToday.INPUT || 0)) * 1000) / 10 : 0 }
+    : massBalance(todayRun);
 
   // Dashboard trend chart. The API returns a stable bucket shape for all three views.
   const trendMap = new Map<string, { in_kg: number; out_kg: number }>();
@@ -493,6 +522,8 @@ api.get('/overview', async (c) => {
     item_flows: itemFlowRes.results,
     processing_summary: processSummaryRes.results,
     production: prodRuns,
+    active_chain_runs: activeChainRunsRes.results,
+    chain_yield_summary: chainYieldSummaryRes ?? { completed_runs: 0, average_yield_pct: 0, total_input_base: 0, total_output_base: 0 },
   };
 
   return c.json(effectiveRole(user) === 'manager' ? (stripMoney(body) as typeof body) : body);
@@ -1337,7 +1368,7 @@ api.patch('/process-types/:id/restore', async (c) => {
 
 api.get('/process-runs', async (c) => {
   const { mill } = c.get('session');
-  const runs = await c.env.DB.prepare(`SELECT r.*, pt.name AS process_type_name, u.name AS creator_name FROM process_runs r LEFT JOIN process_types pt ON pt.id = r.process_type_id LEFT JOIN users u ON u.id = r.created_by WHERE r.mill_id = ? ORDER BY r.run_date DESC, r.created_at DESC LIMIT 1000`).bind(mill.id).all<Record<string, unknown>>();
+  const runs = await c.env.DB.prepare(`SELECT r.*, pt.name AS process_type_name, u.name AS creator_name, pc.name AS chain_name, cs.step_number AS chain_step_number FROM process_runs r LEFT JOIN process_types pt ON pt.id = r.process_type_id LEFT JOIN users u ON u.id = r.created_by LEFT JOIN processing_chains pc ON pc.id = r.chain_run_id LEFT JOIN processing_chain_steps cs ON cs.id = r.chain_step_id WHERE r.mill_id = ? ORDER BY r.run_date DESC, r.created_at DESC LIMIT 1000`).bind(mill.id).all<Record<string, unknown>>();
   const runIds = runs.results.map((run) => String(run.id));
   const lines = runIds.length
     ? await c.env.DB.prepare(`SELECT l.*, i.name AS item_name FROM process_run_lines l LEFT JOIN items i ON i.id = l.item_id WHERE l.mill_id = ? AND l.run_id IN (${runIds.map(() => '?').join(',')}) ORDER BY l.created_at`).bind(mill.id, ...runIds).all<Record<string, unknown>>()
@@ -1444,6 +1475,9 @@ api.post('/process-runs', async (c) => {
   }
   const normalizedLines = await Promise.all(lines.map(async (line) => ({ line, q: await normalizeItemQuantity(c.env.DB, mill.id, line.item_id, line.quantity, line.unit) })));
   if (!normalizedLines.every(({ line, q }) => ['INPUT', 'OUTPUT', 'LOSS'].includes(String(line.line_type)) && !!String(line.item_id ?? '') && !!q && q.base > 0)) return c.json({ error: 'each process line needs a valid positive item quantity and unit' }, 400);
+  const inputTotal = normalizedLines.filter(({ line }) => line.line_type === 'INPUT').reduce((total, entry) => total + entry.q!.base, 0);
+  const accountedTotal = normalizedLines.filter(({ line }) => line.line_type === 'OUTPUT' || line.line_type === 'LOSS').reduce((total, entry) => total + entry.q!.base, 0);
+  if (accountedTotal > inputTotal + 0.000001) return c.json({ error: 'total outputs and measured loss cannot exceed total input quantity' }, 400);
   const inputLotGodowns = new Map<string, string | null>();
   for (const line of inputLines) {
     const q = normalizedLines.find((entry) => entry.line === line)!.q!;
@@ -1508,6 +1542,459 @@ api.post('/process-runs/:id/void', async (c) => {
   }
   await c.env.DB.batch(statements);
   await audit(c, 'process_run', id, 'VOID', 'Reversed process stock movements and restored source lots');
+  return c.json({ ok: true });
+});
+
+// ---- Processing Chains: Definition CRUD ----
+
+api.post('/processing-chains', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const name = String(b.name ?? '').trim();
+  if (!name) return c.json({ error: 'name is required' }, 400);
+  const id = uuid();
+  await c.env.DB.prepare(`INSERT INTO processing_chains (id, mill_id, name, description, input_category, expected_yield_pct) VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(id, mill.id, name, String(b.description ?? '').trim() || null, String(b.input_category ?? '').trim() || null, b.expected_yield_pct != null ? Number(b.expected_yield_pct) : null).run();
+  await audit(c, 'processing_chain', id, 'CREATE');
+  return c.json({ id }, 201);
+});
+
+api.get('/processing-chains', async (c) => {
+  const { mill } = c.get('session');
+  const includeArchived = c.req.query('include_archived') === '1';
+  const chains = await c.env.DB.prepare(`SELECT * FROM processing_chains WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY sort_order, name`).bind(mill.id).all<Record<string, unknown>>();
+  const chainIds = chains.results.map((ch) => String(ch.id));
+  const steps = chainIds.length
+    ? await c.env.DB.prepare(`SELECT cs.*, pt.name AS process_type_name, pt.description AS process_type_description FROM processing_chain_steps cs LEFT JOIN process_types pt ON pt.id = cs.process_type_id WHERE cs.mill_id = ? AND cs.chain_id IN (${chainIds.map(() => '?').join(',')}) ORDER BY cs.step_number`).bind(mill.id, ...chainIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const stepsByChain = new Map<string, Record<string, unknown>[]>();
+  for (const step of steps.results) stepsByChain.set(String(step.chain_id), [...(stepsByChain.get(String(step.chain_id)) || []), step]);
+  return c.json({ chains: chains.results.map((ch) => ({ ...ch, steps: stepsByChain.get(String(ch.id)) || [] })) });
+});
+
+api.get('/processing-chains/:id', async (c) => {
+  const { mill } = c.get('session');
+  const id = c.req.param('id');
+  const chain = await c.env.DB.prepare(`SELECT * FROM processing_chains WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<Record<string, unknown>>();
+  if (!chain) return c.json({ error: 'chain not found' }, 404);
+  const steps = await c.env.DB.prepare(`SELECT cs.*, pt.name AS process_type_name, pt.description AS process_type_description FROM processing_chain_steps cs LEFT JOIN process_types pt ON pt.id = cs.process_type_id WHERE cs.chain_id = ? AND cs.mill_id = ? ORDER BY cs.step_number`).bind(id, mill.id).all<Record<string, unknown>>();
+  // Recent chain runs for this chain
+  const runs = await c.env.DB.prepare(`SELECT * FROM processing_chain_runs WHERE chain_id = ? AND mill_id = ? ORDER BY created_at DESC LIMIT 50`).bind(id, mill.id).all<Record<string, unknown>>();
+  const processTypeIds = steps.results.map((step) => String(step.process_type_id));
+  const templateLines = processTypeIds.length
+    ? await c.env.DB.prepare(`SELECT * FROM process_type_lines WHERE mill_id = ? AND process_type_id IN (${processTypeIds.map(() => '?').join(',')}) AND active = 1 ORDER BY process_type_id, sort_order, created_at`).bind(mill.id, ...processTypeIds).all<Record<string, unknown>>()
+    : { results: [] as Record<string, unknown>[] };
+  const yieldHistory = await c.env.DB.prepare(
+    `SELECT cr.id, cr.code, cr.start_date, cr.end_date, cr.status, cr.total_input_base, cr.total_output_base,
+            cr.total_loss_base, cr.total_byproduct_base,
+            CASE WHEN cr.total_input_base > 0 THEN ROUND(cr.total_output_base * 100.0 / cr.total_input_base, 1) ELSE NULL END AS yield_pct
+     FROM processing_chain_runs cr WHERE cr.chain_id = ? AND cr.mill_id = ? AND cr.status = 'COMPLETED'
+     ORDER BY cr.end_date DESC, cr.created_at DESC LIMIT 50`,
+  ).bind(id, mill.id).all<Record<string, unknown>>();
+  return c.json({ chain, steps: steps.results, template_lines: templateLines.results, runs: runs.results, yield_history: yieldHistory.results });
+});
+
+api.put('/processing-chains/:id/steps', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const chainId = c.req.param('id');
+  const chain = await c.env.DB.prepare(`SELECT id FROM processing_chains WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(chainId, mill.id).first();
+  if (!chain) return c.json({ error: 'chain not found' }, 404);
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const steps = Array.isArray(b.steps) ? b.steps as Record<string, unknown>[] : [];
+  if (!steps.length) return c.json({ error: 'at least one step is required' }, 400);
+  // Validate all process type IDs exist
+  const ptIds = steps.map((s) => String(s.process_type_id));
+  const uniquePtIds = [...new Set(ptIds)];
+  const validPts = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM process_types WHERE mill_id = ? AND deleted_at IS NULL AND id IN (${uniquePtIds.map(() => '?').join(',')})`).bind(mill.id, ...uniquePtIds).first<{ count: number }>();
+  if (!validPts || validPts.count !== uniquePtIds.length) return c.json({ error: 'one or more process types not found' }, 400);
+  // Check no active chain runs exist for this chain (cannot modify steps while a run is in progress)
+  const activeRun = await c.env.DB.prepare(`SELECT id FROM processing_chain_runs WHERE chain_id = ? AND mill_id = ? AND status = 'IN_PROGRESS' LIMIT 1`).bind(chainId, mill.id).first();
+  if (activeRun) return c.json({ error: 'cannot modify chain steps while a run is in progress' }, 409);
+  const executedRun = await c.env.DB.prepare(`SELECT id FROM process_runs WHERE chain_run_id IN (SELECT id FROM processing_chain_runs WHERE chain_id = ? AND mill_id = ?) LIMIT 1`).bind(chainId, mill.id).first();
+  if (executedRun) return c.json({ error: 'cannot modify chain steps after a chain run has been posted; create a new chain instead' }, 409);
+  // Also update chain-level fields if provided
+  const chainUpdates: D1PreparedStatement[] = [];
+  if (b.name != null || b.description != null || b.input_category != null || b.expected_yield_pct !== undefined) {
+    chainUpdates.push(c.env.DB.prepare(`UPDATE processing_chains SET name = COALESCE(?, name), description = COALESCE(?, description), input_category = COALESCE(?, input_category), expected_yield_pct = ? WHERE id = ? AND mill_id = ?`)
+      .bind(b.name != null ? String(b.name).trim() : null, b.description != null ? String(b.description).trim() : null, b.input_category != null ? String(b.input_category).trim() : null, b.expected_yield_pct != null ? Number(b.expected_yield_pct) : null, chainId, mill.id));
+  }
+  const statements: D1PreparedStatement[] = [
+    ...chainUpdates,
+    c.env.DB.prepare(`DELETE FROM processing_chain_steps WHERE chain_id = ? AND mill_id = ?`).bind(chainId, mill.id),
+  ];
+  steps.forEach((step, index) => {
+    statements.push(c.env.DB.prepare(`INSERT INTO processing_chain_steps (id, mill_id, chain_id, process_type_id, step_number, expected_yield_min_pct, expected_yield_max_pct, optional, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(uuid(), mill.id, chainId, String(step.process_type_id), index + 1,
+        step.expected_yield_min_pct != null ? Number(step.expected_yield_min_pct) : null,
+        step.expected_yield_max_pct != null ? Number(step.expected_yield_max_pct) : null,
+        step.optional === true || String(step.optional) === '1' ? 1 : 0,
+        String(step.notes ?? '').trim() || null));
+  });
+  await c.env.DB.batch(statements);
+  await audit(c, 'processing_chain', chainId, 'UPDATE', 'Updated chain steps');
+  return c.json({ ok: true });
+});
+
+api.delete('/processing-chains/:id', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const id = c.req.param('id');
+  const activeRun = await c.env.DB.prepare(`SELECT id FROM processing_chain_runs WHERE chain_id = ? AND mill_id = ? AND status = 'IN_PROGRESS' LIMIT 1`).bind(id, mill.id).first();
+  if (activeRun) return c.json({ error: 'cannot archive chain while a run is in progress' }, 409);
+  const result = await c.env.DB.prepare(`UPDATE processing_chains SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), deleted_by = ? WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(user.id, id, mill.id).run();
+  if (!result.meta.changes) return c.json({ error: 'chain not found' }, 404);
+  await audit(c, 'processing_chain', id, 'ARCHIVE');
+  return c.json({ ok: true });
+});
+
+api.patch('/processing-chains/:id/restore', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { mill } = c.get('session');
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare(`UPDATE processing_chains SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
+  if (!result.meta.changes) return c.json({ error: 'archived chain not found' }, 404);
+  await audit(c, 'processing_chain', id, 'RESTORE');
+  return c.json({ ok: true });
+});
+
+// ---- Processing Chain Runs: Execution ----
+
+api.post('/chain-runs', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin', 'manager', 'production_operator', 'operator'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const chainId = String(b.chain_id ?? '');
+  if (!chainId) return c.json({ error: 'chain_id is required' }, 400);
+  const chain = await c.env.DB.prepare(`SELECT id, name FROM processing_chains WHERE id = ? AND mill_id = ? AND deleted_at IS NULL AND active = 1`).bind(chainId, mill.id).first<{ id: string; name: string }>();
+  if (!chain) return c.json({ error: 'chain not found' }, 404);
+  const steps = await c.env.DB.prepare(`SELECT id FROM processing_chain_steps WHERE chain_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(chainId, mill.id).first<{ id: string }>();
+  if (!steps) return c.json({ error: 'chain has no steps defined' }, 400);
+  const id = uuid();
+  const code = await nextCode(c.env.DB, mill.id, 'chain_run', 'CHN');
+  await c.env.DB.prepare(`INSERT INTO processing_chain_runs (id, mill_id, chain_id, code, current_step_id, start_date, notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, mill.id, chainId, code, steps.id, String(b.start_date ?? istToday()), String(b.notes ?? '').trim() || null, user.id).run();
+  await audit(c, 'chain_run', id, 'CREATE', `Started chain run for ${chain.name}`);
+  return c.json({ id, code }, 201);
+});
+
+api.get('/chain-runs', async (c) => {
+  const { mill } = c.get('session');
+  const statusFilter = c.req.query('status');
+  const chainFilter = c.req.query('chain_id');
+  let query = `SELECT cr.*, pc.name AS chain_name, cs.step_number AS current_step_number, pt.name AS current_step_name,
+                      (SELECT COUNT(*) FROM processing_chain_steps WHERE chain_id = cr.chain_id AND mill_id = cr.mill_id) AS total_steps,
+                      (SELECT COUNT(*) FROM process_runs pr WHERE pr.chain_run_id = cr.id AND pr.mill_id = cr.mill_id AND pr.status = 'POSTED') AS completed_steps,
+                      u.name AS creator_name
+               FROM processing_chain_runs cr
+               LEFT JOIN processing_chains pc ON pc.id = cr.chain_id
+               LEFT JOIN processing_chain_steps cs ON cs.id = cr.current_step_id
+               LEFT JOIN process_types pt ON pt.id = cs.process_type_id
+               LEFT JOIN users u ON u.id = cr.created_by
+               WHERE cr.mill_id = ?`;
+  const params: unknown[] = [mill.id];
+  if (statusFilter) { query += ` AND cr.status = ?`; params.push(statusFilter); }
+  if (chainFilter) { query += ` AND cr.chain_id = ?`; params.push(chainFilter); }
+  query += ` ORDER BY cr.created_at DESC LIMIT 200`;
+  const runs = await c.env.DB.prepare(query).bind(...params).all<Record<string, unknown>>();
+  return c.json({ chain_runs: runs.results });
+});
+
+api.get('/chain-runs/:id', async (c) => {
+  const { mill } = c.get('session');
+  const id = c.req.param('id');
+  const run = await c.env.DB.prepare(`SELECT cr.*, pc.name AS chain_name FROM processing_chain_runs cr LEFT JOIN processing_chains pc ON pc.id = cr.chain_id WHERE cr.id = ? AND cr.mill_id = ?`).bind(id, mill.id).first<Record<string, unknown>>();
+  if (!run) return c.json({ error: 'chain run not found' }, 404);
+  // Get all steps in the chain with their completion status
+  const steps = await c.env.DB.prepare(
+    `SELECT cs.*, pt.name AS process_type_name, pt.description AS process_type_description,
+            pr.id AS run_id, pr.status AS run_status, pr.run_date,
+            (SELECT COALESCE(SUM(l.quantity_base), 0) FROM process_run_lines l WHERE l.run_id = pr.id AND l.line_type = 'INPUT') AS step_input_base,
+            (SELECT COALESCE(SUM(l.quantity_base), 0) FROM process_run_lines l WHERE l.run_id = pr.id AND l.line_type = 'OUTPUT' AND l.semantic_type != 'byproduct') AS step_output_base,
+            (SELECT COALESCE(SUM(l.quantity_base), 0) FROM process_run_lines l WHERE l.run_id = pr.id AND l.line_type = 'OUTPUT' AND l.semantic_type = 'byproduct') AS step_byproduct_base,
+            (SELECT COALESCE(SUM(l.quantity_base), 0) FROM process_run_lines l WHERE l.run_id = pr.id AND l.line_type = 'LOSS') AS step_loss_base
+     FROM processing_chain_steps cs
+     LEFT JOIN process_types pt ON pt.id = cs.process_type_id
+     LEFT JOIN process_runs pr ON pr.chain_step_id = cs.id AND pr.chain_run_id = ? AND pr.mill_id = ? AND pr.status = 'POSTED'
+     WHERE cs.chain_id = ? AND cs.mill_id = ?
+     ORDER BY cs.step_number`,
+  ).bind(id, mill.id, run.chain_id, mill.id).all<Record<string, unknown>>();
+  // Compute chain-level mass balance
+  const firstStepInput = steps.results.find((s) => s.run_id)?.step_input_base as number ?? 0;
+  const lastCompletedStep = [...steps.results].reverse().find((s) => s.run_id);
+  const finalOutput = lastCompletedStep?.step_output_base as number ?? 0;
+  const totalLoss = steps.results.reduce((a, s) => a + (Number(s.step_loss_base) || 0), 0);
+  const totalByproduct = steps.results.reduce((a, s) => a + (Number(s.step_byproduct_base) || 0), 0);
+  const stepYields = steps.results.filter((s) => s.run_id).map((s) => ({
+    step_number: s.step_number,
+    process_type_name: s.process_type_name,
+    input_base: Number(s.step_input_base) || 0,
+    output_base: Number(s.step_output_base) || 0,
+    loss_base: Number(s.step_loss_base) || 0,
+    yield_pct: Number(s.step_input_base) > 0 ? Math.round((Number(s.step_output_base) / Number(s.step_input_base)) * 1000) / 10 : 0,
+  }));
+  const chainMassBalance = {
+    original_input_base: firstStepInput,
+    final_output_base: finalOutput,
+    total_byproduct_base: totalByproduct,
+    total_loss_base: totalLoss,
+    unexplained_base: Math.max(0, firstStepInput - finalOutput - totalLoss - totalByproduct),
+    yield_pct: firstStepInput > 0 ? Math.round((finalOutput / firstStepInput) * 1000) / 10 : 0,
+    step_yields: stepYields,
+  };
+  return c.json({ chain_run: run, steps: steps.results, chain_mass_balance: chainMassBalance });
+});
+
+api.post('/chain-runs/:id/advance', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin', 'manager', 'production_operator', 'operator'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const chainRunId = c.req.param('id');
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const run = await c.env.DB.prepare(`SELECT * FROM processing_chain_runs WHERE id = ? AND mill_id = ? AND status = 'IN_PROGRESS'`).bind(chainRunId, mill.id).first<Record<string, unknown>>();
+  if (!run) return c.json({ error: 'active chain run not found' }, 404);
+  const currentStepId = String(run.current_step_id ?? '');
+  if (!currentStepId) return c.json({ error: 'chain run has no current step' }, 400);
+  // Get the current step
+  const currentStep = await c.env.DB.prepare(`SELECT * FROM processing_chain_steps WHERE id = ? AND mill_id = ?`).bind(currentStepId, mill.id).first<Record<string, unknown>>();
+  if (!currentStep) return c.json({ error: 'current step not found' }, 400);
+  // Check if a process run already exists for this step in this chain run
+  const existingRun = await c.env.DB.prepare(`SELECT id FROM process_runs WHERE chain_run_id = ? AND chain_step_id = ? AND mill_id = ? AND status = 'POSTED'`).bind(chainRunId, currentStepId, mill.id).first();
+  if (existingRun) {
+    // Step already executed — advance to next step
+    const nextStep = await c.env.DB.prepare(`SELECT id FROM processing_chain_steps WHERE chain_id = ? AND mill_id = ? AND step_number = ?`).bind(run.chain_id, mill.id, (currentStep.step_number as number) + 1).first<{ id: string }>();
+    if (!nextStep) {
+      // No more steps — auto-complete
+      await c.env.DB.prepare(`UPDATE processing_chain_runs SET status = 'COMPLETED', end_date = ?, current_step_id = NULL WHERE id = ? AND mill_id = ?`).bind(istToday(), chainRunId, mill.id).run();
+      await audit(c, 'chain_run', chainRunId, 'COMPLETE', 'All steps completed');
+      return c.json({ ok: true, status: 'COMPLETED' });
+    }
+    await c.env.DB.prepare(`UPDATE processing_chain_runs SET current_step_id = ? WHERE id = ? AND mill_id = ?`).bind(nextStep.id, chainRunId, mill.id).run();
+    return c.json({ ok: true, next_step_id: nextStep.id });
+  }
+  // Execute the current step by creating a process_run with chain context.
+  // The caller provides the same payload as POST /process-runs but we inject chain linkage.
+  const lines = Array.isArray(b.lines) ? b.lines as Record<string, unknown>[] : [];
+  if (!lines.length) return c.json({ error: 'lines are required to execute the step' }, 400);
+  const processTypeId = String(currentStep.process_type_id);
+  // Build the process-run payload and delegate to the existing process run creation logic
+  // by rewriting the body and calling the shared validation
+  const processType = await c.env.DB.prepare(`SELECT id FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first();
+  if (!processType) return c.json({ error: 'process type for this step not found' }, 400);
+  const processTypeConfig = await c.env.DB.prepare(`SELECT default_unit, default_destination_godown_id FROM process_types WHERE id = ? AND mill_id = ?`).bind(processTypeId, mill.id).first<{ default_unit: string | null; default_destination_godown_id: string | null }>();
+  const templateLines = await c.env.DB.prepare(`SELECT * FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND active = 1 ORDER BY sort_order, created_at`).bind(processTypeId, mill.id).all<Record<string, unknown>>();
+  const templateById = new Map(templateLines.results.map((line) => [String(line.id), line]));
+  // Infer line details from templates (same logic as standalone process-runs)
+  const inferredLines = lines.map((rawLine) => {
+    const line = { ...rawLine };
+    const template = rawLine.template_line_id ? templateById.get(String(rawLine.template_line_id)) : undefined;
+    if (template) {
+      if (!line.item_id) line.item_id = template.item_id;
+      if (!line.unit) line.unit = template.default_unit || processTypeConfig?.default_unit || undefined;
+      if (!line.godown_id && template.default_godown_id) line.godown_id = template.default_godown_id;
+      if (!line.semantic_type) line.semantic_type = template.semantic_type;
+    }
+    if (!line.item_id && String(line.lot_id ?? '')) line.item_id = '__LOT__';
+    return line;
+  });
+  for (const line of inferredLines) {
+    if (line.item_id === '__LOT__' && line.lot_id) {
+      const lotItem = await c.env.DB.prepare(`SELECT item_id FROM lots WHERE id = ? AND mill_id = ?`).bind(line.lot_id, mill.id).first<{ item_id: string | null }>();
+      line.item_id = lotItem?.item_id || '';
+    }
+  }
+  lines.splice(0, lines.length, ...inferredLines);
+  const defaultDestinationGodown = String(b.destination_godown_id ?? '') || processTypeConfig?.default_destination_godown_id || '';
+  const operatorId = String(b.operator_id ?? user.id);
+  if (!await c.env.DB.prepare(`SELECT id FROM users WHERE id = ? AND mill_id = ? AND active = 1`).bind(operatorId, mill.id).first()) return c.json({ error: 'operator not found' }, 400);
+  const sourceLotId = String(b.source_lot_id ?? '');
+  const inputLines = lines.filter((entry) => entry.line_type === 'INPUT');
+  if (sourceLotId && inputLines.length !== 1) return c.json({ error: 'source_lot_id requires exactly one input line' }, 400);
+  if (sourceLotId && !inputLines[0].lot_id) inputLines[0].lot_id = sourceLotId;
+  // From step two onward, the input must be a lot produced by the immediately
+  // preceding chain step. This is what makes a chain a traceable WIP pipeline,
+  // instead of a collection of unrelated process runs.
+  if ((currentStep.step_number as number) > 1) {
+    const previousRun = await c.env.DB.prepare(
+      `SELECT pr.id FROM process_runs pr
+       JOIN processing_chain_steps cs ON cs.id = pr.chain_step_id
+       WHERE pr.chain_run_id = ? AND pr.mill_id = ? AND pr.status = 'POSTED' AND cs.step_number = ?`,
+    ).bind(chainRunId, mill.id, (currentStep.step_number as number) - 1).first<{ id: string }>();
+    if (!previousRun) return c.json({ error: 'the previous chain step must be completed first' }, 409);
+    const inputLotIds = inputLines.map((line) => String(line.lot_id ?? '')).filter(Boolean);
+    if (!inputLotIds.length) return c.json({ error: 'the next chain step requires an output lot from the previous step' }, 400);
+    const permittedLots = await c.env.DB.prepare(
+      `SELECT lot_id FROM process_run_lines WHERE run_id = ? AND mill_id = ? AND line_type = 'OUTPUT' AND lot_id IS NOT NULL`,
+    ).bind(previousRun.id, mill.id).all<{ lot_id: string }>();
+    const permittedLotIds = new Set(permittedLots.results.map((line) => line.lot_id));
+    if (inputLotIds.some((lotId) => !permittedLotIds.has(lotId))) return c.json({ error: 'chain inputs must be output lots from the previous step' }, 400);
+  }
+  const linkedSourceLotId = sourceLotId || (inputLines.length === 1 ? String(inputLines[0].lot_id ?? '') : '');
+  if (linkedSourceLotId && !await c.env.DB.prepare(`SELECT id FROM lots WHERE id = ? AND mill_id = ?`).bind(linkedSourceLotId, mill.id).first()) return c.json({ error: 'source lot not found' }, 400);
+  const itemIds = lines.map((line) => String(line.item_id ?? '')).filter(Boolean);
+  if (!itemIds.length) return c.json({ error: 'each process line needs an item or a resolvable source lot' }, 400);
+  const uniqueItemIds = [...new Set(itemIds)];
+  const validItems = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM items WHERE mill_id = ? AND deleted_at IS NULL AND id IN (${itemIds.map(() => '?').join(',')})`).bind(mill.id, ...itemIds).first<{ count: number }>();
+  if (!validItems || validItems.count !== uniqueItemIds.length) return c.json({ error: 'one or more items were not found' }, 400);
+  const godownIds = [String(b.destination_godown_id ?? ''), ...lines.map((line) => String(line.godown_id ?? ''))].filter(Boolean);
+  if (godownIds.length) {
+    const godownCount = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM godowns WHERE mill_id = ? AND active = 1 AND id IN (${godownIds.map(() => '?').join(',')})`).bind(mill.id, ...godownIds).first<{ count: number }>();
+    if (!godownCount || godownCount.count !== new Set(godownIds).size) return c.json({ error: 'one or more process godowns were not found' }, 400);
+  }
+  const normalizedLines = await Promise.all(lines.map(async (line) => ({ line, q: await normalizeItemQuantity(c.env.DB, mill.id, line.item_id, line.quantity, line.unit) })));
+  if (!normalizedLines.every(({ line, q }) => ['INPUT', 'OUTPUT', 'LOSS'].includes(String(line.line_type)) && !!String(line.item_id ?? '') && !!q && q.base > 0)) return c.json({ error: 'each process line needs a valid positive item quantity and unit' }, 400);
+  const inputTotal = normalizedLines.filter(({ line }) => line.line_type === 'INPUT').reduce((total, entry) => total + entry.q!.base, 0);
+  const accountedTotal = normalizedLines.filter(({ line }) => line.line_type === 'OUTPUT' || line.line_type === 'LOSS').reduce((total, entry) => total + entry.q!.base, 0);
+  if (accountedTotal > inputTotal + 0.000001) return c.json({ error: 'total outputs and measured loss cannot exceed total input quantity' }, 400);
+  const inputLotGodowns = new Map<string, string | null>();
+  for (const line of inputLines) {
+    const q = normalizedLines.find((entry) => entry.line === line)!.q!;
+    if (line.lot_id && !Number.isInteger(q.base)) return c.json({ error: 'source lot quantities must normalize to whole kilograms' }, 400);
+    const available = await c.env.DB.prepare(`SELECT COALESCE(SUM(CASE WHEN direction = 'IN' THEN quantity_base WHEN direction = 'OUT' THEN -quantity_base ELSE quantity_base END),0) AS quantity FROM stock_movements WHERE mill_id = ? AND item_id = ? AND status = 'POSTED'`).bind(mill.id, line.item_id).first<{ quantity: number }>();
+    if ((available?.quantity || 0) < q.base) return c.json({ error: `insufficient posted stock for item ${line.item_id}` }, 400);
+    if (line.lot_id) {
+      const lot = await c.env.DB.prepare(`SELECT id, item_id, qty_kg, godown_id FROM lots WHERE id = ? AND mill_id = ?`).bind(line.lot_id, mill.id).first<{ id: string; item_id: string | null; qty_kg: number; godown_id: string | null }>();
+      if (!lot || lot.item_id !== line.item_id || lot.qty_kg < q.base) return c.json({ error: `insufficient quantity in source lot ${line.lot_id}` }, 400);
+      inputLotGodowns.set(String(line.lot_id), lot.godown_id);
+    }
+  }
+  const runId = uuid();
+  const preparedLines: { line: Record<string, unknown>; q: { quantity: number; unit: string; base: number; baseUnit: string }; lotId: string | null; godownId: string | null; lotCode?: string }[] = [];
+  for (const { line, q: normalized } of normalizedLines) {
+    const q = normalized!;
+    let lotId = String(line.lot_id ?? '') || null;
+    const godownId = line.line_type === 'INPUT' && lotId ? (inputLotGodowns.get(lotId) ?? null) : String(line.godown_id ?? b.destination_godown_id ?? '') || null;
+    if (line.line_type === 'OUTPUT' && godownId) {
+      if (!Number.isInteger(q.base)) return c.json({ error: 'output quantities assigned to lots must normalize to whole kilograms' }, 400);
+      lotId = uuid();
+      preparedLines.push({ line, q, lotId, godownId, lotCode: await nextCode(c.env.DB, mill.id, 'lot', 'LOT') });
+    } else preparedLines.push({ line, q, lotId, godownId });
+  }
+  // Create the process run with chain linkage
+  const statements: D1PreparedStatement[] = [c.env.DB.prepare(`INSERT INTO process_runs (id, mill_id, process_type_id, run_date, shift, operator_id, source_lot_id, destination_godown_id, notes, created_by, chain_run_id, chain_step_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(runId, mill.id, processTypeId, String(b.run_date ?? istToday()), String(b.shift ?? '') || null, operatorId, linkedSourceLotId || null, String(b.destination_godown_id ?? '') || null, String(b.notes ?? '') || null, user.id, chainRunId, currentStepId)];
+  let stepInputTotal = 0, stepOutputTotal = 0, stepLossTotal = 0, stepByproductTotal = 0;
+  for (const prepared of preparedLines) {
+    const line = prepared.line, q = prepared.q;
+    if (prepared.lotCode) statements.push(c.env.DB.prepare(`INSERT INTO lots (id, mill_id, code, godown_id, item_id, qty_kg, in_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(prepared.lotId, mill.id, prepared.lotCode, prepared.godownId, line.item_id, Math.round(q.base), String(b.run_date ?? istToday()), `Created by chain run ${run.code} step ${currentStep.step_number}`));
+    if (line.line_type === 'INPUT' && prepared.lotId) statements.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg - ? WHERE id = ? AND mill_id = ? AND qty_kg >= ?`).bind(Math.round(q.base), prepared.lotId, mill.id, Math.round(q.base)));
+    statements.push(c.env.DB.prepare(`INSERT INTO process_run_lines (id, mill_id, run_id, line_type, item_id, lot_id, quantity, unit, quantity_base, base_unit, godown_id, semantic_type, template_line_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(uuid(), mill.id, runId, line.line_type, line.item_id, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, prepared.godownId, String(line.semantic_type ?? (line.line_type === 'INPUT' ? 'input' : line.line_type === 'LOSS' ? 'waste' : 'main')), String(line.template_line_id ?? '') || null));
+    if (line.line_type !== 'LOSS') {
+      statements.push(c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESS_RUN', ?, ?)`)
+        .bind(uuid(), mill.id, line.line_type === 'OUTPUT' ? 'IN' : 'OUT', line.item_id, prepared.godownId, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, runId, user.id));
+    }
+    if (line.line_type === 'INPUT') stepInputTotal += q.base;
+    else if (line.line_type === 'OUTPUT') {
+      if (String(line.semantic_type ?? '') === 'byproduct') stepByproductTotal += q.base;
+      else stepOutputTotal += q.base;
+    }
+    else if (line.line_type === 'LOSS') stepLossTotal += q.base;
+  }
+  // Update chain run aggregate totals
+  // For the first step, set total_input_base. For all steps, accumulate output and loss.
+  const isFirstStep = (currentStep.step_number as number) === 1;
+  if (isFirstStep) {
+    statements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET total_input_base = total_input_base + ?, total_output_base = ?, total_loss_base = total_loss_base + ?, total_byproduct_base = total_byproduct_base + ? WHERE id = ? AND mill_id = ?`)
+      .bind(stepInputTotal, stepOutputTotal, stepLossTotal, stepByproductTotal, chainRunId, mill.id));
+  } else {
+    statements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET total_output_base = ?, total_loss_base = total_loss_base + ?, total_byproduct_base = total_byproduct_base + ? WHERE id = ? AND mill_id = ?`)
+      .bind(stepOutputTotal, stepLossTotal, stepByproductTotal, chainRunId, mill.id));
+  }
+  // Advance to next step
+  const nextStep = await c.env.DB.prepare(`SELECT id FROM processing_chain_steps WHERE chain_id = ? AND mill_id = ? AND step_number = ?`).bind(run.chain_id, mill.id, (currentStep.step_number as number) + 1).first<{ id: string }>();
+  if (nextStep) {
+    statements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET current_step_id = ? WHERE id = ? AND mill_id = ?`).bind(nextStep.id, chainRunId, mill.id));
+  }
+  await c.env.DB.batch(statements);
+  await audit(c, 'process_run', runId, 'CREATE', `Chain run ${run.code} step ${currentStep.step_number}`);
+  await audit(c, 'chain_run', chainRunId, 'ADVANCE', `Completed step ${currentStep.step_number}`);
+  // If no next step, auto-complete the chain
+  if (!nextStep) {
+    await c.env.DB.prepare(`UPDATE processing_chain_runs SET status = 'COMPLETED', end_date = ?, current_step_id = NULL WHERE id = ? AND mill_id = ?`).bind(istToday(), chainRunId, mill.id).run();
+    await audit(c, 'chain_run', chainRunId, 'COMPLETE', 'All steps completed');
+    return c.json({ id: runId, chain_status: 'COMPLETED' }, 201);
+  }
+  return c.json({ id: runId, next_step_id: nextStep.id, chain_status: 'IN_PROGRESS' }, 201);
+});
+
+api.post('/chain-runs/:id/complete', async (c) => {
+  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const id = c.req.param('id');
+  const run = await c.env.DB.prepare(`SELECT id, status, chain_id FROM processing_chain_runs WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<{ id: string; status: string; chain_id: string }>();
+  if (!run) return c.json({ error: 'chain run not found' }, 404);
+  if (run.status !== 'IN_PROGRESS') return c.json({ error: 'chain run is not in progress' }, 409);
+  // Check that at least one process run has been posted
+  const postedRun = await c.env.DB.prepare(`SELECT id FROM process_runs WHERE chain_run_id = ? AND mill_id = ? AND status = 'POSTED' LIMIT 1`).bind(id, mill.id).first();
+  if (!postedRun) return c.json({ error: 'complete at least one step before completing the chain run' }, 400);
+  // Recompute final totals from actual process run data
+  const totals = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN l.line_type = 'INPUT' AND cs.step_number = 1 THEN l.quantity_base ELSE 0 END), 0) AS total_input,
+            COALESCE(SUM(CASE WHEN l.line_type = 'OUTPUT' AND l.semantic_type = 'byproduct' THEN l.quantity_base ELSE 0 END), 0) AS total_byproduct,
+            COALESCE(SUM(CASE WHEN l.line_type = 'LOSS' THEN l.quantity_base ELSE 0 END), 0) AS total_loss
+     FROM process_run_lines l
+     JOIN process_runs pr ON pr.id = l.run_id AND pr.mill_id = l.mill_id
+     LEFT JOIN processing_chain_steps cs ON cs.id = pr.chain_step_id
+     WHERE pr.chain_run_id = ? AND pr.mill_id = ? AND pr.status = 'POSTED'`,
+  ).bind(id, mill.id).first<{ total_input: number; total_output: number; total_byproduct: number; total_loss: number }>();
+  // Get the latest step's output as the final output
+  const lastStepOutput = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(l.quantity_base), 0) AS final_output
+     FROM process_run_lines l
+     JOIN process_runs pr ON pr.id = l.run_id AND pr.mill_id = l.mill_id
+     WHERE pr.chain_run_id = ? AND pr.mill_id = ? AND pr.status = 'POSTED' AND l.line_type = 'OUTPUT' AND l.semantic_type != 'byproduct'
+       AND pr.chain_step_id = (SELECT pr2.chain_step_id FROM process_runs pr2 JOIN processing_chain_steps cs ON cs.id = pr2.chain_step_id WHERE pr2.chain_run_id = ? AND pr2.mill_id = ? AND pr2.status = 'POSTED' ORDER BY cs.step_number DESC LIMIT 1)`,
+  ).bind(id, mill.id, id, mill.id).first<{ final_output: number }>();
+  await c.env.DB.prepare(`UPDATE processing_chain_runs SET status = 'COMPLETED', end_date = ?, current_step_id = NULL, total_input_base = ?, total_output_base = ?, total_loss_base = ?, total_byproduct_base = ? WHERE id = ? AND mill_id = ?`)
+    .bind(istToday(), totals?.total_input || 0, lastStepOutput?.final_output || 0, totals?.total_loss || 0, totals?.total_byproduct || 0, id, mill.id).run();
+  await audit(c, 'chain_run', id, 'COMPLETE', 'Manually completed');
+  return c.json({ ok: true });
+});
+
+api.post('/chain-runs/:id/void', async (c) => {
+  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const id = c.req.param('id');
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const run = await c.env.DB.prepare(`SELECT id, status FROM processing_chain_runs WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<{ id: string; status: string }>();
+  if (!run) return c.json({ error: 'chain run not found' }, 404);
+  if (run.status === 'VOID') return c.json({ error: 'chain run is already void' }, 409);
+  // Find all constituent process runs in reverse step order
+  const processRuns = await c.env.DB.prepare(
+    `SELECT pr.id, cs.step_number FROM process_runs pr
+     LEFT JOIN processing_chain_steps cs ON cs.id = pr.chain_step_id
+     WHERE pr.chain_run_id = ? AND pr.mill_id = ? AND pr.status = 'POSTED'
+     ORDER BY cs.step_number DESC`,
+  ).bind(id, mill.id).all<{ id: string; step_number: number }>();
+  // Void each constituent run in reverse order (reusing the same reversal logic)
+  for (const pr of processRuns.results) {
+    const lines = await c.env.DB.prepare(`SELECT line_type, lot_id, quantity_base FROM process_run_lines WHERE run_id = ? AND mill_id = ?`).bind(pr.id, mill.id).all<{ line_type: string; lot_id: string | null; quantity_base: number }>();
+    const outputLots = lines.results.filter((line) => line.line_type === 'OUTPUT' && line.lot_id).map((line) => String(line.lot_id));
+    // Check if output lots have been used downstream (outside this chain run)
+    if (outputLots.length) {
+      const laterMovement = await c.env.DB.prepare(`SELECT id FROM stock_movements WHERE mill_id = ? AND lot_id IN (${outputLots.map(() => '?').join(',')}) AND status = 'POSTED' AND NOT (source_type = 'PROCESS_RUN' AND source_id IN (SELECT pr2.id FROM process_runs pr2 WHERE pr2.chain_run_id = ?)) LIMIT 1`).bind(mill.id, ...outputLots, id).first();
+      if (laterMovement) return c.json({ error: `cannot void chain run because output lot(s) from step ${pr.step_number} have been used by movements outside this chain` }, 409);
+    }
+    const stmts: D1PreparedStatement[] = [
+      c.env.DB.prepare(`UPDATE process_runs SET status = 'VOID' WHERE id = ? AND mill_id = ? AND status = 'POSTED'`).bind(pr.id, mill.id),
+      c.env.DB.prepare(`UPDATE stock_movements SET status = 'VOID', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), voided_by = ? WHERE mill_id = ? AND source_type = 'PROCESS_RUN' AND source_id = ? AND status = 'POSTED'`).bind(user.id, mill.id, pr.id),
+    ];
+    for (const line of lines.results) {
+      if (!line.lot_id) continue;
+      if (line.line_type === 'INPUT') stmts.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg + ? WHERE id = ? AND mill_id = ?`).bind(Math.round(line.quantity_base), line.lot_id, mill.id));
+      if (line.line_type === 'OUTPUT') stmts.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = 0 WHERE id = ? AND mill_id = ?`).bind(line.lot_id, mill.id));
+    }
+    await c.env.DB.batch(stmts);
+    await audit(c, 'process_run', pr.id, 'VOID', `Voided as part of chain run void`);
+  }
+  // Void the chain run itself
+  await c.env.DB.prepare(`UPDATE processing_chain_runs SET status = 'VOID', end_date = ? WHERE id = ? AND mill_id = ?`).bind(istToday(), id, mill.id).run();
+  await audit(c, 'chain_run', id, 'VOID', String(b.reason ?? '') || 'Chain run voided');
   return c.json({ ok: true });
 });
 

@@ -10,7 +10,7 @@
   var TURNSTILE_SCRIPT = null;
   var requestedPage = new URLSearchParams(location.search).get('page');
   var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'billing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
-  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processChains: null, chainRuns: null, chainRunDetail: null, processingView: 'chains', processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -818,6 +818,9 @@
   function loadProcessRuns() {
     return fetch('/api/process-runs').then(function (r) { return r.json(); }).then(function (j) { S.processRuns = j.runs || []; render(); });
   }
+  function loadProcessingChains() { return fetch('/api/processing-chains').then(function (r) { return r.json(); }).then(function (j) { S.processChains = j.chains || []; render(); }); }
+  function loadChainRuns() { return fetch('/api/chain-runs').then(function (r) { return r.json(); }).then(function (j) { S.chainRuns = j.chain_runs || []; render(); }); }
+  function openChainRun(id) { return fetch('/api/chain-runs/' + encodeURIComponent(id)).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Could not load chain run'); return j; }); }).then(function (j) { S.chainRunDetail = j; var current = (j.steps || []).find(function (step) { return String(step.id) === String(j.chain_run.current_step_id); }); if (current) { S.processWorkspace = null; S.processDraft = null; processWorkspaceFor(current.process_type_id); } render(); }).catch(function (err) { toast(err.message, 'error'); }); }
   function activeProcessTypes() { return (S.processTypes || []).filter(function (p) { return !p.deleted_at; }); }
   function preferredProcessUnit() { return (S.ov && S.ov.me && S.ov.me.preferred_unit) || 'QUINTAL'; }
   function processUnitOptions() { return [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }]; }
@@ -893,10 +896,13 @@
       { name: 'semantic_type', label: 'Output type', type: 'select', options: [{ value: 'main', label: 'Main output' }, { value: 'byproduct', label: 'By-product' }, { value: 'waste', label: 'Waste / loss' }] },
       { name: 'quantity', label: 'Quantity', type: 'number', step: '0.001', required: true },
       { name: 'unit', label: 'Unit', type: 'select', value: preferredProcessUnit(), options: processUnitOptions() },
+      { name: 'godown_id', label: 'Destination godown', type: 'select', value: S.processDraft.destinationGodownId || '', options: [{ value: '', label: 'Use process default' }].concat((S.processWorkspace.godowns || []).map(function (g) { return { value: g.id, label: g.name }; })) },
     ], 'Add output', function (d) {
       var item = processItem(d.item_id, S.processWorkspace);
       if (!item || num(d.quantity) <= 0) throw new Error('Choose an item and enter a positive quantity.');
-      S.processDraft.outputs.push({ line_type: d.semantic_type === 'waste' ? 'LOSS' : 'OUTPUT', semantic_type: d.semantic_type, item_id: d.item_id, item_name: item.name, quantity: d.quantity, unit: d.unit || preferredProcessUnit(), auto_calculate: false, required: true, godown_id: S.processDraft.destinationGodownId || '' });
+      var proposed = processQuantityBase(item, d.quantity, d.unit || preferredProcessUnit()), balance = processBalance(S.processDraft);
+      if (proposed != null && balance.allMass && proposed > Math.max(0, balance.difference || 0)) throw new Error('This output exceeds the remaining input quantity. Reduce it or adjust an existing output.');
+      S.processDraft.outputs.push({ line_type: d.semantic_type === 'waste' ? 'LOSS' : 'OUTPUT', semantic_type: d.semantic_type, item_id: d.item_id, item_name: item.name, quantity: d.quantity, unit: d.unit || preferredProcessUnit(), auto_calculate: false, required: true, godown_id: d.godown_id || S.processDraft.destinationGodownId || '' });
       persistProcessDraft();
       render();
     });
@@ -914,7 +920,7 @@
     if (!balance || !balance.input) return '<div class="process-balance muted">Add an input lot to see the mass balance.</div>';
     if (!balance.allMass) return '<div class="process-balance"><span>Input <b>' + qtl(balance.input) + ' qtl</b></span><span class="muted">Balance available for compatible mass units.</span></div>';
     var difference = balance.difference || 0, good = Math.abs(difference) < 0.001;
-    return '<div class="process-balance ' + (good ? 'good' : 'attention') + '"><span>Input <b>' + qtl(balance.input) + ' qtl</b></span><span>Accounted <b>' + qtl(balance.accounted) + ' qtl</b></span><span>Difference <b>' + qtl(Math.abs(difference)) + ' qtl</b> ' + (good ? '✓' : '') + '</span></div>';
+    return '<div class="process-balance ' + (good ? 'good' : 'attention') + '"><span>Input <b>' + qtl(balance.input) + ' qtl</b></span><span>Accounted <b>' + qtl(balance.accounted) + ' qtl</b></span><span>' + (difference >= 0 ? 'Implied wastage' : 'Over by') + ' <b>' + qtl(Math.abs(difference)) + ' qtl</b> ' + (good ? '✓' : '') + '</span></div>';
   }
   function processWorkspaceMarkup() {
     var types = activeProcessTypes(), workspace = S.processWorkspace, draft = S.processDraft;
@@ -976,11 +982,21 @@
     return '<div class="card process-catalog-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Add, edit, reorder or archive the reusable process flows.</div></div><div class="process-catalog-actions">' + create + '<button class="btn sm" data-act="process-catalog-toggle">Close</button></div></div>' + table + editor + '</div>';
   }
   function bindProcessCatalog() { var rows = document.querySelector('.inline-template-rows'); if (!rows) return; rows.querySelectorAll('.inline-template-row').forEach(function (row) { row.ondragstart = function () { row.classList.add('dragging'); }; row.ondragend = function () { row.classList.remove('dragging'); }; row.ondragover = function (event) { event.preventDefault(); }; row.ondrop = function (event) { event.preventDefault(); var dragging = rows.querySelector('.inline-template-row.dragging'); if (dragging && dragging !== row) rows.insertBefore(dragging, row); }; }); }
+  function chainWorkspaceMarkup() {
+    var tabs = '<div class="processing-tabs"><button class="' + (S.processingView === 'chains' ? 'on' : '') + '" data-act="processing-view" data-view="chains">Chain view</button><button class="' + (S.processingView === 'runs' ? 'on' : '') + '" data-act="processing-view" data-view="runs">Run log</button></div>';
+    if (S.processingView === 'runs') return tabs;
+    var cards = S.chainRuns.map(function (run) { var total = Number(run.total_steps) || 0, completed = Number(run.completed_steps) || 0, progress = total ? Math.round(completed * 100 / total) : 0; return '<article class="chain-card"><div><strong>' + esc(run.code) + ' · ' + esc(run.chain_name) + '</strong><div class="hint">' + esc(run.current_step_name || (run.status === 'COMPLETED' ? 'Completed' : 'Not started')) + ' · ' + completed + '/' + total + ' steps</div><div class="chain-progress"><i style="width:' + progress + '%"></i></div></div><div>' + pill(String(run.status || '').toLowerCase()) + ' <button class="btn sm" data-act="chain-open" data-id="' + esc(run.id) + '">Open</button></div></article>'; }).join('') || '<div class="empty">No chain runs yet. Start a pipeline to track work-in-progress across steps.</div>';
+    var detail = S.chainRunDetail, selected = detail && detail.chain_run;
+    var active = selected ? '<div class="chain-detail"><strong>' + esc(selected.code) + ' · ' + esc(selected.chain_name) + '</strong><div class="hint">Post the current workspace step to pass its output lots to the next step.</div><div class="chain-step-list">' + (detail.steps || []).map(function (step) { var state = step.run_id ? 'done' : (String(step.id) === String(selected.current_step_id) ? 'current' : 'pending'); return '<span class="' + state + '">' + Number(step.step_number) + '. ' + esc(step.process_type_name) + '</span>'; }).join('') + '</div><div class="chain-balance">Input ' + qtl(detail.chain_mass_balance.original_input_base) + ' qtl · Final output ' + qtl(detail.chain_mass_balance.final_output_base) + ' qtl · Yield ' + detail.chain_mass_balance.yield_pct + '%</div><div><button class="btn sm" data-act="chain-complete" data-id="' + esc(selected.id) + '">Complete</button> ' + (can('VOID') ? '<button class="btn sm" data-act="chain-void" data-id="' + esc(selected.id) + '">Void chain</button>' : '') + '</div></div>' : '';
+    return tabs + '<div class="card pad"><div class="card-top"><div><div class="card-h">Processing chains</div><div class="hint">Each completed step passes its output lots to the next one.</div></div>' + (can('CREATE') ? '<button class="btn acc" data-act="chain-start">Start chain run</button>' : '') + '</div>' + cards + '</div>' + active;
+  }
   function pageProcessing() {
-    if (!S.processTypes || !S.processRuns) { if (!S.processTypes) loadProcessTypes(); if (!S.processRuns) loadProcessRuns(); return '<div class="card pad"><div class="empty">Loading processing…</div></div>'; }
+    if (!S.processTypes || !S.processRuns || !S.processChains || !S.chainRuns) { if (!S.processTypes) loadProcessTypes(); if (!S.processRuns) loadProcessRuns(); if (!S.processChains) loadProcessingChains(); if (!S.chainRuns) loadChainRuns(); return '<div class="card pad"><div class="empty">Loading processing…</div></div>'; }
     var firstType = activeProcessTypes()[0];
     if (firstType && (!S.processWorkspace || !S.processDraft || S.processDraft.processTypeId !== firstType.id) && !S.processWorkspace) { processWorkspaceFor(firstType.id); return '<div class="card pad"><div class="empty">Loading Process Workspace…</div></div>'; }
-    var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
+    if (S.processingView === 'chains') return chainWorkspaceMarkup() + processWorkspaceMarkup();
+    var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; var chainBadge = run.chain_name ? '<div class="hint">' + esc(run.chain_name) + ' · Step ' + esc(run.chain_step_number) + '</div>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + chainBadge + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
+    setTimeout(function () { var header = document.querySelector('.process-types-card .card-top'); if (header && !header.querySelector('.processing-tabs')) { var tabs = document.createElement('div'); tabs.className = 'processing-tabs processing-tabs-header'; tabs.innerHTML = '<button data-act="processing-view" data-view="chains">Chain view</button><button class="on" data-act="processing-view" data-view="runs">Run log</button>'; header.appendChild(tabs); } }, 0);
     return processWorkspaceMarkup() + '<div class="card process-types-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Configure reusable inputs, outputs and defaults for each process.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' + (firstType ? '<button class="btn sm icon-btn" title="Edit process flow" aria-label="Edit process flow" data-act="process-template-edit" data-id="' + esc(firstType.id) + '">✎</button>' : '') : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Template</th><th>Status</th><th></th></tr></thead><tbody>' + (S.processTypes.map(function (p) { var archived = !!p.deleted_at, configured = (p.template_lines || []).length > 0; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (configured ? 'Configured' : 'Manual fallback') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(p.id) + '">Configure</button> ' : '') + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process types yet.</td></tr>') + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products remain linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
   }
   function openProcessTemplateEditor(processType) {
@@ -1283,6 +1299,20 @@
     } else if (act === 'bugs-refresh') {
       S.bugs = null;
       render();
+    } else if (act === 'processing-view') {
+      S.processingView = el.getAttribute('data-view') || 'chains'; render();
+    } else if (act === 'chain-start') {
+      var options = (S.processChains || []).filter(function (chain) { return !chain.deleted_at && Number(chain.active) !== 0 && (chain.steps || []).length; }).map(function (chain) { return { value: chain.id, label: chain.name + ' · ' + chain.steps.length + ' steps' }; });
+      if (!options.length) { toast('Create a chain with at least one step first.', 'error'); return; }
+      modal('Start chain run', [{ name: 'chain_id', label: 'Processing chain', type: 'select', options: options }, { name: 'notes', label: 'Notes (optional)', type: 'textarea' }], 'Start chain', function (d) { return apiPost('/api/chain-runs', d).then(function (result) { S.chainRuns = null; toast('Chain run started.', 'success'); return openChainRun(result.id); }); });
+    } else if (act === 'chain-open') {
+      return openChainRun(el.getAttribute('data-id'));
+    } else if (act === 'chain-complete') {
+      if (!confirm('Complete this chain run? It can no longer be advanced.')) return;
+      return apiPost('/api/chain-runs/' + encodeURIComponent(el.getAttribute('data-id')) + '/complete', {}).then(function () { S.chainRuns = null; S.chainRunDetail = null; toast('Chain run completed.', 'success'); return refresh(); });
+    } else if (act === 'chain-void') {
+      if (!confirm('Void this entire chain? All its posted process movements will be reversed.')) return;
+      return apiPost('/api/chain-runs/' + encodeURIComponent(el.getAttribute('data-id')) + '/void', { reason: 'Voided from Processing' }).then(function () { S.chainRuns = null; S.processRuns = null; S.chainRunDetail = null; S.processWorkspace = null; S.processDraft = null; toast('Chain run voided.', 'success'); return refresh(); });
     } else if (act === 'process-catalog-toggle') {
       S.processCatalogOpen = !S.processCatalogOpen; S.processEditingTypeId = null; S.processNewType = false; render();
     } else if (act === 'process-steps-toggle') {
@@ -1334,7 +1364,9 @@
       if (missing) { window.alert('Enter the actual quantity for every required output.'); return; }
       if (balance.allMass && balance.difference < -0.001) { window.alert('Accounted output is greater than the selected input. Check the quantities.'); return; }
       var lines = draft.inputs.map(function (input) { return { line_type: 'INPUT', semantic_type: 'input', item_id: input.item_id, lot_id: input.lot_id, quantity: input.quantity, unit: input.unit }; }).concat(draft.outputs.filter(function (output) { return num(output.quantity) > 0; }).map(function (output) { return { line_type: output.line_type, semantic_type: output.semantic_type, template_line_id: output.template_line_id || null, item_id: output.item_id, godown_id: output.godown_id || draft.destinationGodownId || null, quantity: output.quantity, unit: output.unit }; }));
-      return apiPost('/api/process-runs', { process_type_id: draft.processTypeId, destination_godown_id: draft.destinationGodownId || null, lines: lines }).then(function () { clearProcessDraft(draft.processTypeId); S.processRuns = null; S.processWorkspace = null; S.processDraft = null; toast('Process run posted successfully.', 'success'); return refresh(); });
+      var activeChain = S.chainRunDetail && S.chainRunDetail.chain_run && S.chainRunDetail.chain_run.status === 'IN_PROGRESS' ? S.chainRunDetail.chain_run : null;
+      var endpoint = activeChain ? '/api/chain-runs/' + encodeURIComponent(activeChain.id) + '/advance' : '/api/process-runs';
+      return apiPost(endpoint, { process_type_id: draft.processTypeId, destination_godown_id: draft.destinationGodownId || null, lines: lines }).then(function () { clearProcessDraft(draft.processTypeId); S.processRuns = null; S.chainRuns = null; S.processWorkspace = null; S.processDraft = null; toast(activeChain ? 'Chain step posted successfully.' : 'Process run posted successfully.', 'success'); return activeChain ? openChainRun(activeChain.id) : refresh(); });
     } else if (act === 'process-run-new') {
       var itemOptions = optList(ov.items, [{ value: '', label: '—' }]);
       var processUnitOptions = [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }];
@@ -1741,7 +1773,7 @@
       '<p class="auth-sub">' + (invite ? 'Set your password to accept this invite.' : signup ? 'Free forever — no card needed.' : 'Welcome back.') + '</p>' +
       '<form id="auth-form" style="display:flex;flex-direction:column;gap:12px">' +
       (invite ? '' : signup ? '<div class="fld"><label>Mill name</label><input name="mill_name" required placeholder="Sri Venkatesh Rice Mill"></div>' +
-        '<div class="fld"><label>Your name</label><input name="name" required placeholder="Ramesh Reddy"></div>' : '') +
+        '<div class="fld"><label>Your name</label><input name="name" required placeholder="Ramesh Reddy"></div><div class="fld"><label>Preferred quantity unit</label><select name="preferred_unit"><option value="QUINTAL">Quintal</option><option value="KG">kg</option><option value="TONNE">Tonne</option><option value="BAG">Bag</option><option value="PIECE">Piece</option></select></div>' : '') +
       (invite ? '' : '<div class="fld"><label>Email</label><input name="email" type="email" required placeholder="you@mill.com"></div>') +
       '<div class="fld"><label>Password</label><input name="password" type="password" required minlength="8"></div>' +
       turnstileMarkup +
@@ -1758,7 +1790,7 @@
     root.querySelector('#auth-form').onsubmit = function (e) {
       e.preventDefault();
       var f = e.target, body = {};
-      ['mill_name', 'name', 'email', 'password'].forEach(function (k) { if (f[k]) body[k] = f[k].value; });
+      ['mill_name', 'name', 'email', 'password', 'preferred_unit'].forEach(function (k) { if (f[k]) body[k] = f[k].value; });
       var widget = root.querySelector('#turnstile-widget');
       if (widget) body.turnstile_token = widget.dataset.token || '';
       if (invite) body.token = invite;

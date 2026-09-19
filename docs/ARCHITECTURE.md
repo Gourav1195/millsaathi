@@ -78,6 +78,19 @@ weights are immutable after posting so stock and Sauda fulfilment cannot silentl
 Process `LOSS` lines remain in the mass-balance history but do not create inventory movements;
 only inputs consume stock and outputs create stock.
 
+## Processing chains
+
+`processing_chains` and ordered `processing_chain_steps` provide an optional, linear routing
+layer above reusable process types. A `processing_chain_run` is a work order whose individual
+`process_runs` retain `chain_run_id` and `chain_step_id`. Standalone process runs keep both
+columns `NULL` and behave exactly as before.
+
+Advancing a chain posts the current step using the existing stock and lot ledger. From step two
+on, its input lots must be output lots from the immediately previous chain step, so intermediate
+work-in-progress stays traceable. Chain detail calculates end-to-end input, final main output,
+by-products, measured loss, unexplained quantity, and per-step yields. Voiding a chain reverses
+its posted process runs in reverse order, provided no output lot has left the chain.
+
 ## Plan gating & bill safety (V2-ready)
 
 **Today there is no paid billing and no plan gating.** Every mill gets every module free; `mills.plan` is

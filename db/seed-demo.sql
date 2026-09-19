@@ -43,6 +43,26 @@ INSERT INTO godowns (id, mill_id, name, capacity_qtl) VALUES
   ('gd-c', 'mill-demo', 'Godown C', 2050),
   ('gd-d', 'mill-demo', 'Godown D', 2400);
 
+-- Default linear routing used by the Processing Chain workspace.
+INSERT INTO process_types (id, mill_id, name, description) VALUES
+  ('pt-clean', 'mill-demo', 'Pre-Cleaning', 'Remove dust, stones and foreign matter before milling.'),
+  ('pt-hull', 'mill-demo', 'De-husking (Hulling)', 'Separate husk from paddy.'),
+  ('pt-separate', 'mill-demo', 'Paddy Separation', 'Separate paddy and brown rice.'),
+  ('pt-white', 'mill-demo', 'Whitening and Polishing', 'Whiten and polish brown rice to finished rice.'),
+  ('pt-grade', 'mill-demo', 'Grading and Color Sorting', 'Grade kernels and remove discolored grains.'),
+  ('pt-pack', 'mill-demo', 'Weighing and Packaging', 'Weigh, pack and prepare finished goods for dispatch.');
+
+INSERT INTO processing_chains (id, mill_id, name, description, input_category, expected_yield_pct) VALUES
+  ('chain-demo-rice', 'mill-demo', 'Rice Milling Pipeline', 'Default end-to-end rice milling chain: Pre-Cleaning through Packaging.', 'paddy', 67.0);
+
+INSERT INTO processing_chain_steps (id, mill_id, chain_id, process_type_id, step_number) VALUES
+  ('chain-step-1', 'mill-demo', 'chain-demo-rice', 'pt-clean', 1),
+  ('chain-step-2', 'mill-demo', 'chain-demo-rice', 'pt-hull', 2),
+  ('chain-step-3', 'mill-demo', 'chain-demo-rice', 'pt-separate', 3),
+  ('chain-step-4', 'mill-demo', 'chain-demo-rice', 'pt-white', 4),
+  ('chain-step-5', 'mill-demo', 'chain-demo-rice', 'pt-grade', 5),
+  ('chain-step-6', 'mill-demo', 'chain-demo-rice', 'pt-pack', 6);
+
 INSERT INTO saudas (id, mill_id, code, supplier_id, broker_name, item_id, qty_kg, rate_paise_per_qtl, moisture_pct, status) VALUES
   ('sau-1187', 'mill-demo', 'SAU-1187', 'sup-1', 'Mahalaxmi Traders', 'itm-sona', 25000, 232000, 14.2, 'open'),
   ('sau-1186', 'mill-demo', 'SAU-1186', 'sup-3', 'Direct',            'itm-sona', 25400, 234000, 13.9, 'settled'),
