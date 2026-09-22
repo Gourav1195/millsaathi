@@ -29,6 +29,7 @@ Keep each product area as its own Next route and component. Shared UI or browser
 | `/app` | `components/processing-app.tsx` | process workspace, process types, chains, process runs | interactive |
 | `/app/dashboard` | `components/dashboard-app.tsx` | overview | read-only |
 | `/app/gate` | `components/gate-app.tsx` | overview | read-only |
+| `/app/purchase` | `components/purchase-app.tsx` | overview | read-only |
 | `/app/stock` | `components/stock-app.tsx` | overview | read-only |
 
 `lib/session.ts` owns browser-side session lookup, and `components/app-header.tsx` owns the
