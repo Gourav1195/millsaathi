@@ -10,7 +10,7 @@
   var TURNSTILE_SCRIPT = null;
   var requestedPage = new URLSearchParams(location.search).get('page');
   var initialPage = ['dashboard', 'gate', 'purchase', 'stock', 'suppliers', 'buyers', 'items', 'processing', 'billing', 'team', 'documents', 'digest', 'bugs'].indexOf(requestedPage) >= 0 ? requestedPage : 'dashboard';
-  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processChains: null, chainRuns: null, chainRunDetail: null, processingView: 'runs', processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
+  var S = { page: initialPage, role: 'owner', q: '', filters: {}, focusSearch: false, period: 'daily', ov: null, bugs: null, bugsError: '', processTypes: null, processRuns: null, processChains: null, chainRuns: null, chainRunDetail: null, processingView: 'runs', chainMap: { chainId: '', rootQty: 100, unit: 'Bags', overrides: {}, addedSteps: [], selectedStepId: '' }, processWorkspace: null, processDraft: null, processStepsExpanded: false, processCatalogOpen: false, processEditingTypeId: null, processNewType: false, team: null, documents: null, payments: null, stockReceiptsExpanded: false, stockRejectedOpen: false, stockRejectedExpanded: false, saudaSelected: {}, pageIndex: {} };
 
   // ---------- helpers ----------
   function esc(s) {
@@ -76,7 +76,9 @@
     var m = ST[status] || [status, '#EEF1F5', '#475467'];
     return '<span class="pill" style="background:' + m[1] + ';color:' + m[2] + '">' + esc(m[0]) + '</span>';
   }
-  var CAT = { paddy: ['Paddy', '#FEF3D6', '#8A6A16'], rice: ['Rice', '#E6F0E9', '#256238'], byproduct: ['By-product', '#EEF1F5', '#475467'] };
+  // The database keeps the original paddy/rice values for backwards compatibility;
+  // these labels deliberately describe every mill's item flow.
+  var CAT = { paddy: ['Raw material', '#FEF3D6', '#8A6A16'], rice: ['Finished good', '#E6F0E9', '#256238'], byproduct: ['By-product', '#EEF1F5', '#475467'] };
   var SUPTYPE = { farmer: ['Farmer', '#E6F0E9', '#256238'], trader: ['Trader', '#E7EEF8', '#2A5CA8'], broker: ['Broker', '#FEF3D6', '#8A6A16'] };
 
   function canMoney() { return S.role !== 'manager'; }
@@ -151,15 +153,74 @@
   }
   function refresh() { return loadOverview().then(render); }
 
-  var ITEM_FIELDS = [
-    { name: 'name', label: 'Name', required: true },
-    { name: 'category', label: 'Category', type: 'select', options: [{ value: 'paddy', label: 'Paddy / raw material' }, { value: 'rice', label: 'Rice / finished good' }, { value: 'byproduct', label: 'By-product' }, { value: 'packaging', label: 'Packaging' }, { value: 'consumable', label: 'Consumable' }, { value: 'other', label: 'Other' }] },
-    { name: 'hsn', label: 'HSN', value: '1006' },
-    { name: 'display_unit', label: 'Display unit', type: 'select', options: [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
-    { name: 'package_unit', label: 'Package unit (optional)', type: 'select', options: [{ value: '', label: '—' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
-    { name: 'package_quantity_base', label: 'Base kg per package (optional)', type: 'number', step: '0.001' },
-    { name: 'typical_otr_pct', label: 'Typical OTR % (rice/by-products)', type: 'number', step: '1' },
-  ];
+  function preferredUnit() { return (S.ov && S.ov.me && S.ov.me.preferred_unit) || 'QUINTAL'; }
+  function unitSelectOptions() { return [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }]; }
+  function millTypeOptions() {
+    return [
+      { value: 'RICE', label: 'Rice mill' },
+      { value: 'FLOUR', label: 'Flour mill' },
+      { value: 'PULSES', label: 'Pulses / dal mill' },
+      { value: 'SPICES', label: 'Spice mill' },
+      { value: 'SUGAR', label: 'Sugar mill' },
+      { value: 'OIL', label: 'Edible oil mill' }
+    ];
+  }
+  function millTypePickerMarkup(initialMillType) {
+    var options = millTypeOptions();
+    var selected = options.filter(function (option) { return option.value === String(initialMillType || '').toUpperCase(); })[0] || options[0];
+    var selectedIndex = options.indexOf(selected);
+    var previous = options[(selectedIndex - 1 + options.length) % options.length];
+    var next = options[(selectedIndex + 1) % options.length];
+    return '<div class="fld mill-type-field"><label id="mill-type-label">What does your mill process?</label>' +
+      '<div class="mill-type-picker" role="group" aria-labelledby="mill-type-label">' +
+      '<button type="button" class="mill-picker-arrow" data-mill-picker="previous" aria-label="Previous mill type">‹</button>' +
+      '<div class="mill-picker-track" tabindex="0" role="group" aria-label="Mill type. Use left and right arrow keys to change.">' +
+      '<button type="button" class="mill-picker-side mill-picker-previous" data-mill-picker="previous" aria-label="Choose previous mill type: ' + esc(previous.label) + '">' + esc(previous.label) + '</button>' +
+      '<span class="mill-picker-selected">' + esc(selected.label) + '</span>' +
+      '<button type="button" class="mill-picker-side mill-picker-next" data-mill-picker="next" aria-label="Choose next mill type: ' + esc(next.label) + '">' + esc(next.label) + '</button>' +
+      '</div><button type="button" class="mill-picker-arrow" data-mill-picker="next" aria-label="Next mill type">›</button></div>' +
+      '<input type="hidden" name="mill_type" value="' + selected.value + '"><small class="hint">We will set up matching starter items and processing steps. You can adjust those later.</small></div>';
+  }
+  function bindMillTypePicker(root) {
+    var field = root.querySelector('.mill-type-field');
+    if (!field) return;
+    var options = millTypeOptions();
+    var input = field.querySelector('[name="mill_type"]');
+    var track = field.querySelector('.mill-picker-track');
+    function update(step) {
+      var index = options.map(function (option) { return option.value; }).indexOf(input.value);
+      index = (index + step + options.length) % options.length;
+      var selected = options[index];
+      input.value = selected.value;
+      field.querySelector('.mill-picker-selected').textContent = selected.label;
+      var previous = options[(index - 1 + options.length) % options.length];
+      var next = options[(index + 1) % options.length];
+      var previousButton = field.querySelector('.mill-picker-previous');
+      var nextButton = field.querySelector('.mill-picker-next');
+      previousButton.textContent = previous.label;
+      previousButton.setAttribute('aria-label', 'Choose previous mill type: ' + previous.label);
+      nextButton.textContent = next.label;
+      nextButton.setAttribute('aria-label', 'Choose next mill type: ' + next.label);
+    }
+    field.querySelectorAll('[data-mill-picker]').forEach(function (button) {
+      button.onclick = function () { update(button.getAttribute('data-mill-picker') === 'previous' ? -1 : 1); };
+    });
+    track.onkeydown = function (event) {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); update(-1); }
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); update(1); }
+    };
+  }
+  function itemFields() {
+    return [
+      { name: 'name', label: 'Name', required: true },
+      { name: 'category', label: 'Category', type: 'select', options: [{ value: 'paddy', label: 'Raw material' }, { value: 'rice', label: 'Finished good' }, { value: 'byproduct', label: 'By-product' }, { value: 'packaging', label: 'Packaging' }, { value: 'consumable', label: 'Consumable' }, { value: 'other', label: 'Other' }] },
+      { name: 'hsn', label: 'HSN', value: '1006' },
+      { name: 'display_unit', label: 'Display unit', type: 'select', value: preferredUnit(), options: unitSelectOptions() },
+      { name: 'package_unit', label: 'Package unit (optional)', type: 'select', options: [{ value: '', label: '—' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
+      { name: 'package_quantity_base', label: 'Base kg per package (optional)', type: 'number', step: '0.001' },
+      { name: 'typical_otr_pct', label: 'Typical output ratio %', type: 'number', step: '1' },
+    ];
+  }
   function partyFields(kind) {
     return [
       { name: 'name', label: 'Name', required: true },
@@ -212,7 +273,7 @@
     return [
       { name: 'name', label: 'Name', required: true },
       { name: 'capacity_qty', label: 'Capacity quantity (optional)', type: 'number', step: '0.001' },
-      { name: 'capacity_unit', label: 'Capacity unit', type: 'select', options: [{ value: 'QUINTAL', label: 'quintal' }, { value: 'KG', label: 'kg' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
+      { name: 'capacity_unit', label: 'Capacity unit', type: 'select', value: preferredUnit(), options: unitSelectOptions() },
     ];
   }
   function fieldValues(fields, values) {
@@ -227,7 +288,7 @@
     if (master === 'buyers') return fieldValues(partyFields('buyer'), row);
     if (master === 'items') {
       var categories = { RAW_MATERIAL: 'paddy', FINISHED_GOOD: 'rice', BYPRODUCT: 'byproduct', PACKAGING: 'packaging', CONSUMABLE: 'consumable', OTHER: 'other' };
-      return fieldValues(ITEM_FIELDS, Object.assign({}, row, { category: categories[row.category_code] || row.category || 'other', display_unit: row.display_unit || row.unit || 'QUINTAL' }));
+      return fieldValues(itemFields(), Object.assign({}, row, { category: categories[row.category_code] || row.category || 'other', display_unit: row.display_unit || row.unit || preferredUnit() }));
     }
     return fieldValues(godownFields(), row);
   }
@@ -235,7 +296,7 @@
   function quickAddFields(f) {
     if (f.quickAdd === 'suppliers') return partyFields('supplier');
     if (f.quickAdd === 'buyers') return partyFields('buyer');
-    if (f.quickAdd === 'items') return ITEM_FIELDS;
+    if (f.quickAdd === 'items') return itemFields();
     if (f.quickAdd === 'godowns') return godownFields();
     return [{ name: 'name', label: 'Name', required: true }];
   }
@@ -255,8 +316,8 @@
       var when = (f.when ? ' data-when="' + esc(f.when) + '"' : '') + (f.advanced || simpleProcessOptional ? ' data-advanced="1"' : '');
       if (f.type === 'select') {
         var opts = f.quickAdd ? f.options.concat([{ value: '__add:' + f.quickAdd, label: '+ Add new ' + f.quickAddLabel }]) : f.options;
-        var preferred = title === 'New process run' && ['input_unit', 'output_unit', 'input_unit_2', 'output_unit_2', 'byproduct_unit', 'loss_unit'].indexOf(f.name) >= 0 ? ((S.ov && S.ov.me && S.ov.me.preferred_unit) || 'QUINTAL') : '';
-        var selectedValue = f.value == null ? preferred : f.value;
+        var selectedValue = f.value;
+        if (selectedValue == null && /unit/i.test(f.name)) selectedValue = preferredUnit();
         return '<div class="fld"' + when + '><label>' + esc(f.label) + '</label><select name="' + f.name + '">' +
           opts.map(function (o) { return '<option value="' + esc(o.value) + '"' + (String(o.value) === String(selectedValue == null ? '' : selectedValue) ? ' selected' : '') + '>' + esc(o.label) + '</option>'; }).join('') +
           '</select></div>';
@@ -505,7 +566,7 @@
     var steps = [
       ['Add suppliers', ov.suppliers.length > 0, 'Farmers, traders or brokers you buy from.', 'sup-new'],
       ['Add buyers', ov.buyers.length > 0, 'Customers who buy rice or by-products.', 'buy-new'],
-      ['Check items', ov.items.length > 0, 'Paddy, parboiled rice, bran, husk and other SKUs.', 'item-new'],
+      ['Check items', ov.items.length > 0, 'Raw material, finished goods and by-products.', 'item-new'],
       ['Create a sauda', ov.saudas.length > 0, 'Record the purchase deal before the truck arrives.', 'sauda-new'],
       ['Record gate entry', (ob.gate_count || ov.gate.length) > 0, 'Enter incoming/outgoing trucks and weights.', 'gate-new'],
       ['Move to stock', ov.lots.length > 0, 'Add completed incoming trucks into a godown lot.', 'lot-new'],
@@ -819,7 +880,7 @@
         '<td class="mut">' + esc(i.display_unit || i.unit || 'Quintal') + '</td><td>' + (can('EDIT') ? '<button class="btn sm" data-act="item-edit" data-id="' + esc(i.id) + '">Edit</button>' : '') + '</td></tr>';
     }).join('') || '<tr><td colspan="7" class="empty">No items.</td></tr>';
     return '<div class="card"><div class="card-top"><div><div class="card-h">Items</div>' +
-      '<div class="hint" style="font-weight:500;margin-top:2px">Paddy varieties, rice SKUs &amp; by-products. OTR = out-turn ratio.</div></div>' +
+      '<div class="hint" style="font-weight:500;margin-top:2px">Raw materials, finished goods and by-products. Output ratio tracks expected yield.</div></div>' +
       (can('CREATE') ? '<button class="btn acc" data-act="item-new">+ Add item</button>' : '') + '</div>' +
       filterToolbar(S.ov.items, 'items') +
       '<div class="twrap ms-scroll"><table class="ms" style="min-width:720px"><thead><tr>' +
@@ -851,8 +912,8 @@
   function loadChainRuns() { return fetch('/api/chain-runs').then(function (r) { return r.json(); }).then(function (j) { S.chainRuns = j.chain_runs || []; render(); }); }
   function openChainRun(id) { return fetch('/api/chain-runs/' + encodeURIComponent(id)).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Could not load chain run'); return j; }); }).then(function (j) { S.chainRunDetail = j; var current = (j.steps || []).find(function (step) { return String(step.id) === String(j.chain_run.current_step_id); }); if (current) { S.processWorkspace = null; S.processDraft = null; processWorkspaceFor(current.process_type_id); } render(); }).catch(function (err) { toast(err.message, 'error'); }); }
   function activeProcessTypes() { return (S.processTypes || []).filter(function (p) { return !p.deleted_at; }); }
-  function preferredProcessUnit() { return (S.ov && S.ov.me && S.ov.me.preferred_unit) || 'QUINTAL'; }
-  function processUnitOptions() { return [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }]; }
+  function preferredProcessUnit() { return preferredUnit(); }
+  function processUnitOptions() { return unitSelectOptions(); }
   function processUnitBase(item, unit) {
     var u = String(unit || '').toUpperCase(), multipliers = { KG: 1, QUINTAL: 100, TONNE: 1000 };
     if (multipliers[u]) return multipliers[u];
@@ -880,6 +941,8 @@
     }).catch(function (err) { S.processWorkspace = { error: err.message }; S.processDraft = null; toast(err.message, 'error'); render(); });
   }
   function processLotById(id) { return S.processWorkspace && (S.processWorkspace.lots || []).find(function (lot) { return String(lot.id) === String(id); }); }
+  function inheritedProcessUnit() { return (S.processDraft && S.processDraft.inputs && S.processDraft.inputs[0] && S.processDraft.inputs[0].unit) || (S.processWorkspace && S.processWorkspace.process_type && S.processWorkspace.process_type.default_unit) || preferredProcessUnit(); }
+  function syncProcessOutputUnits() { if (!S.processDraft) return; var unit = inheritedProcessUnit(); (S.processDraft.outputs || []).forEach(function (output) { output.unit = unit; }); }
   function processInputModal(lot) {
     var item = processItem(lot.item_id, S.processWorkspace);
     var unit = (item && (item.display_unit || item.unit)) || preferredProcessUnit();
@@ -894,6 +957,7 @@
       var existing = S.processDraft.inputs.find(function (input) { return input.lot_id === lot.id; });
       if (existing) { existing.quantity = d.quantity; existing.unit = selectedUnit; existing.quantity_base = base; }
       else S.processDraft.inputs.push({ lot_id: lot.id, lot_code: lot.code, item_id: lot.item_id, item_name: lot.item_name, godown_id: lot.godown_id, godown_name: lot.godown_name, quantity: d.quantity, quantity_base: base, unit: selectedUnit, available_base: Number(lot.qty_kg || 0) });
+      syncProcessOutputUnits();
       persistProcessDraft();
       render();
     });
@@ -908,12 +972,12 @@
     var lots = (S.processWorkspace && S.processWorkspace.lots) || [];
     modal('Add another input', [
       { name: 'lot_id', label: 'Available lot', type: 'select', options: optList(lots.map(function (lot) { return { id: lot.id, name: (lot.item_name || 'Material') + ' · ' + lot.code + ' · ' + lotQty(lot) }; })), },
-      { name: 'quantity', label: 'Quantity', type: 'number', step: '0.001', required: true },
-      { name: 'unit', label: 'Unit', type: 'select', value: preferredProcessUnit(), options: processUnitOptions() },
+      { name: 'quantity', label: 'Quantity (' + String(inheritedProcessUnit()).toLowerCase() + ')', type: 'number', step: '0.001', required: true },
     ], 'Add input', function (d) {
       var lot = processLotById(d.lot_id), item = lot && processItem(lot.item_id, S.processWorkspace), base = lot && processQuantityBase(item, d.quantity, d.unit);
       if (!lot || !item || !base || base <= 0 || base > Number(lot.qty_kg || 0)) throw new Error('Enter a positive quantity within the available lot quantity.');
       S.processDraft.inputs.push({ lot_id: lot.id, lot_code: lot.code, item_id: lot.item_id, item_name: lot.item_name, godown_id: lot.godown_id, godown_name: lot.godown_name, quantity: d.quantity, quantity_base: base, unit: d.unit, available_base: Number(lot.qty_kg || 0) });
+      syncProcessOutputUnits();
       persistProcessDraft();
       render();
     });
@@ -929,9 +993,9 @@
     ], 'Add output', function (d) {
       var item = processItem(d.item_id, S.processWorkspace);
       if (!item || num(d.quantity) <= 0) throw new Error('Choose an item and enter a positive quantity.');
-      var proposed = processQuantityBase(item, d.quantity, d.unit || preferredProcessUnit()), balance = processBalance(S.processDraft);
+      var outputUnit = inheritedProcessUnit(), proposed = processQuantityBase(item, d.quantity, outputUnit), balance = processBalance(S.processDraft);
       if (proposed != null && balance.allMass && proposed > Math.max(0, balance.difference || 0)) throw new Error('This output exceeds the remaining input quantity. Reduce it or adjust an existing output.');
-      S.processDraft.outputs.push({ line_type: d.semantic_type === 'waste' ? 'LOSS' : 'OUTPUT', semantic_type: d.semantic_type, item_id: d.item_id, item_name: item.name, quantity: d.quantity, unit: d.unit || preferredProcessUnit(), auto_calculate: false, required: true, godown_id: d.godown_id || S.processDraft.destinationGodownId || '' });
+      S.processDraft.outputs.push({ line_type: d.semantic_type === 'waste' ? 'LOSS' : 'OUTPUT', semantic_type: d.semantic_type, item_id: d.item_id, item_name: item.name, quantity: d.quantity, unit: outputUnit, auto_calculate: false, required: true, godown_id: d.godown_id || S.processDraft.destinationGodownId || '' });
       persistProcessDraft();
       render();
     });
@@ -960,7 +1024,9 @@
     var materials = lots.map(function (lot) { var used = selectedIds.indexOf(lot.id) >= 0; return '<article class="process-material ' + (used ? 'used' : '') + '" draggable="' + (!used) + '" data-process-lot="' + esc(lot.id) + '"><div class="process-material-head"><div><strong>' + esc(lot.item_name || 'Material') + '</strong><span>' + esc(lot.code) + '</span></div>' + (used ? '<span class="pill" style="background:#E6F0E9;color:#256238">Added</span>' : '<button class="btn sm" data-act="process-lot-use" data-id="' + esc(lot.id) + '">Use</button>') + '</div><div class="process-material-qty">' + esc(lotQty(lot)) + ' available</div><div class="hint">' + esc(lot.godown_name || 'No godown') + '</div></article>'; }).join('') || '<div class="empty">No available lots.</div>';
     var inputSummary = draft.inputs.map(function (input) { return '<div class="process-selected-line"><span>' + esc(input.item_name || 'Material') + ' · ' + esc(input.lot_code) + '</span><b>' + esc(input.quantity) + ' ' + esc(String(input.unit).toLowerCase()) + '</b></div>'; }).join('') || '<div class="hint">No input lot selected.</div>';
     var balance = processBalance(draft);
-    var outputs = draft.outputs.map(function (output, index) { var label = output.semantic_type === 'byproduct' ? 'By-product' : output.semantic_type === 'waste' ? 'Loss' : 'Main output'; return '<div class="process-output-card"><div class="process-output-card-head"><div><strong>' + esc(output.item_name || 'Output') + '</strong><span>' + esc(label) + '</span></div>' + (output.template_line_id ? '' : '<button class="btn sm\" data-act=\"process-output-remove\" data-id=\"' + index + '\">Remove</button>') + '</div><div class=\"process-output-input\"><input data-process-output=\"' + index + '\" type=\"number\" step=\"0.001\" value=\"' + esc(output.quantity == null ? '' : output.quantity) + '\"' + (output.auto_calculate ? ' readonly' : '') + ' placeholder=\"Quantity\"><select data-process-unit=\"' + index + '\">' + processUnitOptions().map(function (unit) { return '<option value=\"' + unit.value + '\"' + (unit.value === output.unit ? ' selected' : '') + '>' + unit.label + '</option>'; }).join('') + '</select></div><div class=\"hint\">' + (output.auto_calculate ? 'Calculated from mass balance' : 'Enter actual quantity') + '</div></div>'; }).join('');
+    syncProcessOutputUnits();
+    var outputUnit = inheritedProcessUnit();
+    var outputs = draft.outputs.map(function (output, index) { var label = output.semantic_type === 'byproduct' ? 'By-product' : output.semantic_type === 'waste' ? 'Loss' : 'Main output'; return '<div class="process-output-card"><div class="process-output-card-head"><div><strong>' + esc(output.item_name || 'Output') + '</strong><span>' + esc(label) + '</span></div>' + (output.template_line_id ? '' : '<button class="btn sm\" data-act=\"process-output-remove\" data-id=\"' + index + '\">Remove</button>') + '</div><div class=\"process-output-input\"><input data-process-output=\"' + index + '\" type=\"number\" step=\"0.001\" value=\"' + esc(output.quantity == null ? '' : output.quantity) + '\"' + (output.auto_calculate ? ' readonly' : '') + ' placeholder=\"Quantity\"><b class=\"process-inherited-unit\">' + esc(String(outputUnit).toLowerCase()) + '</b></div><div class=\"hint\">' + (output.auto_calculate ? 'Calculated from mass balance' : 'Enter actual quantity') + ' · unit inherited from input</div></div>'; }).join('');
     var postHint = draft.outputs.length ? '<div class="process-post-hint">Review outputs, then use <b>Post Run</b> below to save this process and update stock.</div>' : '';
     return '<div class="process-toolbar"><div class="process-toolbar-actions"><div class="process-stepper' + (S.processStepsExpanded ? ' expanded' : '') + '">' + types.map(function (type, index) { return (index ? '<span class="process-step-arrow">→</span>' : '') + '<button class="' + (type.id === draft.processTypeId ? 'on' : '') + '" data-act="process-step" data-id="' + esc(type.id) + '">' + esc(type.name) + '</button>'; }).join('') + '</div><select class="process-select" data-process-select aria-label="Choose process">' + types.map(function (type) { return '<option value="' + esc(type.id) + '"' + (type.id === draft.processTypeId ? ' selected' : '') + '>' + esc(type.name) + '</option>'; }).join('') + '</select>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm process-catalog-toggle" data-act="process-catalog-toggle">Edit processes</button>' : '') + '</div></div>' + (types.length > 1 ? '<div class="process-step-reveal"><button class="process-step-arrow-button" data-act="process-steps-toggle" aria-label="' + (S.processStepsExpanded ? 'Show compact process list' : 'Show all process steps') + '">' + (S.processStepsExpanded ? '⌃' : '⌄') + '</button></div>' : '') + processCatalogMarkup() +
       '<div class="process-flow"><section class="process-column"><div class="process-column-title">Available materials <span>' + lots.length + '</span></div><div class="process-materials">' + materials + '</div></section><section class="process-column process-center"><div class="process-column-title">Process</div><div class="process-dropzone" data-process-drop="1"><div class="process-drop-title">' + esc(workspace.process_type.name) + '</div><div class="hint">Drop a lot here or use a material card</div><div class="process-selected">' + inputSummary + '</div></div><div class="process-inline-actions"><button class="btn sm" data-act="process-input-add">+ Add input</button>' + (draft.inputs.length ? '<button class="btn sm" data-act="process-input-clear">Clear inputs</button>' : '') + '</div></section><section class="process-column"><div class="process-column-title">Outputs</div><div class="process-outputs">' + (outputs || '<div class="empty">Configure outputs or add one manually.</div>') + '</div><button class="btn ghost process-add-output" data-act="process-output-add">+ Add output</button><label class="process-godown-label">Destination godown<select data-process-destination>' + [{ value: '', label: 'Choose godown' }].concat((workspace.godowns || []).map(function (godown) { return { value: godown.id, label: godown.name }; })).map(function (godown) { return '<option value="' + esc(godown.value) + '"' + (godown.value === draft.destinationGodownId ? ' selected' : '') + '>' + esc(godown.label) + '</option>'; }).join('') + '</select></label>' + postHint + '</section></div>' +
@@ -974,9 +1040,6 @@
     if (destination) destination.onchange = function () { S.processDraft.destinationGodownId = destination.value; S.processDraft.outputs.forEach(function (output) { if (!output.godown_id) output.godown_id = destination.value; }); persistProcessDraft(); };
     document.querySelectorAll('[data-process-output]').forEach(function (input) {
       input.oninput = function () { var index = Number(input.getAttribute('data-process-output')); if (S.processDraft.outputs[index]) S.processDraft.outputs[index].quantity = input.value; persistProcessDraft(); updateProcessBalance(); };
-    });
-    document.querySelectorAll('[data-process-unit]').forEach(function (unit) {
-      unit.onchange = function () { var index = Number(unit.getAttribute('data-process-unit')); if (S.processDraft.outputs[index]) { S.processDraft.outputs[index].unit = unit.value; persistProcessDraft(); updateProcessBalance(); } };
     });
     document.querySelectorAll('[data-process-lot]').forEach(function (card) {
       card.ondragstart = function (event) { event.dataTransfer.setData('text/plain', card.getAttribute('data-process-lot')); event.dataTransfer.effectAllowed = 'copy'; };
@@ -1011,17 +1074,67 @@
     return '<div class="card process-catalog-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Add, edit, reorder or archive the reusable process flows.</div></div><div class="process-catalog-actions">' + create + '<button class="btn sm" data-act="process-catalog-toggle">Close</button></div></div>' + table + editor + '</div>';
   }
   function bindProcessCatalog() { var rows = document.querySelector('.inline-template-rows'); if (!rows) return; rows.querySelectorAll('.inline-template-row').forEach(function (row) { row.ondragstart = function () { row.classList.add('dragging'); }; row.ondragend = function () { row.classList.remove('dragging'); }; row.ondragover = function (event) { event.preventDefault(); }; row.ondrop = function (event) { event.preventDefault(); var dragging = rows.querySelector('.inline-template-row.dragging'); if (dragging && dragging !== row) rows.insertBefore(dragging, row); }; }); }
+  function chainMapProfile(name) {
+    var key = String(name || '').toLowerCase();
+    if (key.indexOf('pre-clean') >= 0) return { yieldPct: 98, product: 'Clean paddy', byproduct: 'Impurities', byproductPct: 2, detail: 'Removes dust, stones and foreign matter.' };
+    if (key.indexOf('de-husk') >= 0 || key.indexOf('hulling') >= 0) return { yieldPct: 78, product: 'Brown rice', byproduct: 'Husk', byproductPct: 20, detail: 'Separates husk from paddy to produce brown rice.' };
+    if (key.indexOf('separation') >= 0) return { yieldPct: 97, product: 'Separated brown rice', byproduct: 'Return paddy', byproductPct: 3, detail: 'Separates remaining paddy from brown rice.' };
+    if (key.indexOf('whiten') >= 0 || key.indexOf('polish') >= 0) return { yieldPct: 89, product: 'White rice', byproduct: 'Rice bran', byproductPct: 8, detail: 'Whitening and polishing produces finished white rice.' };
+    if (key.indexOf('grad') >= 0 || key.indexOf('color') >= 0) return { yieldPct: 96, product: 'Graded rice', byproduct: 'Broken rice', byproductPct: 3, detail: 'Grades rice and removes broken or discoloured grain.' };
+    if (key.indexOf('pack') >= 0 || key.indexOf('weigh') >= 0) return { yieldPct: 100, product: 'Packed rice', byproduct: '', byproductPct: 0, detail: 'Weighs and packs the finished rice.' };
+    return { yieldPct: 95, product: 'Main output', byproduct: '', byproductPct: 0, detail: 'Editable process yield profile.' };
+  }
+  function chainMapNumber(value) { return Math.round(Number(value || 0) * 1000) / 1000; }
+  function chainMapSteps(chain) {
+    var known = (chain.steps || []).slice();
+    (S.chainMap.addedSteps || []).filter(function (step) { return step.chainId === chain.id; }).forEach(function (step) { known.push(step); });
+    return known;
+  }
+  function chainMapMarkup(chain) {
+    if (S.chainMap.chainId !== chain.id) S.chainMap = { chainId: chain.id, rootQty: 100, unit: 'Bags', overrides: {}, addedSteps: [], selectedStepId: '' };
+    var steps = chainMapSteps(chain), map = S.chainMap, input = chainMapNumber(map.rootQty) || 0;
+    var computed = steps.map(function (step, index) {
+      var profile = chainMapProfile(step.process_type_name || step.name), id = String(step.id || ('new-' + index));
+      var output = Object.prototype.hasOwnProperty.call(map.overrides, id) ? chainMapNumber(map.overrides[id]) : chainMapNumber(input * profile.yieldPct / 100);
+      var result = { step: step, id: id, index: index, profile: profile, input: input, output: output, byproduct: chainMapNumber(input * profile.byproductPct / 100), changed: Object.prototype.hasOwnProperty.call(map.overrides, id) };
+      input = output;
+      return result;
+    });
+    var activeDetail = S.chainRunDetail && S.chainRunDetail.chain_run && String(S.chainRunDetail.chain_run.chain_id) === String(chain.id) ? S.chainRunDetail : null;
+    var selected = computed.find(function (entry) { return entry.id === map.selectedStepId; }) || computed[0];
+    var unitOptions = ['Bags', 'Kg', 'Quintal', 'Tonne'].map(function (unit) { return '<option' + (map.unit === unit ? ' selected' : '') + '>' + unit + '</option>'; }).join('');
+    var nodes = computed.map(function (entry) {
+      var runStep = activeDetail && (activeDetail.steps || []).find(function (step) { return String(step.id) === entry.id; });
+      var state = runStep && runStep.run_id ? 'completed' : (activeDetail && String(activeDetail.chain_run.current_step_id) === entry.id ? 'processing' : 'pending');
+      var needsReview = entry.changed || computed.slice(0, entry.index).some(function (previous) { return previous.changed; });
+      var arrow = entry.index < computed.length - 1 ? '<div class="chain-map-arrow" aria-label="' + esc(entry.profile.product) + ' flows to the next process"><b>' + esc(entry.profile.product) + '</b><small>' + entry.output + ' ' + esc(map.unit) + '</small><i>→</i></div>' : '';
+      return '<div class="chain-map-column"><div role="button" tabindex="0" class="chain-map-node ' + (entry.id === map.selectedStepId ? 'selected ' : '') + state + (needsReview ? ' review' : '') + '" data-act="chain-map-select" data-id="' + esc(entry.id) + '"><span class="chain-status-dot"></span><span class="chain-map-step">' + (entry.index + 1) + '</span><strong>' + esc(entry.step.process_type_name || entry.step.name || 'Process') + '</strong><span class="chain-map-state">' + (needsReview ? '⚠ Review forecast' : esc(state)) + '</span><span class="chain-map-metric">Expected input <b>' + entry.input + ' ' + esc(map.unit) + '</b></span><span class="chain-map-metric editable">Expected output <input aria-label="Expected output for ' + esc(entry.step.process_type_name || entry.step.name || 'process') + '" data-chain-map-output="' + esc(entry.id) + '" type="number" min="0" step="0.001" value="' + entry.output + '"> <b>' + esc(map.unit) + '</b></span>' + (entry.profile.byproduct ? '<span class="chain-map-byproduct-label">↘ Waste: ' + esc(entry.profile.byproduct) + ' · ' + entry.byproduct + ' ' + esc(map.unit) + '</span>' : '') + '</div>' + arrow + '</div>';
+    }).join('');
+    var library = activeProcessTypes().filter(function (type) { return String(type.name || '').toLowerCase().indexOf('smoke process') < 0; }).map(function (type) { return '<button draggable="true" class="chain-library-item" data-chain-process-id="' + esc(type.id) + '" data-chain-process-name="' + esc(type.name) + '">+ ' + esc(type.name) + '</button>'; }).join('');
+    var detail = selected ? '<aside class="chain-map-detail"><div class="card-h">' + esc(selected.step.process_type_name || selected.step.name) + '</div><div class="hint">' + esc(selected.profile.detail) + '</div><dl><div><dt>Yield profile</dt><dd>' + selected.profile.yieldPct + '% main output</dd></div><div><dt>By-product</dt><dd>' + (selected.profile.byproduct ? esc(selected.profile.byproduct) + ' · ' + selected.profile.byproductPct + '%' : 'None') + '</dd></div><div><dt>Run unit</dt><dd>' + esc(map.unit) + ' (inherited)</dd></div></dl>' + (String(selected.id).indexOf('demo-') === 0 ? '<button class="btn sm" data-act="chain-map-remove" data-id="' + esc(selected.id) + '">Remove from demo map</button>' : '') + '</aside>' : '';
+    return '<div class="chain-map-card"><div class="chain-wip">Work in progress — please do not use Chain view for production yet.</div><div class="chain-map-head"><div><div class="card-h">' + esc(chain.name) + '</div><div class="hint">Each labelled arrow is the exact output handed to the next process. Grey values are forecasts; amber values need review.</div></div><div class="chain-map-controls"><label>First input <input data-chain-map-root type="number" min="0" step="0.001" value="' + map.rootQty + '"></label><label>Unit <select data-chain-map-unit>' + unitOptions + '</select></label><button class="btn sm" data-act="chain-map-reset">Reset</button><button class="btn sm" data-act="chain-map-fullscreen">Fullscreen</button>' + (can('CREATE') ? '<button class="btn acc" data-act="chain-start">Start run</button>' : '') + '</div></div><div class="chain-map-layout"><aside class="chain-library"><strong>Process library</strong><span class="hint">Drag a process to the end of the map.</span><div>' + library + '</div></aside><div class="chain-map-stage" data-chain-map-drop><div class="chain-map-main"><div class="chain-map-input">Paddy<br><b>' + map.rootQty + ' ' + esc(map.unit) + '</b></div>' + nodes + '<div class="chain-map-drop">Drop process here</div></div></div>' + detail + '</div></div>';
+  }
+  function bindChainMap() {
+    var root = document.querySelector('[data-chain-map-root]'), unit = document.querySelector('[data-chain-map-unit]');
+    if (root) root.onchange = function () { S.chainMap.rootQty = chainMapNumber(root.value); S.chainMap.overrides = {}; render(); };
+    if (unit) unit.onchange = function () { S.chainMap.unit = unit.value; render(); };
+    document.querySelectorAll('[data-chain-map-output]').forEach(function (field) { field.onchange = function () { S.chainMap.overrides[field.getAttribute('data-chain-map-output')] = chainMapNumber(field.value); render(); }; field.onclick = function (event) { event.stopPropagation(); }; });
+    document.querySelectorAll('[data-chain-process-id]').forEach(function (item) { item.ondragstart = function (event) { event.dataTransfer.setData('application/x-millsaathi-process', JSON.stringify({ id: item.getAttribute('data-chain-process-id'), name: item.getAttribute('data-chain-process-name') })); event.dataTransfer.effectAllowed = 'copy'; }; });
+    var drop = document.querySelector('[data-chain-map-drop]');
+    if (drop) { drop.ondragover = function (event) { event.preventDefault(); drop.classList.add('drag-over'); }; drop.ondragleave = function () { drop.classList.remove('drag-over'); }; drop.ondrop = function (event) { event.preventDefault(); drop.classList.remove('drag-over'); try { var data = JSON.parse(event.dataTransfer.getData('application/x-millsaathi-process')); if (data && data.id) { S.chainMap.addedSteps.push({ id: 'demo-' + Date.now(), chainId: S.chainMap.chainId, process_type_id: data.id, process_type_name: data.name }); render(); } } catch (_) {} }; }
+  }
   function chainWorkspaceMarkup() {
     var cards = S.chainRuns.map(function (run) { var total = Number(run.total_steps) || 0, completed = Number(run.completed_steps) || 0, progress = total ? Math.round(completed * 100 / total) : 0; return '<article class="chain-card"><div><strong>' + esc(run.code) + ' · ' + esc(run.chain_name) + '</strong><div class="hint">' + esc(run.current_step_name || (run.status === 'COMPLETED' ? 'Completed' : 'Not started')) + ' · ' + completed + '/' + total + ' steps</div><div class="chain-progress"><i style="width:' + progress + '%"></i></div></div><div>' + pill(String(run.status || '').toLowerCase()) + ' <button class="btn sm" data-act="chain-open" data-id="' + esc(run.id) + '">Open</button></div></article>'; }).join('') || '<div class="empty">No chain runs yet. Start a pipeline to track work-in-progress across steps.</div>';
     var detail = S.chainRunDetail, selected = detail && detail.chain_run;
     var active = selected ? '<div class="chain-detail"><strong>' + esc(selected.code) + ' · ' + esc(selected.chain_name) + '</strong><div class="hint">Post the current workspace step to pass its output lots to the next step.</div><div class="chain-step-list">' + (detail.steps || []).map(function (step) { var state = step.run_id ? 'done' : (String(step.id) === String(selected.current_step_id) ? 'current' : 'pending'); return '<span class="' + state + '">' + Number(step.step_number) + '. ' + esc(step.process_type_name) + '</span>'; }).join('') + '</div><div class="chain-balance">Input ' + qtl(detail.chain_mass_balance.original_input_base) + ' qtl · Final output ' + qtl(detail.chain_mass_balance.final_output_base) + ' qtl · Yield ' + detail.chain_mass_balance.yield_pct + '%</div><div><button class="btn sm" data-act="chain-complete" data-id="' + esc(selected.id) + '">Complete</button> ' + (can('VOID') ? '<button class="btn sm" data-act="chain-void" data-id="' + esc(selected.id) + '">Void chain</button>' : '') + '</div></div>' : '';
-    return '<div class="card pad"><div class="card-top"><div><div class="card-h">Processing chains</div><div class="hint">Each completed step passes its output lots to the next one.</div></div>' + (can('CREATE') ? '<button class="btn acc" data-act="chain-start">Start chain run</button>' : '') + '</div>' + cards + '</div>' + active;
+    var chain = (S.processChains || []).find(function (item) { return !item.deleted_at && (item.steps || []).length; });
+    return (chain ? chainMapMarkup(chain) : '') + '<div class="card pad"><div class="card-top"><div><div class="card-h">Processing chain runs</div><div class="hint">Posted runs remain connected to stock and lot traceability.</div></div>' + (can('CREATE') ? '<button class="btn acc" data-act="chain-start">Start chain run</button>' : '') + '</div>' + cards + '</div>' + active;
   }
   function pageProcessing() {
     if (!S.processTypes || !S.processRuns || !S.processChains || !S.chainRuns) { if (!S.processTypes) loadProcessTypes(); if (!S.processRuns) loadProcessRuns(); if (!S.processChains) loadProcessingChains(); if (!S.chainRuns) loadChainRuns(); return '<div class="card pad"><div class="empty">Loading processing…</div></div>'; }
     var firstType = activeProcessTypes()[0];
     if (firstType && (!S.processWorkspace || !S.processDraft || S.processDraft.processTypeId !== firstType.id) && !S.processWorkspace) { processWorkspaceFor(firstType.id); return '<div class="card pad"><div class="empty">Loading Process Workspace…</div></div>'; }
-    if (S.processingView === 'chains') return chainWorkspaceMarkup() + processWorkspaceMarkup();
+    if (S.processingView === 'chains') return chainWorkspaceMarkup();
     var runRows = S.processRuns.map(function (run) { var summary = (run.lines || []).map(function (line) { return esc(line.line_type.toLowerCase()) + ': ' + esc(line.item_name || line.item_id) + ' ' + esc(line.quantity) + ' ' + esc(line.unit); }).join(' · '); var voidButton = run.status === 'POSTED' && can('VOID') ? '<button class="btn sm" data-act="process-run-void" data-id="' + esc(run.id) + '">Void</button>' : ''; var chainBadge = run.chain_name ? '<div class="hint">' + esc(run.chain_name) + ' · Step ' + esc(run.chain_step_number) + '</div>' : ''; return '<tr><td class="b7">' + esc(run.run_date) + '</td><td>' + esc(run.process_type_name || '—') + chainBadge + '</td><td>' + summary + '</td><td>' + esc(run.creator_name || '—') + '</td><td>' + pill(String(run.status || '').toLowerCase()) + ' ' + voidButton + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process runs yet.</td></tr>';
     return processWorkspaceMarkup() + '<div class="card process-types-card"><div class="card-top"><div><div class="card-h">Process Types</div><div class="hint">Configure reusable inputs, outputs and defaults for each process.</div></div><div style="display:flex;gap:8px">' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-new">+ Type</button>' + (firstType ? '<button class="btn sm icon-btn" title="Edit process flow" aria-label="Edit process flow" data-act="process-template-edit" data-id="' + esc(firstType.id) + '">✎</button>' : '') : '') + '</div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Name</th><th>Description</th><th>Template</th><th>Status</th><th></th></tr></thead><tbody>' + (S.processTypes.map(function (p) { var archived = !!p.deleted_at, configured = (p.template_lines || []).length > 0; return '<tr><td class="b7">' + esc(p.name) + '</td><td>' + esc(p.description || '—') + '</td><td>' + (configured ? 'Configured' : 'Manual fallback') + '</td><td>' + (archived ? 'Archived' : 'Active') + '</td><td>' + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-template-edit" data-id="' + esc(p.id) + '">Configure</button> ' : '') + (can('MANAGE_ORGANISATION') ? '<button class="btn sm" data-act="process-type-' + (archived ? 'restore' : 'archive') + '" data-id="' + esc(p.id) + '">' + (archived ? 'Unarchive' : 'Archive') + '</button>' : '') + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">No process types yet.</td></tr>') + '</tbody></table></div></div><div class="card"><div class="card-top"><div><div class="card-h">Recent process runs</div><div class="hint">Inputs, outputs and by-products remain linked to the stock ledger.</div></div></div><div class="twrap ms-scroll"><table class="ms"><thead><tr><th>Date</th><th>Process</th><th>Lines</th><th>Posted by</th><th>Status</th></tr></thead><tbody>' + runRows + '</tbody></table></div></div>';
   }
@@ -1327,6 +1440,18 @@
       render();
     } else if (act === 'processing-view') {
       S.processingView = el.getAttribute('data-view') || 'runs'; render();
+    } else if (act === 'chain-map-select') {
+      S.chainMap.selectedStepId = el.getAttribute('data-id') || ''; render();
+    } else if (act === 'chain-map-reset') {
+      S.chainMap.rootQty = 100; S.chainMap.unit = 'Bags'; S.chainMap.overrides = {}; S.chainMap.addedSteps = []; S.chainMap.selectedStepId = ''; render();
+    } else if (act === 'chain-map-fullscreen') {
+      var mapCard = document.querySelector('.chain-map-card');
+      if (mapCard && mapCard.requestFullscreen) mapCard.requestFullscreen().catch(function () { toast('Fullscreen is not available in this browser.', 'error'); });
+    } else if (act === 'chain-map-remove') {
+      var removeMapId = el.getAttribute('data-id');
+      S.chainMap.addedSteps = (S.chainMap.addedSteps || []).filter(function (step) { return String(step.id) !== String(removeMapId); });
+      delete S.chainMap.overrides[removeMapId];
+      S.chainMap.selectedStepId = ''; render();
     } else if (act === 'chain-start') {
       var options = (S.processChains || []).filter(function (chain) { return !chain.deleted_at && Number(chain.active) !== 0 && (chain.steps || []).length; }).map(function (chain) { return { value: chain.id, label: chain.name + ' · ' + chain.steps.length + ' steps' }; });
       if (!options.length) { toast('Create a chain with at least one step first.', 'error'); return; }
@@ -1592,7 +1717,7 @@
         modal('Add godown first', [
           { name: 'name', label: 'Godown name', required: true, value: 'Godown 1' },
           { name: 'capacity_qty', label: 'Capacity quantity (optional)', type: 'number', step: '0.001' },
-          { name: 'capacity_unit', label: 'Capacity unit', type: 'select', options: [{ value: 'QUINTAL', label: 'quintal' }, { value: 'KG', label: 'kg' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
+          { name: 'capacity_unit', label: 'Capacity unit', type: 'select', value: preferredUnit(), options: unitSelectOptions() },
         ], 'Add godown', function (d) { return apiPost('/api/godowns', d); });
         return;
       }
@@ -1665,7 +1790,7 @@
     } else if (act === 'buy-new') {
       modal('Add buyer', partyFields('buyer'), 'Add', function (d) { return apiPost('/api/buyers', d); });
     } else if (act === 'item-new') {
-      modal('Add item', ITEM_FIELDS, 'Add', function (d) { return apiPost('/api/items', d); });
+      modal('Add item', itemFields(), 'Add', function (d) { return apiPost('/api/items', d); });
     } else if (act === 'godown-new') {
       modal('Add godown', godownFields(), 'Add', function (d) { return apiPost('/api/godowns', d); });
     } else if (act === 'feedback') {
@@ -1778,7 +1903,7 @@
       var update = function () { var pageFilters = S.filters[S.page] || {}; var key = filter.getAttribute('data-filter-key'); if (!key) return; if (filter.value) pageFilters[key] = filter.value; else delete pageFilters[key]; S.filters[S.page] = pageFilters; S.pageIndex = {}; render(); };
       filter.onchange = update;
     });
-    if (S.page === 'processing') { bindProcessWorkspace(); bindProcessCatalog(); }
+    if (S.page === 'processing') { bindProcessWorkspace(); bindProcessCatalog(); bindChainMap(); }
   }
   function userName() {
     if (MODE === 'demo') return { owner: 'Ramesh Reddy', manager: 'Suresh Kumar', accountant: 'Prakash Rao' }[S.role] || 'Demo user';
@@ -1787,8 +1912,10 @@
 
   // ---------- login (live mode) ----------
   function renderLogin(root) {
-    var signup = root.getAttribute('data-auth') === 'signup';
-    var invite = new URLSearchParams(location.search).get('invite');
+    var query = new URLSearchParams(location.search);
+    var invite = query.get('invite');
+    var requestedMillType = query.get('mill_type');
+    var signup = root.getAttribute('data-auth') === 'signup' || (!invite && query.get('signup') === '1');
     loadAuthConfig(root);
     var turnstileMarkup = !invite && AUTH_CONFIG && AUTH_CONFIG.turnstile_site_key ? '<div id="turnstile-widget"></div>' : '';
     root.innerHTML =
@@ -1799,6 +1926,7 @@
       '<p class="auth-sub">' + (invite ? 'Set your password to accept this invite.' : signup ? 'Free forever — no card needed.' : 'Welcome back.') + '</p>' +
       '<form id="auth-form" style="display:flex;flex-direction:column;gap:12px">' +
       (invite ? '' : signup ? '<div class="fld"><label>Mill name</label><input name="mill_name" required placeholder="Sri Venkatesh Rice Mill"></div>' +
+        millTypePickerMarkup(requestedMillType) +
         '<div class="fld"><label>Your name</label><input name="name" required placeholder="Ramesh Reddy"></div><div class="fld"><label>Preferred quantity unit</label><select name="preferred_unit"><option value="QUINTAL">Quintal</option><option value="KG">kg</option><option value="TONNE">Tonne</option><option value="BAG">Bag</option><option value="PIECE">Piece</option></select></div>' : '') +
       (invite ? '' : '<div class="fld"><label>Email</label><input name="email" type="email" required placeholder="you@mill.com"></div>') +
       '<div class="fld"><label>Password</label><input name="password" type="password" required minlength="8"></div>' +
@@ -1813,10 +1941,11 @@
       root.setAttribute('data-auth', e.target.getAttribute('data-auth-to'));
       renderLogin(root);
     };
+    bindMillTypePicker(root);
     root.querySelector('#auth-form').onsubmit = function (e) {
       e.preventDefault();
       var f = e.target, body = {};
-      ['mill_name', 'name', 'email', 'password', 'preferred_unit'].forEach(function (k) { if (f[k]) body[k] = f[k].value; });
+      ['mill_name', 'mill_type', 'name', 'email', 'password', 'preferred_unit'].forEach(function (k) { if (f[k]) body[k] = f[k].value; });
       var widget = root.querySelector('#turnstile-widget');
       if (widget) body.turnstile_token = widget.dataset.token || '';
       if (invite) body.token = invite;

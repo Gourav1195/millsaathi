@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { hashPassword, hashToken, newSessionToken, sessionExpiry, verifyPassword } from './auth';
 import { api } from './api';
+import { defaultGodownCapacity, millCatalog, normalizeMillType } from './millCatalog';
 
 export type UserRow = {
   id: string; mill_id: string; name: string; email: string; role: string; role_code?: string | null;
@@ -12,6 +13,7 @@ export type UserRow = {
 };
 export type MillRow = {
   id: string; name: string; slug: string; plan: string; language: string; loss_limit_pct: number; season_label: string; created_at: string;
+  mill_type?: string | null;
   address?: string | null; phone?: string | null; email?: string | null; gstin?: string | null; place_of_supply?: string | null;
 };
 type AppBindings = Env & { TURNSTILE_SECRET_KEY?: string; TURNSTILE_SITE_KEY?: string; GEMINI_API_KEY?: string; GEMINI_MODEL?: string };
@@ -91,7 +93,7 @@ async function sessionFromCookie(db: D1Database, token: string | undefined) {
     `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code, u.preferred_unit, u.theme,
             m.id AS m_id, m.name AS m_name, m.slug AS m_slug, m.plan AS m_plan,
             m.language AS m_language, m.loss_limit_pct AS m_loss_limit_pct, m.season_label AS m_season_label,
-            m.created_at AS m_created_at, m.address AS m_address, m.phone AS m_phone, m.email AS m_email,
+            m.created_at AS m_created_at, m.mill_type AS m_mill_type, m.address AS m_address, m.phone AS m_phone, m.email AS m_email,
             m.gstin AS m_gstin, m.place_of_supply AS m_place_of_supply
      FROM sessions se JOIN users u ON u.id = se.user_id JOIN mills m ON m.id = u.mill_id
      WHERE se.token_hash = ? AND u.active = 1 AND se.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
@@ -101,6 +103,7 @@ async function sessionFromCookie(db: D1Database, token: string | undefined) {
     user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, preferred_unit: row.preferred_unit ?? 'QUINTAL', theme: row.theme ?? 'light', pass_hash: '', pass_salt: '' } as UserRow,
     mill: { id: row.m_id, name: row.m_name, slug: row.m_slug, plan: row.m_plan, language: row.m_language,
       loss_limit_pct: row.m_loss_limit_pct, season_label: row.m_season_label, created_at: row.m_created_at,
+      mill_type: String(row.m_mill_type ?? 'RICE'),
       address: row.m_address ?? null, phone: row.m_phone ?? null, email: row.m_email ?? null, gstin: row.m_gstin ?? null, place_of_supply: row.m_place_of_supply ?? null } as MillRow,
   };
 }
@@ -120,12 +123,14 @@ app.post('/api/auth/signup', async (c) => {
   const email = (b.email ?? '').trim().toLowerCase();
   const password = b.password ?? '';
   const preferredUnit = String(b.preferred_unit ?? 'QUINTAL').toUpperCase();
+  const millType = normalizeMillType(b.mill_type ?? 'RICE');
   const ip = c.req.header('CF-Connecting-IP') || 'unknown';
   if (!await rateLimit(c.env.DB, `signup:${ip}`, 10)) return c.json({ error: 'Too many signup attempts. Please try again later.' }, 429);
   if (!await verifyTurnstile(c, b.turnstile_token)) return c.json({ error: 'Please complete the security check and try again.' }, 403);
   if (!millName || !name || !/^\S+@\S+\.\S+$/.test(email)) return c.json({ error: 'Mill name, your name and a valid email are required.' }, 400);
   if (password.length < 8) return c.json({ error: 'Password must be at least 8 characters.' }, 400);
   if (!['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(preferredUnit)) return c.json({ error: 'Choose a supported preferred unit.' }, 400);
+  if (!millType) return c.json({ error: 'Choose a supported mill type.' }, 400);
 
   const existing = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
   if (existing) return c.json({ error: 'An account with this email already exists.' }, 409);
@@ -135,48 +140,35 @@ app.post('/api/auth/signup', async (c) => {
   const slug = millName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) + '-' + crypto.randomUUID().slice(0, 6);
   const { hash, salt } = await hashPassword(password);
 
-  // New mill starts usable: standard rice item graph + one godown.
+  const catalog = millCatalog(millType);
+  const godownCapacity = defaultGodownCapacity(preferredUnit);
+  // New mill starts usable: mill-type item graph + one godown, using the preferred unit.
   const defaults: D1PreparedStatement[] = [
-    c.env.DB.prepare(`INSERT INTO mills (id, name, slug) VALUES (?, ?, ?)`).bind(millId, millName, slug),
+    c.env.DB.prepare(`INSERT INTO mills (id, name, slug, mill_type) VALUES (?, ?, ?, ?)`).bind(millId, millName, slug, millType),
     c.env.DB.prepare(`INSERT INTO users (id, mill_id, name, email, role, preferred_unit, pass_hash, pass_salt) VALUES (?, ?, ?, ?, 'owner', ?, ?, ?)`)
       .bind(userId, millId, name, email, preferredUnit, hash, salt),
     c.env.DB.prepare(`INSERT INTO billing_accounts (id, mill_id, provider) VALUES (?, ?, 'razorpay')`).bind(crypto.randomUUID(), millId),
-    c.env.DB.prepare(`INSERT INTO godowns (id, mill_id, name, capacity_qtl) VALUES (?, ?, 'Godown 1', 2000)`).bind(crypto.randomUUID(), millId),
+    c.env.DB.prepare(`INSERT INTO godowns (id, mill_id, name, capacity_qtl, capacity_qty, capacity_unit) VALUES (?, ?, 'Godown 1', ?, ?, ?)`)
+      .bind(crypto.randomUUID(), millId, godownCapacity, godownCapacity, preferredUnit),
   ];
-  const defaultProcesses = [
-    ['Pre-Cleaning', 'Remove dust, stones and foreign matter before milling.'],
-    ['De-husking (Hulling)', 'Separate husk from paddy.'],
-    ['Paddy Separation', 'Separate paddy and brown rice.'],
-    ['Whitening and Polishing', 'Whiten and polish brown rice to finished rice.'],
-    ['Grading and Color Sorting', 'Grade kernels and remove discolored grains.'],
-    ['Weighing and Packaging', 'Weigh, pack and prepare finished goods for dispatch.'],
-  ];
-  const defaultProcessIds = defaultProcesses.map(() => crypto.randomUUID());
-  for (const [index, [name, description]] of defaultProcesses.entries()) {
+  const defaultProcessIds = catalog.processes.map(() => crypto.randomUUID());
+  for (const [index, [processName, description]] of catalog.processes.entries()) {
     defaults.push(c.env.DB.prepare(`INSERT INTO process_types (id, mill_id, name, description, default_unit) VALUES (?, ?, ?, ?, ?)`)
-      .bind(defaultProcessIds[index], millId, name, description, preferredUnit));
+      .bind(defaultProcessIds[index], millId, processName, description, preferredUnit));
   }
-  // A new mill can begin using the linear rice pipeline immediately. The chain
+  // A new mill can begin using the linear pipeline immediately. The chain
   // remains optional: standalone process runs keep working unchanged.
   const defaultChainId = crypto.randomUUID();
   defaults.push(c.env.DB.prepare(`INSERT INTO processing_chains (id, mill_id, name, description, input_category, expected_yield_pct) VALUES (?, ?, ?, ?, ?, ?)`)
-    .bind(defaultChainId, millId, 'Rice Milling Pipeline', 'Default end-to-end rice milling chain: Pre-Cleaning through Packaging.', 'paddy', 67));
+    .bind(defaultChainId, millId, catalog.chain.name, catalog.chain.description, catalog.chain.inputCategory, catalog.chain.expectedYieldPct));
   defaultProcessIds.forEach((processTypeId, index) => {
     defaults.push(c.env.DB.prepare(`INSERT INTO processing_chain_steps (id, mill_id, chain_id, process_type_id, step_number) VALUES (?, ?, ?, ?, ?)`)
       .bind(crypto.randomUUID(), millId, defaultChainId, processTypeId, index + 1));
   });
-  const defaultItems: [string, string, string, number | null][] = [
-    ['Paddy (common)', 'paddy', '1006', null],
-    ['Raw Rice', 'rice', '1006', 67],
-    ['Parboiled Non-Basmati Rice', 'rice', '1006', 68],
-    ['Rice Bran', 'byproduct', '2302', 8],
-    ['Broken Rice', 'byproduct', '1006', 5],
-    ['Husk', 'byproduct', '1213', 20],
-  ];
-  for (const [iname, cat, hsn, otr] of defaultItems) {
+  for (const item of catalog.items) {
     defaults.push(
-      c.env.DB.prepare(`INSERT INTO items (id, mill_id, name, category, hsn, typical_otr_pct) VALUES (?, ?, ?, ?, ?, ?)`)
-        .bind(crypto.randomUUID(), millId, iname, cat, hsn, otr),
+      c.env.DB.prepare(`INSERT INTO items (id, mill_id, name, category, category_code, hsn, unit, base_unit, display_unit, typical_otr_pct) VALUES (?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?)`)
+        .bind(crypto.randomUUID(), millId, item.name, item.category, item.categoryCode, item.hsn, preferredUnit, preferredUnit, item.typicalOtrPct),
     );
   }
   await c.env.DB.batch(defaults);
@@ -232,7 +224,7 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/auth/me', (c) => {
   const { user, mill } = c.get('session');
-  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', mill: { id: mill.id, name: mill.name, plan: mill.plan } });
+  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', mill: { id: mill.id, name: mill.name, plan: mill.plan, mill_type: mill.mill_type || 'RICE' } });
 });
 
 app.patch('/api/auth/me', async (c) => {

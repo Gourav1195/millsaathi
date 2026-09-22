@@ -31,13 +31,20 @@ const newMillEmail = `smoke-mill-${Date.now()}@example.com`;
 const newMillSignup = await request('/api/auth/signup', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ mill_name: `Smoke Mill ${Date.now()}`, name: 'Smoke Owner', email: newMillEmail, password: 'smoke-password-123' }),
+  body: JSON.stringify({ mill_name: `Smoke Dal Mill ${Date.now()}`, mill_type: 'PULSES', preferred_unit: 'KG', name: 'Smoke Owner', email: newMillEmail, password: 'smoke-password-123' }),
 });
 assert.equal(newMillSignup.response.status, 201, 'new mill signup should provision successfully');
 const newMillCookie = cookieFrom(newMillSignup.response);
 const newMillBilling = await request('/api/billing/status', { headers: { cookie: newMillCookie } });
 assert.equal(newMillBilling.response.status, 200, 'new mill should have a billing status');
 assert.equal(newMillBilling.body.billing?.plan, 'free', 'new mill billing should default to free');
+const newMillMe = await request('/api/auth/me', { headers: { cookie: newMillCookie } });
+assert.equal(newMillMe.body.mill?.mill_type, 'PULSES', 'signup should persist the selected mill type');
+assert.equal(newMillMe.body.preferred_unit, 'KG', 'signup should persist the selected preferred unit');
+const newMillOverview = await request('/api/overview', { headers: { cookie: newMillCookie } });
+assert.ok(newMillOverview.body.items?.some((item) => item.name === 'Whole Pulses'), 'pulses signup should create its raw-material starter item');
+assert.ok(newMillOverview.body.items?.some((item) => item.name === 'Split Dal'), 'pulses signup should create its finished-good starter item');
+assert.equal(newMillOverview.body.godowns?.[0]?.capacity_unit, 'KG', 'starter godown should use the selected unit');
 
 const ownerLogin = await request('/api/auth/login', {
   method: 'POST',
@@ -93,9 +100,11 @@ assert.equal(
   'the Gate & Weighbridge list should include every gate entry for the mill',
 );
 const processTypes = await request('/api/process-types', { headers: { cookie: newMillCookie } });
-for (const name of ['Pre-Cleaning', 'De-husking (Hulling)', 'Paddy Separation', 'Whitening and Polishing', 'Grading and Color Sorting', 'Weighing and Packaging']) {
-  assert.ok(processTypes.body.process_types?.some((type) => type.name === name), 'default process type should be available: ' + name);
+for (const name of ['Cleaning', 'Dehusking', 'Splitting', 'Polishing and Grading', 'Weighing and Packaging']) {
+  assert.ok(processTypes.body.process_types?.some((type) => type.name === name), 'pulses default process type should be available: ' + name);
 }
+const processChains = await request('/api/processing-chains', { headers: { cookie: newMillCookie } });
+assert.ok(processChains.body.chains?.some((chain) => chain.name === 'Dal Milling Pipeline'), 'pulses signup should create its matching processing chain');
 const ownerBilling = await request('/api/billing/status', { headers: { cookie: cookieFrom(ownerLogin.response) } });
 assert.equal(ownerBilling.response.status, 200, 'owner should be able to view billing status');
 assert.equal(ownerBilling.body.billing?.plan, 'free', 'newly provisioned mills should start on the free plan');

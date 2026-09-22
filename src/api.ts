@@ -481,7 +481,7 @@ api.get('/overview', async (c) => {
 
   const body = {
     me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', permissions: ROLE_PERMISSIONS[effectiveRole(user)] || [] },
-    mill: { id: mill.id, name: mill.name, address: mill.address, phone: mill.phone, email: mill.email, gstin: mill.gstin, place_of_supply: mill.place_of_supply, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
+    mill: { id: mill.id, name: mill.name, mill_type: mill.mill_type || 'RICE', address: mill.address, phone: mill.phone, email: mill.email, gstin: mill.gstin, place_of_supply: mill.place_of_supply, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
     today,
     kpis: {
       gross_margin_today_paise: salesValueToday - purchaseValueToday,
@@ -1097,7 +1097,7 @@ function validMasterPayload(master: string, body: Record<string, unknown>): stri
   return null;
 }
 
-function normalizeMasterPayload(master: string, body: Record<string, unknown>, creating = false): string | null {
+function normalizeMasterPayload(master: string, body: Record<string, unknown>, creating = false, preferredUnit = 'QUINTAL'): string | null {
   const validationError = validMasterPayload(master, body);
   if (validationError) return validationError;
   if (master === 'items') {
@@ -1109,7 +1109,8 @@ function normalizeMasterPayload(master: string, body: Record<string, unknown>, c
       if (!['paddy', 'rice', 'byproduct'].includes(requestedCategory)) body.category = 'byproduct';
     }
     if (creating || body.base_unit != null) body.base_unit = 'KG';
-    if (creating || body.display_unit != null) body.display_unit = String(body.display_unit ?? 'QUINTAL').toUpperCase();
+    if (creating || body.display_unit != null) body.display_unit = String(body.display_unit ?? preferredUnit).toUpperCase();
+    if (creating && body.unit == null) body.unit = preferredUnit;
     if (body.display_unit != null && !DISPLAY_UNITS.includes(String(body.display_unit))) return 'invalid display unit';
     if (body.unit != null && !DISPLAY_UNITS.includes(String(body.unit).trim().toUpperCase())) return 'invalid transaction unit';
     if (body.package_unit != null) body.package_unit = String(body.package_unit).toUpperCase();
@@ -1118,7 +1119,7 @@ function normalizeMasterPayload(master: string, body: Record<string, unknown>, c
   }
   if (master === 'godowns') {
     if (body.capacity_qty == null && body.capacity_qtl != null) body.capacity_qty = Number(body.capacity_qtl);
-    if (creating && body.capacity_unit == null) body.capacity_unit = 'QUINTAL';
+    if (creating && body.capacity_unit == null) body.capacity_unit = preferredUnit;
     if (body.capacity_unit != null && !['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(String(body.capacity_unit).toUpperCase())) return 'invalid capacity unit';
     if (body.capacity_unit != null) body.capacity_unit = String(body.capacity_unit).toUpperCase();
     if (body.capacity_qty != null && (!Number.isFinite(Number(body.capacity_qty)) || Number(body.capacity_qty) < 0)) return 'capacity must not be negative';
@@ -1128,10 +1129,10 @@ function normalizeMasterPayload(master: string, body: Record<string, unknown>, c
 
 api.post('/:master{suppliers|buyers|items|godowns}', async (c) => {
   const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { mill } = c.get('session');
+  const { mill, user } = c.get('session');
   const def = MASTERS[c.req.param('master')];
   const b = await c.req.json<Record<string, unknown>>();
-  const validationError = normalizeMasterPayload(c.req.param('master'), b, true);
+  const validationError = normalizeMasterPayload(c.req.param('master'), b, true, user.preferred_unit || 'QUINTAL');
   if (validationError) return c.json({ error: validationError }, 400);
   const id = uuid();
   const present = def.cols.filter((col) => b[col] != null && b[col] !== '');
@@ -1269,7 +1270,7 @@ api.post('/process-types', async (c) => {
   const name = String(b.name ?? '').trim();
   if (!name) return c.json({ error: 'name is required' }, 400);
   const id = uuid();
-  const defaultUnit = String(b.default_unit ?? '').trim().toUpperCase() || null;
+  const defaultUnit = String(b.default_unit ?? user.preferred_unit ?? 'QUINTAL').trim().toUpperCase() || null;
   if (defaultUnit && !DISPLAY_UNITS.includes(defaultUnit)) return c.json({ error: 'unsupported default unit' }, 400);
   const defaultGodown = String(b.default_destination_godown_id ?? '') || null;
   if (defaultGodown && !await c.env.DB.prepare(`SELECT id FROM godowns WHERE id = ? AND mill_id = ? AND active = 1`).bind(defaultGodown, mill.id).first()) return c.json({ error: 'default godown not found' }, 400);
