@@ -34,6 +34,7 @@ Keep each product area as its own Next route and component. Shared UI or browser
 | `/app/items` | `components/items-app.tsx` | overview | read-only |
 | `/app/stock` | `components/stock-app.tsx` | overview | read-only |
 | `/app/team` | `components/team-app.tsx` | team | read-only |
+| `/app/documents` | `components/documents-app.tsx` | documents | read-only |
 
 `lib/session.ts` owns browser-side session lookup, and `components/app-header.tsx` owns the
 authenticated navigation. Add new screens through the same pattern. Avoid copying the old
