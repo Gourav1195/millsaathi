@@ -50,13 +50,12 @@ main navigation; it must stay permission-gated when it is migrated.
 
 ## Backend migration contract
 
-The Worker contains 72 API routes. Native Node routes must be placed above the transitional
-`/api/*` proxy in `apps/api/src/app.ts`, and only replace the proxy after the relevant contract is
-ported and verified. Port in this order: authentication/session lookup, read-only organisation and
-catalogue endpoints, then writes, then stock/processing transactions. Never split a stock-ledger
-transaction across the Worker and Node. Before production cutover, choose and configure a Node
-database adapter that preserves D1's tenant-scoped queries and transactional batches; this requires
-environment credentials and is intentionally not guessed in source control.
+When `DATABASE_URL` is set, the Node server hosts the existing proven route layer against the
+PostgreSQL D1-compatibility adapter. This keeps all 72 existing routes, tenant predicates, RBAC,
+money redaction, and batched stock-ledger transactions intact while the database transport moves.
+Without `DATABASE_URL`, the opt-in Worker proxy remains available for local transition work.
+Do not run both paths against writable production data: select one API origin at a time, validate
+the PostgreSQL copy, then configure the final PostgreSQL provider through environment variables.
 
 ## PostgreSQL staging and import
 
