@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { createPostgresPool } from './postgres.js';
 
 type NodeApiOptions = { workerApiOrigin?: string };
 
@@ -17,9 +18,10 @@ function proxyHeaders(request: Request) {
 export function createApp({ workerApiOrigin }: NodeApiOptions = {}) {
   const app = new Hono();
   const upstream = workerApiOrigin ? new URL(workerApiOrigin) : null;
+  const postgres = createPostgresPool();
 
-  app.get('/health', (c) => c.json({ ok: true, service: 'millsaathi-api', workerProxy: Boolean(upstream) }));
-  app.get('/api/health', (c) => c.json({ ok: true, service: 'millsaathi-api', workerProxy: Boolean(upstream) }));
+  app.get('/health', (c) => c.json({ ok: true, service: 'millsaathi-api', workerProxy: Boolean(upstream), postgresConfigured: Boolean(postgres) }));
+  app.get('/api/health', (c) => c.json({ ok: true, service: 'millsaathi-api', workerProxy: Boolean(upstream), postgresConfigured: Boolean(postgres) }));
 
   app.all('/api/*', async (c) => {
     if (!upstream) return c.json({ error: 'Node API is not configured with WORKER_API_ORIGIN.' }, 501);

@@ -57,3 +57,27 @@ catalogue endpoints, then writes, then stock/processing transactions. Never spli
 transaction across the Worker and Node. Before production cutover, choose and configure a Node
 database adapter that preserves D1's tenant-scoped queries and transactional batches; this requires
 environment credentials and is intentionally not guessed in source control.
+
+## PostgreSQL staging and import
+
+`scripts/import-d1-to-postgres.mjs` imports a remote D1 SQL export into an empty PostgreSQL
+database. It converts SQLite-only details (`NOCASE`, `BLOB`, timestamp defaults and identity
+columns), restores indexes, and restores foreign keys after the data. The D1 export and all
+connection strings remain under the git-ignored `work/` directory or in environment variables.
+Run it only against an empty staging database:
+
+```powershell
+$env:DATABASE_URL = 'postgresql://…'
+node scripts/import-d1-to-postgres.mjs work/d1-production-export.sql
+node scripts/verify-postgres-import.mjs
+node scripts/compare-d1-postgres.mjs work/d1-production-export.sql
+```
+
+If an import is interrupted after loading data, finish only its foreign keys with
+`--add-foreign-keys`. To recreate a disposable staging database, `--reset` drops and recreates
+its `public` schema before importing; it is intentionally explicit and must never be used on a
+database containing anything to retain.
+
+This creates a temporary data staging copy, not the final production deployment. Before cutover,
+validate row counts, session/auth behavior, and stock-ledger totals against D1; do not point live
+traffic at PostgreSQL merely because the import completes.

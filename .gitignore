@@ -7,6 +7,7 @@ worker-configuration.d.ts
 
 # Local knowledge graph — rebuilt by `graphify update .`, not source of truth.
 graphify-out/
+work/
 
 # Local browser verification output.
 .playwright-cli/
