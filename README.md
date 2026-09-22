@@ -34,6 +34,15 @@ backed by D1 (SQLite). The whole product — marketing site, demo, multi-tenant 
 is one deployable unit. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the free-tier
 capacity math; [docs/PRODUCT.md](docs/PRODUCT.md) has the market research and positioning.
 
+### React + Node migration (in progress)
+
+The live Worker remains the source of truth while the frontend and backend migrate incrementally:
+`apps/web` is the Next.js, React and TypeScript frontend; `apps/api` is the new Node.js Hono
+backend boundary. The first React surface is the Processing workspace, including drag-and-drop
+stock selection and a processing-chain canvas. See [docs/MIGRATION.md](docs/MIGRATION.md) for
+local commands and the route-porting approach. No Worker route is replaced until its tenant,
+authorization and ledger behavior have been verified in Node.
+
 ### Decisions worth explaining
 
 **Role-based redaction happens server-side.** Any API field whose name contains `paise` is

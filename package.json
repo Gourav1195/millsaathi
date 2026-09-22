@@ -2,8 +2,18 @@
   "name": "millsaathi",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "npm run dev:worker",
+    "dev:worker": "wrangler dev",
+    "dev:web": "npm --workspace @millsaathi/web run dev",
+    "dev:api": "npm --workspace @millsaathi/api run dev",
+    "build:web": "npm --workspace @millsaathi/web run build",
+    "check:web": "npm --workspace @millsaathi/web run check",
+    "check:api": "npm --workspace @millsaathi/api run check",
+    "check:all": "npm run check && npm run check:web && npm run check:api",
     "build:seo": "node scripts/build-seo.mjs",
     "deploy": "npm run build:seo && wrangler deploy",
     "types": "wrangler types",
