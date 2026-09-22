@@ -36,7 +36,12 @@ Keep each product area as its own Next route and component. Shared UI or browser
 | `/app/team` | `components/team-app.tsx` | team | read-only |
 | `/app/documents` | `components/documents-app.tsx` | documents | read-only |
 | `/app/billing` | `components/billing-app.tsx` | billing status | read-only |
+| `/app/digest` | `components/digest-app.tsx` | digest | read-only/share |
 
 `lib/session.ts` owns browser-side session lookup, and `components/app-header.tsx` owns the
 authenticated navigation. Add new screens through the same pattern. Avoid copying the old
 monolithic dashboard renderer into React: extract a focused API type and a focused screen instead.
+
+Compatibility aliases `/app/suppliers`, `/app/buyers`, and `/app/processing` redirect to their
+new React counterparts. The support-only bug-report queue is intentionally not exposed in the
+main navigation; it must stay permission-gated when it is migrated.
