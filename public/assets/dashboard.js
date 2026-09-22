@@ -726,12 +726,12 @@
         (m ? '<td class="b6">' + rate(p.rate_paise_per_qtl) + '</td>' : '') +
         '<td class="b6">' + (p.moisture_pct != null ? pct(p.moisture_pct) : '—') + '</td>' +
         (m ? '<td class="b7">' + money(p.value_paise) + '</td>' : '') +
-        '<td><div>' + pill(p.status) + '</div><div class="mut" style="font-size:12px;margin-top:4px">Delivered ' + qtl(fulfilled) + ' / ' + esc(saudaQty(p)) + '</div>' +
+        '<td><div>' + pill(p.status) + '</div><div class="mut" style="font-size:12px;margin-top:4px">Gate-recorded ' + qtl(fulfilled) + ' / ' + esc(saudaQty(p)) + '</div>' +
         (MODE === 'live' && m && (p.status === 'open' || p.status === 'advance_paid' || p.status === 'disputed')
-          ? ' <button class="btn sm" data-act="sauda-upd" data-id="' + esc(p.id) + '">Update</button><button class="btn sm" data-act="delivery-new" data-id="' + esc(p.id) + '">Delivery</button>' : '') +
+          ? ' <button class="btn sm" data-act="sauda-upd" data-id="' + esc(p.id) + '">Update</button><button class="btn sm" data-act="delivery-new" data-id="' + esc(p.id) + '">Manual delivery</button>' : '') +
         (MODE === 'live' ? ' <button class="btn sm" data-act="delivery-history" data-id="' + esc(p.id) + '">History</button>' : '') + '</td></tr>';
     }).join('') || '<tr><td colspan="' + (owner ? 9 : 8) + '" class="empty">No saudas yet.</td></tr>';
-    return '<div class="card"><div class="card-top"><div class="card-h">Saudas &amp; purchases</div>' +
+    return '<div class="card"><div class="card-top"><div><div class="card-h">Saudas &amp; purchases</div><div class="hint">One Sauda can have many vehicles. Every linked gate entry records one delivery automatically; use Manual delivery only when no gate entry exists. Incoming vehicles then appear in Stock &amp; Lots for godown receipt.</div></div>' +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">' + (m ? '<span class="hint">Open value: ' + money(openVal) + '</span>' : '') +
       (can('EXPORT') ? '<a class="btn sm" href="/api/saudas/export.csv">Export CSV</a>' : '') +
       (canFinance() && m ? '<a class="btn sm" href="/api/saudas/import/template.csv">CSV template</a><button class="btn sm" data-act="sauda-import">Import CSV</button><button class="btn acc" data-act="sauda-new">+ New sauda</button>' : '') +
@@ -1657,13 +1657,13 @@
     } else if (act === 'delivery-new') {
       var deliverySauda = ov.saudas.find(function (x) { return x.id === el.getAttribute('data-id'); });
       if (!deliverySauda) return;
-      modal('Record delivery against ' + deliverySauda.code, [
+      modal('Manual delivery against ' + deliverySauda.code, [
         { name: 'actual_qty', label: 'Actual quantity', type: 'number', step: '0.001', required: true },
         { name: 'actual_unit', label: 'Unit', type: 'select', options: [{ value: 'KG', label: 'kg' }, { value: 'QUINTAL', label: 'quintal' }, { value: 'TONNE', label: 'tonne' }, { value: 'BAG', label: 'bag' }, { value: 'PIECE', label: 'piece' }] },
         { name: 'actual_weight_kg', label: 'Actual weighbridge weight (kg, optional)', type: 'number', step: '1' },
         { name: 'godown_id', label: 'Godown', type: 'select', options: optList(ov.godowns, [{ value: '', label: '—' }]) },
         { name: 'notes', label: 'Notes' },
-      ], 'Save delivery', function (d) { return apiPost('/api/saudas/' + deliverySauda.id + '/deliveries', { actual_qty: d.actual_qty, actual_unit: d.actual_unit, actual_weight_kg: d.actual_weight_kg ? num(d.actual_weight_kg) : null, godown_id: d.godown_id || null, notes: d.notes || null }).then(function (j) { if (j.warning) alert('Delivery saved with an over-delivery warning.'); }); });
+      ], 'Save manual delivery', function (d) { return apiPost('/api/saudas/' + deliverySauda.id + '/deliveries', { actual_qty: d.actual_qty, actual_unit: d.actual_unit, actual_weight_kg: d.actual_weight_kg ? num(d.actual_weight_kg) : null, godown_id: d.godown_id || null, notes: d.notes || null }).then(function (j) { if (j.warning) alert('Delivery saved with an over-delivery warning.'); }); });
     } else if (act === 'delivery-history') {
       var historySauda = ov.saudas.find(function (x) { return x.id === el.getAttribute('data-id'); });
       if (historySauda) showDeliveryHistory(historySauda);
