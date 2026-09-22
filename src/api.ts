@@ -2157,9 +2157,11 @@ api.get('/documents', async (c) => {
 
 api.get('/documents/:id/file', async (c) => {
   const { mill } = c.get('session');
-  const file = await c.env.DB.prepare(`SELECT upload_name, upload_mime, upload_data FROM documents WHERE id = ? AND mill_id = ? AND source = 'UPLOADED'`).bind(c.req.param('id'), mill.id).first<{ upload_name: string; upload_mime: string; upload_data: ArrayBuffer }>();
-  if (!file?.upload_data) return c.json({ error: 'uploaded file not found' }, 404);
-  return new Response(file.upload_data, { headers: { 'content-type': file.upload_mime, 'content-disposition': `inline; filename="${file.upload_name.replace(/["\\]/g, '')}"` } });
+  const file = await c.env.DB.prepare(`SELECT upload_name, upload_mime, hex(upload_data) AS upload_data_hex FROM documents WHERE id = ? AND mill_id = ? AND source = 'UPLOADED'`).bind(c.req.param('id'), mill.id).first<{ upload_name: string; upload_mime: string; upload_data_hex: string }>();
+  if (!file?.upload_data_hex) return c.json({ error: 'uploaded file not found' }, 404);
+  const bytes = new Uint8Array(file.upload_data_hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) bytes[index] = Number.parseInt(file.upload_data_hex.slice(index * 2, index * 2 + 2), 16);
+  return new Response(bytes, { headers: { 'content-type': file.upload_mime, 'content-disposition': `inline; filename="${file.upload_name.replace(/["\\]/g, '')}"` } });
 });
 
 api.get('/documents/export.csv', async (c) => {

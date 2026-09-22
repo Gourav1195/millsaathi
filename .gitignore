@@ -11,3 +11,8 @@ work/
 
 # Local browser verification output.
 .playwright-cli/
+
+# Next.js local/generated artifacts.
+apps/web/out/
+apps/web/AGENTS.md
+apps/web/CLAUDE.md

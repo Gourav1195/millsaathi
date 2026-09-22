@@ -10,7 +10,7 @@
     { "pattern": "www.millsaathi.com", "custom_domain": true }
   ],
   "assets": {
-    "directory": "./public",
+    "directory": "./dist/web",
     "binding": "ASSETS",
     "not_found_handling": "404-page",
     // Serve /calculators, not /calculators/. The canonical tags and sitemap

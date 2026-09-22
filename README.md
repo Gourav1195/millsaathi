@@ -34,14 +34,12 @@ backed by D1 (SQLite). The whole product — marketing site, demo, multi-tenant 
 is one deployable unit. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the free-tier
 capacity math; [docs/PRODUCT.md](docs/PRODUCT.md) has the market research and positioning.
 
-### React + Node migration (in progress)
+### React + Cloudflare Worker migration (in progress)
 
-The live Worker remains the source of truth while the frontend and backend migrate incrementally:
-`apps/web` is the Next.js, React and TypeScript frontend; `apps/api` is the new Node.js Hono
-backend boundary. The first React surface is the Processing workspace, including drag-and-drop
-stock selection and a processing-chain canvas. See [docs/MIGRATION.md](docs/MIGRATION.md) for
-local commands and the route-porting approach. No Worker route is replaced until its tenant,
-authorization and ledger behavior have been verified in Node.
+The Worker remains the Hono API and D1 boundary while `apps/web` supplies the Next.js, React and
+TypeScript frontend. The exported React app and the API deploy together on the same Worker, so
+sessions stay same-origin and D1 remains a native binding. See [docs/MIGRATION.md](docs/MIGRATION.md)
+for local commands and the route-porting approach.
 
 ### Decisions worth explaining
 
