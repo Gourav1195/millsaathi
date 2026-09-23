@@ -18,22 +18,28 @@ import {
   Panel,
   RangeField,
   Select,
-  TableActions,
   TableCard,
   TableFilters,
   TablePager,
   Tab,
   TabRow,
 } from './ui';
-import { useArchiveDialog } from './archive-dialog';
 import {
   commitPartyImport,
   SpreadsheetImportButton,
   validatePartyImport,
 } from './spreadsheet-import-button';
+import {
+  TableArchiveCell,
+  TableEditCell,
+  TableEditModeBar,
+  TableEditModeButton,
+  TableSelectAllBar,
+} from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
 import { can, canViewFinance } from '../lib/permissions';
 import { mapPartyImportRows } from '../lib/spreadsheet';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { balanceColumnLabel, brokerCommissionDuePaise, brokerSaudaCount, partyBalanceMeta, type SaudaBrokerRef } from '../lib/party-balance';
 import { useSession } from '../lib/session';
@@ -143,7 +149,6 @@ function normalizeParties(suppliers: RawSupplier[], buyers: RawBuyer[], saudas: 
 
 export function PartiesApp() {
   const { session, sessionError } = useSession();
-  const { requestArchive } = useArchiveDialog();
   const headerMeta = millHeaderMeta(session);
   const [parties, setParties] = useState<UnifiedParty[]>([]);
   const [tab, setTab] = useState<PartyTab>('all');
@@ -164,6 +169,7 @@ export function PartiesApp() {
   const [editForm, setEditForm] = useState({ name: '', phone: '', city: '', sellerType: 'farmer', buyerType: 'Wholesaler' });
   const [saving, setSaving] = useState(false);
   const editDialogRef = useRef<HTMLDialogElement>(null);
+  const tableEdit = useTableEditMode();
 
   const load = async () => {
     const body = await api<{ suppliers: RawSupplier[]; buyers: RawBuyer[]; saudas: SaudaBrokerRef[] }>('/api/overview');
@@ -177,6 +183,10 @@ export function PartiesApp() {
   useEffect(() => {
     setPage(0);
   }, [tab, query, filters]);
+
+  useEffect(() => {
+    tableEdit.exitEditMode();
+  }, [tab]);
 
   useEffect(() => {
     const dialog = editDialogRef.current;
@@ -208,19 +218,18 @@ export function PartiesApp() {
   const pageData = useMemo(() => paginate(filtered, page), [filtered, page]);
   const typeOptions = useMemo(() => uniqueValues(tabParties, (party) => party.subtype), [tabParties]);
   const locationOptions = useMemo(() => uniqueValues(tabParties, (party) => party.city), [tabParties]);
-  const partyColumns = useMemo(() => [
+  const restrictedMoney = !canViewFinance(session ?? { role: '' });
+  const canEditParty = can(session, 'parties:edit');
+  const canArchiveParty = can(session, 'parties:archive');
+  const canImportParty = can(session, 'parties:create');
+  const partyColumns = useMemo(() => withEditModeColumns([
     { id: 'name', label: 'Name' },
     { id: 'type', label: 'Type' },
     { id: 'location', label: 'Location' },
     { id: 'volume', label: tab === 'brokers' ? 'Linked saudas' : 'Season volume' },
     { id: 'balance', label: balanceColumnLabel(tab) },
     { id: 'last', label: 'Last' },
-    { id: 'actions', label: '' },
-  ], [tab]);
-  const restrictedMoney = !canViewFinance(session ?? { role: '' });
-  const canEditParty = can(session, 'parties:edit');
-  const canArchiveParty = can(session, 'parties:archive');
-  const canImportParty = can(session, 'parties:create');
+  ], tableEdit.editMode, { canEdit: canEditParty, canArchive: canArchiveParty }), [tab, tableEdit.editMode, canEditParty, canArchiveParty]);
   const importKind = tab === 'buyers' ? 'buyer' : 'supplier';
 
   const effectiveKind = tab === 'all' ? form.kind : tab === 'buyers' ? 'buyer' : tab === 'brokers' ? 'broker' : 'seller';
@@ -306,34 +315,25 @@ export function PartiesApp() {
     }
   }
 
-  function archive(party: UnifiedParty) {
-    const endpoint = party.sourceKind === 'supplier' ? 'suppliers' : 'buyers';
-    requestArchive({
-      title: `Archive ${ROLE_LABEL[party.role].toLowerCase()}?`,
-      name: party.name,
-      confirmLabel: `Archive ${ROLE_LABEL[party.role].toLowerCase()}`,
-      onConfirm: async () => {
-        await api(`/api/${endpoint}/${party.id}`, json('DELETE', {}));
-        await load();
-      },
-    });
-  }
-
-  async function payment(party: UnifiedParty) {
-    const amount = window.prompt('Amount in rupees');
-    if (!amount) return;
-    const paise = Math.round(Number(amount) * 100);
-    if (!Number.isFinite(paise) || paise <= 0) return setError('Enter a positive payment amount.');
+  async function bulkArchiveParties() {
+    if (!tableEdit.selectedIds.length) return;
+    const selectedParties = parties.filter((party) => tableEdit.selected[party.id]);
+    if (!window.confirm(`Archive ${selectedParties.length} selected part${selectedParties.length === 1 ? 'y' : 'ies'}? They will be hidden from active lists.`)) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
     try {
-      await api('/api/payments', json('POST', {
-        party_kind: party.sourceKind,
-        party_id: party.id,
-        amount_paise: paise,
-        method: 'cash',
-      }));
+      for (const party of selectedParties) {
+        const endpoint = party.sourceKind === 'supplier' ? 'suppliers' : 'buyers';
+        await api(`/api/${endpoint}/${party.id}`, json('DELETE', {}));
+      }
+      tableEdit.exitEditMode();
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not record payment');
+      setError(cause instanceof Error ? cause.message : 'Could not archive selected parties');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -367,6 +367,11 @@ export function PartiesApp() {
           actions={
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <span className="hint">{filtered.length} part{filtered.length === 1 ? 'y' : 'ies'}</span>
+              <TableEditModeButton
+                enabled={canEditParty || canArchiveParty}
+                editMode={tableEdit.editMode}
+                onToggle={tableEdit.toggleEditMode}
+              />
               <AppLink href="/app/purchase"><Button className="quiet">Open Saudās</Button></AppLink>
             </div>
           }
@@ -548,11 +553,28 @@ export function PartiesApp() {
             />
           </TableFilters>
 
+          <TableEditModeBar
+            visible={tableEdit.editMode && canArchiveParty}
+            selectedCount={tableEdit.selectedIds.length}
+            onArchive={() => void bulkArchiveParties()}
+            archiving={saving}
+          />
+
           <DataTable columns={partyColumns}>
             {pageData.rows.length ? pageData.rows.map((party) => {
               const balance = partyBalanceMeta(party.role, party.balance_paise, restrictedMoney);
               return (
               <tr key={`${party.sourceKind}-${party.id}`} className={`party-row--${party.role}`}>
+                {tableEdit.editMode && canArchiveParty && (
+                  <TableArchiveCell
+                    label={party.name}
+                    checked={!!tableEdit.selected[party.id]}
+                    onChange={(checked) => tableEdit.toggleSelected(party.id, checked)}
+                  />
+                )}
+                {tableEdit.editMode && canEditParty && (
+                  <TableEditCell label={party.name} onClick={() => startEdit(party)} />
+                )}
                 <td>
                   <div className="party-name-cell">
                     <span className={`party-avatar party-avatar--${party.role}`} aria-hidden="true">{initials(party.name)}</span>
@@ -579,23 +601,6 @@ export function PartiesApp() {
                   </div>
                 </td>
                 <td className="muted">{ago(party.last_at)}</td>
-                <td>
-                  {(canEditParty || canArchiveParty) && (
-                    <TableActions>
-                      {party.role !== 'broker' && can(session, 'payments:create') && (
-                        <Button type="button" className="secondary" onClick={() => void payment(party)}>
-                          {party.role === 'buyer' ? 'Receive' : 'Pay'}
-                        </Button>
-                      )}
-                      {canEditParty && (
-                        <Button type="button" className="secondary" onClick={() => startEdit(party)}>Edit</Button>
-                      )}
-                      {canArchiveParty && (
-                        <Button type="button" className="secondary" onClick={() => archive(party)}>Archive</Button>
-                      )}
-                    </TableActions>
-                  )}
-                </td>
               </tr>
               );
             }) : (
@@ -604,6 +609,13 @@ export function PartiesApp() {
               </tr>
             )}
           </DataTable>
+
+          <TableSelectAllBar
+            visible={tableEdit.editMode && canArchiveParty && pageData.rows.length > 0}
+            checked={tableEdit.isPageFullySelected(pageData.rows.map((party) => party.id))}
+            onChange={(checked) => tableEdit.togglePageSelected(pageData.rows.map((party) => party.id), checked)}
+            label="Select all on this page"
+          />
 
           <TablePager
             total={pageData.total}

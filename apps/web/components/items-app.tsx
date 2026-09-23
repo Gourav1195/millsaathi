@@ -16,12 +16,17 @@ import {
   Panel,
   ScreenToolbar,
   Select,
-  TableActions,
   TableCard,
 } from './ui';
-import { useArchiveDialog } from './archive-dialog';
+import {
+  TableArchiveCell,
+  TableEditCell,
+  TableEditModeBar,
+  TableEditModeButton,
+} from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
 import { can } from '../lib/permissions';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -35,14 +40,13 @@ type ItemForm = {
   typical_otr_pct: string;
 };
 
-const ITEM_COLUMNS = [
+const ITEM_COLUMNS_BASE = [
   { id: 'item', label: 'Item' },
   { id: 'category', label: 'Category' },
   { id: 'hsn', label: 'HSN' },
   { id: 'base', label: 'Base unit' },
   { id: 'display', label: 'Display unit' },
   { id: 'otr', label: 'Typical OTR' },
-  { id: 'actions', label: '' },
 ];
 
 const emptyForm = (): ItemForm => ({ name: '', category: 'paddy', hsn: '', display_unit: 'QUINTAL', typical_otr_pct: '' });
@@ -57,8 +61,8 @@ const formFromItem = (item: Item): ItemForm => ({
 
 export function ItemsApp() {
   const { session, sessionError } = useSession();
-  const { requestArchive } = useArchiveDialog();
   const headerMeta = millHeaderMeta(session);
+  const tableEdit = useTableEditMode();
   const [items, setItems] = useState<Item[]>([]);
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -135,16 +139,23 @@ export function ItemsApp() {
     }
   }
 
-  function archive(item: Item) {
-    requestArchive({
-      title: 'Archive item?',
-      name: item.name,
-      confirmLabel: 'Archive item',
-      onConfirm: async () => {
+  async function bulkArchiveItems() {
+    if (!tableEdit.selectedIds.length) return;
+    const selectedItems = items.filter((item) => tableEdit.selected[item.id]);
+    if (!window.confirm(`Archive ${selectedItems.length} selected item${selectedItems.length === 1 ? '' : 's'}?`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      for (const item of selectedItems) {
         await api(`/api/items/${item.id}`, json('DELETE', {}));
-        await load();
-      },
-    });
+      }
+      tableEdit.exitEditMode();
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not archive selected items');
+    } finally {
+      setSaving(false);
+    }
   }
 
   const filtered = useMemo(
@@ -174,6 +185,13 @@ export function ItemsApp() {
           subtitle="Item quantities retain the Worker’s KG base unit."
           date={headerMeta.date}
           season={headerMeta.season}
+          actions={
+            <TableEditModeButton
+              enabled={canEdit || canArchive}
+              editMode={tableEdit.editMode}
+              onToggle={tableEdit.toggleEditMode}
+            />
+          }
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -281,6 +299,14 @@ export function ItemsApp() {
         <TableCard
           title="Items"
           subtitle={`${filtered.length} item${filtered.length === 1 ? '' : 's'}`}
+          actions={
+            <TableEditModeBar
+              visible={tableEdit.editMode && canArchive}
+              selectedCount={tableEdit.selectedIds.length}
+              onArchive={() => void bulkArchiveItems()}
+              archiving={saving}
+            />
+          }
           toolbar={
             <ScreenToolbar>
               <Input
@@ -292,31 +318,29 @@ export function ItemsApp() {
             </ScreenToolbar>
           }
         >
-          <DataTable columns={ITEM_COLUMNS}>
+          <DataTable columns={withEditModeColumns(ITEM_COLUMNS_BASE, tableEdit.editMode, { canEdit, canArchive })}>
             {filtered.length ? filtered.map((item) => (
               <tr key={item.id}>
+                {tableEdit.editMode && canArchive && (
+                  <TableArchiveCell
+                    label={item.name}
+                    checked={!!tableEdit.selected[item.id]}
+                    onChange={(checked) => tableEdit.toggleSelected(item.id, checked)}
+                  />
+                )}
+                {tableEdit.editMode && canEdit && (
+                  <TableEditCell label={item.name} onClick={() => startEdit(item)} />
+                )}
                 <td><strong>{item.name}</strong></td>
                 <td>{item.category ?? item.category_code ?? '—'}</td>
                 <td>{item.hsn ?? '—'}</td>
                 <td>{item.base_unit ?? 'KG'}</td>
                 <td>{item.display_unit ?? item.unit ?? '—'}</td>
                 <td>{item.typical_otr_pct == null ? '—' : `${item.typical_otr_pct}%`}</td>
-                <td>
-                  {(canEdit || canArchive) && (
-                    <TableActions>
-                      {canEdit && (
-                        <Button type="button" className="secondary" onClick={() => startEdit(item)}>Edit</Button>
-                      )}
-                      {canArchive && (
-                        <Button type="button" className="secondary" onClick={() => archive(item)}>Archive</Button>
-                      )}
-                    </TableActions>
-                  )}
-                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan={ITEM_COLUMNS.length}><EmptyState>No matching items.</EmptyState></td>
+                <td colSpan={withEditModeColumns(ITEM_COLUMNS_BASE, tableEdit.editMode, { canEdit, canArchive }).length}><EmptyState>No matching items.</EmptyState></td>
               </tr>
             )}
           </DataTable>

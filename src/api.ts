@@ -191,6 +191,8 @@ function massBalance(run: { paddy_in_kg: number; rice_out_kg: number; bran_out_k
   };
 }
 
+export { stripMoney } from './permissions';
+
 export const api = new Hono<AppEnv>();
 
 api.get('/billing/status', async (c) => {
@@ -223,7 +225,7 @@ api.get('/billing/plans', async (c) => {
 
 api.post('/billing/checkout', async (c) => {
   const denied = denyUnlessCapability(c, 'billing:manage'); if (denied) return denied;
-  const { mill } = c.get('session');
+  const { user, mill } = c.get('session');
   const body = await c.req.json<{ plan?: string }>().catch(() => ({}) as { plan?: string });
   const plan = String(body.plan ?? '').trim() as BillingPlanKey;
   if (!BILLING_PLANS[plan]) return c.json({ error: 'Choose a valid plan' }, 400);

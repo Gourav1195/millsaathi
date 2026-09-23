@@ -21,8 +21,10 @@ import {
   TableCard,
   Textarea,
 } from './ui';
+import { TableEditCell, TableEditModeButton } from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
-import { can } from '../lib/permissions';
+import { can, canViewFinance } from '../lib/permissions';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -35,7 +37,7 @@ const money = (paise: number | undefined) => paise == null ? 'Restricted' : new 
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyDraft = (): Draft => ({ type: 'SALES_INVOICE', party: '', item_id: '', sauda_id: '', gate_entry_id: '', description: '', quantity: '', unit: 'KG', rate: '', gst_rate: '5', tax_mode: 'INTRA', issue_date: today(), notes: '' });
 
-const DOCUMENT_COLUMNS = [
+const DOCUMENT_COLUMNS_BASE = [
   { id: 'document', label: 'Document' },
   { id: 'type', label: 'Type' },
   { id: 'party', label: 'Party' },
@@ -56,6 +58,8 @@ export function DocumentsApp() {
   const [uploadType, setUploadType] = useState('PAYMENT_RECEIPT');
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [saving, setSaving] = useState(false);
+  const tableEdit = useTableEditMode();
+  const canVoid = can(session, 'documents:void');
 
   const load = async () => {
     const [docs, refs] = await Promise.all([api<{ documents: Document[] }>('/api/documents'), api<Overview>('/api/overview')]);
@@ -167,7 +171,16 @@ export function DocumentsApp() {
           subtitle="Create, upload, print, and void protected business documents."
           date={headerMeta.date}
           season={headerMeta.season}
-          actions={<AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>}
+          actions={
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <TableEditModeButton
+                enabled={canVoid}
+                editMode={tableEdit.editMode}
+                onToggle={tableEdit.toggleEditMode}
+              />
+              <AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>
+            </div>
+          }
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -284,14 +297,19 @@ export function DocumentsApp() {
             </ScreenToolbar>
           }
         >
-          <DataTable columns={DOCUMENT_COLUMNS}>
+          <DataTable columns={withEditModeColumns(DOCUMENT_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoid })}>
             {filtered.length ? filtered.map((document) => (
               <tr key={document.id}>
+                {tableEdit.editMode && canVoid && (
+                  document.status === 'POSTED'
+                    ? <TableEditCell label={document.document_no ?? 'document'} onClick={() => void voidDocument(document)} />
+                    : <td className="table-edit-col" />
+                )}
                 <td><strong>{document.document_no ?? '—'}</strong></td>
                 <td>{document.document_type ?? '—'}</td>
                 <td>{document.party_name ?? '—'}</td>
                 <td>{document.issue_date ?? '—'}</td>
-                <td><strong>{session.role === 'manager' ? 'Restricted' : money(document.total_paise)}</strong></td>
+                <td><strong>{canViewFinance(session) ? money(document.total_paise) : 'Restricted'}</strong></td>
                 <td><Badge tone={document.status === 'POSTED' ? 'success' : 'neutral'}>{document.status ?? '—'}</Badge></td>
                 <td>
                   <TableActions>
@@ -299,15 +317,12 @@ export function DocumentsApp() {
                       <a className="ui-link" href={`/api/documents/${document.id}/file`} target="_blank">Download</a>
                     )}
                     <a className="ui-link" href={`/api/documents/${document.id}/print`} target="_blank">Print</a>
-                    {document.status === 'POSTED' && (
-                      <Button type="button" className="secondary" onClick={() => void voidDocument(document)}>Void</Button>
-                    )}
                   </TableActions>
                 </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan={DOCUMENT_COLUMNS.length}><EmptyState>No matching documents.</EmptyState></td>
+                <td colSpan={withEditModeColumns(DOCUMENT_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoid }).length}><EmptyState>No matching documents.</EmptyState></td>
               </tr>
             )}
           </DataTable>

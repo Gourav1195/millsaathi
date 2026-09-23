@@ -8,11 +8,16 @@ import {
   Field,
   Input,
   Select,
-  TableActions,
   TableCard,
 } from './ui';
 import { api, json } from '../lib/api';
-import { useArchiveDialog } from './archive-dialog';
+import {
+  TableArchiveCell,
+  TableEditCell,
+  TableEditModeBar,
+  TableEditModeButton,
+} from './table-edit-mode';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 
 export type CatalogProcessType = {
   id: string;
@@ -48,12 +53,11 @@ type DraftLine = {
 
 type Reference = { id: string; name: string };
 
-const CATALOG_COLUMNS = [
+const CATALOG_COLUMNS_BASE = [
   { id: 'name', label: 'Name' },
   { id: 'description', label: 'Description' },
   { id: 'template', label: 'Template' },
   { id: 'status', label: 'Status' },
-  { id: 'actions', label: '' },
 ];
 
 const units = ['KG', 'QUINTAL', 'TONNE'];
@@ -114,7 +118,7 @@ export function ProcessCatalog({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const editorDialogRef = useRef<HTMLDialogElement>(null);
-  const { requestArchive } = useArchiveDialog();
+  const tableEdit = useTableEditMode();
 
   const editingType = types.find((type) => type.id === editingTypeId) ?? null;
 
@@ -211,27 +215,43 @@ export function ProcessCatalog({
     }
   }
 
-  function archiveType(type: CatalogProcessType) {
-    requestArchive({
-      title: 'Archive process type?',
-      name: type.name,
-      description: 'Existing process runs will remain available.',
-      confirmLabel: 'Archive process type',
-      onConfirm: async () => {
-        await api(`/api/process-types/${type.id}`, json('DELETE', {}));
-        if (editingTypeId === type.id) setEditingTypeId(null);
-        await onChanged();
-      },
-    });
-  }
-
-  async function restoreType(id: string) {
+  async function bulkArchiveTypes() {
+    const selectedTypes = types.filter((type) => tableEdit.selected[type.id] && !type.deleted_at);
+    if (!selectedTypes.length) return;
+    if (!window.confirm(`Archive ${selectedTypes.length} selected process type${selectedTypes.length === 1 ? '' : 's'}? Existing runs will remain available.`)) {
+      return;
+    }
+    setSaving(true);
     setError(null);
     try {
-      await api(`/api/process-types/${id}/restore`, { method: 'PATCH', credentials: 'include' });
+      for (const type of selectedTypes) {
+        await api(`/api/process-types/${type.id}`, json('DELETE', {}));
+        if (editingTypeId === type.id) setEditingTypeId(null);
+      }
+      tableEdit.exitEditMode();
       await onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not restore process type');
+      setError(cause instanceof Error ? cause.message : 'Could not archive selected process types');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function bulkRestoreTypes() {
+    const selectedTypes = types.filter((type) => tableEdit.selected[type.id] && type.deleted_at);
+    if (!selectedTypes.length) return;
+    setSaving(true);
+    setError(null);
+    try {
+      for (const type of selectedTypes) {
+        await api(`/api/process-types/${type.id}/restore`, { method: 'PATCH', credentials: 'include' });
+      }
+      tableEdit.exitEditMode();
+      await onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not restore selected process types');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -246,6 +266,11 @@ export function ProcessCatalog({
           subtitle="Add, edit, reorder or archive the reusable process flows."
           actions={
             <div className="process-catalog-actions">
+              <TableEditModeButton
+                enabled
+                editMode={tableEdit.editMode}
+                onToggle={tableEdit.toggleEditMode}
+              />
               {creatingNew ? (
                 <div className="process-inline-create">
                   <Input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Process name" aria-label="Process name" />
@@ -260,33 +285,45 @@ export function ProcessCatalog({
           }
         >
           {error && !editingType ? <p className="error" style={{ padding: '0 22px 12px' }}>{error}</p> : null}
-          <DataTable columns={CATALOG_COLUMNS}>
+          <TableEditModeBar
+            visible={tableEdit.editMode}
+            selectedCount={tableEdit.selectedIds.length}
+            onArchive={() => void bulkArchiveTypes()}
+            archiving={saving}
+          />
+          {tableEdit.editMode && tableEdit.selectedIds.some((id) => types.find((type) => type.id === id)?.deleted_at) ? (
+            <div className="table-edit-mode-bar">
+              <Button type="button" className="secondary" disabled={saving} onClick={() => void bulkRestoreTypes()}>
+                Restore selected ({tableEdit.selectedIds.filter((id) => types.find((type) => type.id === id)?.deleted_at).length})
+              </Button>
+            </div>
+          ) : null}
+          <DataTable columns={withEditModeColumns(CATALOG_COLUMNS_BASE, tableEdit.editMode, { canEdit: true, canArchive: true })}>
             {types.length ? types.map((type) => {
               const archived = Boolean(type.deleted_at);
               const configured = (type.template_lines ?? []).length > 0;
               return (
                 <tr key={type.id}>
+                  {tableEdit.editMode && (
+                    <TableArchiveCell
+                      label={type.name}
+                      checked={!!tableEdit.selected[type.id]}
+                      onChange={(checked) => tableEdit.toggleSelected(type.id, checked)}
+                    />
+                  )}
+                  {tableEdit.editMode && !archived && (
+                    <TableEditCell label={type.name} onClick={() => startEdit(type)} />
+                  )}
+                  {tableEdit.editMode && archived && <td className="table-edit-col" />}
                   <td><strong>{type.name}</strong></td>
                   <td>{type.description || '—'}</td>
                   <td>{configured ? 'Configured' : 'Manual fallback'}</td>
                   <td>{archived ? 'Archived' : 'Active'}</td>
-                  <td>
-                    <TableActions>
-                      {!archived ? <Button type="button" className="secondary" onClick={() => startEdit(type)}>Edit</Button> : null}
-                      <Button
-                        type="button"
-                        className="secondary"
-                        onClick={() => void (archived ? restoreType(type.id) : archiveType(type))}
-                      >
-                        {archived ? 'Unarchive' : 'Archive'}
-                      </Button>
-                    </TableActions>
-                  </td>
                 </tr>
               );
             }) : (
               <tr>
-                <td colSpan={CATALOG_COLUMNS.length}><EmptyState>No process types yet.</EmptyState></td>
+                <td colSpan={withEditModeColumns(CATALOG_COLUMNS_BASE, tableEdit.editMode, { canEdit: true, canArchive: true }).length}><EmptyState>No process types yet.</EmptyState></td>
               </tr>
             )}
           </DataTable>

@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -31,8 +31,16 @@ import {
 } from './spreadsheet-import-button';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { millHeaderMeta } from '../lib/app-meta';
-import { can } from '../lib/permissions';
+import { can, canViewFinance } from '../lib/permissions';
+import {
+  TableArchiveCell,
+  TableEditCell,
+  TableEditModeBar,
+  TableEditModeButton,
+  TableSelectAllBar,
+} from './table-edit-mode';
 import { mapSaudaImportRows } from '../lib/spreadsheet';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -73,7 +81,10 @@ export function PurchaseApp() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [statusEdit, setStatusEdit] = useState<Sauda | null>(null);
+  const [statusValue, setStatusValue] = useState('open');
+  const statusDialogRef = useRef<HTMLDialogElement>(null);
+  const tableEdit = useTableEditMode();
 
   const load = async () => setOverview(await api<Overview>('/api/overview'));
   useEffect(() => {
@@ -105,7 +116,13 @@ export function PurchaseApp() {
   const canCreate = can(session, 'saudas:create');
   const canArchive = can(session, 'saudas:archive');
   const canExport = can(session, 'finance:export');
-  const selectedIds = Object.keys(selected).filter((id) => selected[id]);
+
+  useEffect(() => {
+    const dialog = statusDialogRef.current;
+    if (!dialog) return;
+    if (statusEdit && !dialog.open) dialog.showModal();
+    if (!statusEdit && dialog.open) dialog.close();
+  }, [statusEdit]);
   const parties = agreement.direction === 'in' ? overview?.suppliers ?? [] : overview?.buyers ?? [];
 
   async function createAgreement(event: FormEvent) {
@@ -193,14 +210,14 @@ export function PurchaseApp() {
   }
 
   async function bulkArchive() {
-    if (!selectedIds.length) return;
-    if (!window.confirm(`Archive ${selectedIds.length} selected Sauda(s)? They will be hidden from the active list but historical records are kept.`)) {
+    if (!tableEdit.selectedIds.length) return;
+    if (!window.confirm(`Archive ${tableEdit.selectedIds.length} selected Sauda(s)? They will be hidden from the active list but historical records are kept.`)) {
       return;
     }
     try {
       setError(null);
-      const result = await api<{ archived: number }>('/api/saudas/bulk-archive', json('POST', { ids: selectedIds }));
-      setSelected({});
+      const result = await api<{ archived: number }>('/api/saudas/bulk-archive', json('POST', { ids: tableEdit.selectedIds }));
+      tableEdit.exitEditMode();
       await load();
       window.alert(`${result.archived} Sauda(s) archived.`);
     } catch (cause) {
@@ -208,10 +225,24 @@ export function PurchaseApp() {
     }
   }
 
-  function toggleSelectAll(checked: boolean) {
-    const next: Record<string, boolean> = {};
-    if (checked) pageData.rows.forEach((sauda) => { next[sauda.id] = true; });
-    setSelected(next);
+  function startStatusEdit(sauda: Sauda) {
+    setStatusEdit(sauda);
+    setStatusValue(sauda.status ?? 'open');
+  }
+
+  async function saveStatusEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!statusEdit) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await changeStatus(statusEdit, statusValue);
+      setStatusEdit(null);
+    } catch {
+      // changeStatus already sets error
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function voidDelivery(entry: Delivery) {
@@ -249,7 +280,16 @@ export function PurchaseApp() {
           subtitle="Purchase and sales agreements, fulfilment, and settlement status."
           date={headerMeta.date}
           season={headerMeta.season}
-          actions={<AppLink href="/app/gate"><Button className="quiet">Open Gate</Button></AppLink>}
+          actions={
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <TableEditModeButton
+                enabled={canManage || canArchive}
+                editMode={tableEdit.editMode}
+                onToggle={tableEdit.toggleEditMode}
+              />
+              <AppLink href="/app/gate"><Button className="quiet">Open Gate</Button></AppLink>
+            </div>
+          }
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -388,16 +428,6 @@ export function PurchaseApp() {
                   onError={setError}
                 />
               )}
-              {canArchive && (
-                <Button
-                  type="button"
-                  className="secondary"
-                  disabled={!selectedIds.length}
-                  onClick={() => void bulkArchive()}
-                >
-                  Archive selected ({selectedIds.length})
-                </Button>
-              )}
             </div>
           }
         >
@@ -429,21 +459,24 @@ export function PurchaseApp() {
             />
           </TableFilters>
 
-          <DataTable columns={[
-            ...(canArchive ? [{ id: 'select', label: '' }] : []),
-            ...SAUDA_COLUMNS_BASE,
-          ]}>
+          <TableEditModeBar
+            visible={tableEdit.editMode && canArchive}
+            selectedCount={tableEdit.selectedIds.length}
+            onArchive={() => void bulkArchive()}
+          />
+
+          <DataTable columns={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive })}>
             {pageData.rows.length ? pageData.rows.map((sauda) => (
               <tr key={sauda.id}>
-                {canArchive && (
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${sauda.code ?? 'Sauda'}`}
-                      checked={!!selected[sauda.id]}
-                      onChange={(event) => setSelected({ ...selected, [sauda.id]: event.target.checked })}
-                    />
-                  </td>
+                {tableEdit.editMode && canArchive && (
+                  <TableArchiveCell
+                    label={sauda.code ?? 'Sauda'}
+                    checked={!!tableEdit.selected[sauda.id]}
+                    onChange={(checked) => tableEdit.toggleSelected(sauda.id, checked)}
+                  />
+                )}
+                {tableEdit.editMode && canManage && (
+                  <TableEditCell label={sauda.code ?? 'Sauda'} onClick={() => startStatusEdit(sauda)} />
                 )}
                 <td><strong>{sauda.code ?? '—'}</strong></td>
                 <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
@@ -455,39 +488,71 @@ export function PurchaseApp() {
                 <td>
                   <TableActions>
                     <Button type="button" className="secondary" onClick={() => void openHistory(sauda)}>History</Button>
-                    {canManage && (
-                      <>
-                        <Button type="button" className="secondary" onClick={() => setDeliveryFor(sauda)}>Delivery</Button>
-                        <Select aria-label={`Status for ${sauda.code ?? 'Sauda'}`} value={sauda.status ?? 'open'} onChange={(e) => void changeStatus(sauda, e.target.value)}>
-                          <option value="open">Open</option>
-                          <option value="advance_paid">Advance paid</option>
-                          <option value="settled">Settled</option>
-                          <option value="disputed">Disputed</option>
-                        </Select>
-                      </>
+                    {canCreate && (
+                      <Button type="button" className="secondary" onClick={() => setDeliveryFor(sauda)}>Delivery</Button>
                     )}
                   </TableActions>
                 </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan={SAUDA_COLUMNS_BASE.length + (canArchive ? 1 : 0)}><EmptyState>No Saudās in this view.</EmptyState></td>
+                <td colSpan={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive }).length}><EmptyState>No Saudās in this view.</EmptyState></td>
               </tr>
             )}
           </DataTable>
 
-          {canArchive && pageData.rows.length > 0 && (
-            <div className="hint" style={{ marginTop: 8 }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={pageData.rows.length > 0 && pageData.rows.every((sauda) => selected[sauda.id])}
-                  onChange={(event) => toggleSelectAll(event.target.checked)}
-                />
-                {' '}Select all on this page
-              </label>
-            </div>
-          )}
+          <TableSelectAllBar
+            visible={tableEdit.editMode && canArchive && pageData.rows.length > 0}
+            checked={tableEdit.isPageFullySelected(pageData.rows.map((sauda) => sauda.id))}
+            onChange={(checked) => tableEdit.togglePageSelected(pageData.rows.map((sauda) => sauda.id), checked)}
+            label="Select all on this page"
+          />
+
+          <dialog
+            ref={statusDialogRef}
+            className="app-dialog"
+            onClose={() => {
+              if (!saving) setStatusEdit(null);
+            }}
+            onCancel={(event) => {
+              event.preventDefault();
+              if (!saving) setStatusEdit(null);
+            }}
+          >
+            {statusEdit ? (
+              <>
+                <div className="app-dialog-head">
+                  <div>
+                    <h2>Update status</h2>
+                    <p><strong>{statusEdit.code ?? 'Sauda'}</strong></p>
+                  </div>
+                  <button
+                    type="button"
+                    className="app-dialog-close ms-focus-ring"
+                    aria-label="Close status dialog"
+                    onClick={() => setStatusEdit(null)}
+                    disabled={saving}
+                  >
+                    ×
+                  </button>
+                </div>
+                <FormGrid className="ui-form-grid--compact" onSubmit={saveStatusEdit}>
+                  <Field label="Status">
+                    <Select value={statusValue} onChange={(e) => setStatusValue(e.target.value)}>
+                      <option value="open">Open</option>
+                      <option value="advance_paid">Advance paid</option>
+                      <option value="settled">Settled</option>
+                      <option value="disputed">Disputed</option>
+                    </Select>
+                  </Field>
+                  <FormActions>
+                    <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save status'}</Button>
+                    <Button className="secondary" type="button" onClick={() => setStatusEdit(null)} disabled={saving}>Cancel</Button>
+                  </FormActions>
+                </FormGrid>
+              </>
+            ) : null}
+          </dialog>
 
           <TablePager
             total={pageData.total}
@@ -498,7 +563,7 @@ export function PurchaseApp() {
           />
         </TableCard>
 
-        {session.role !== 'manager' && (
+        {canViewFinance(session) && (
           <p className="hint" style={{ marginTop: 12 }}>
             Rate visibility is server-controlled. Listed rate values, where permitted:{' '}
             {filteredSaudas.slice(0, 3).map((sauda) => `${sauda.code ?? 'Agreement'} ${money(sauda.rate_paise_per_qtl)}/qtl`).join(' · ') || '—'}

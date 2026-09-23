@@ -267,15 +267,11 @@ const managerInvite = await request('/api/team/invite', {
 assert.equal(managerInvite.response.status, 403, 'manager must not invite team members');
 
 const managerDocuments = await request('/api/documents', { headers: { cookie: managerCookie } });
-assert.equal(managerDocuments.response.status, 200, 'manager should be able to view documents');
-assert.equal(containsMoneyField(managerDocuments.body), false, 'manager documents must not contain paise fields');
+assert.equal(managerDocuments.response.status, 403, 'manager must not access documents');
 const managerPayments = await request('/api/payments', { headers: { cookie: managerCookie } });
-assert.equal(managerPayments.response.status, 200, 'manager should be able to view payment history');
-assert.equal(containsMoneyField(managerPayments.body), false, 'manager payment history must not contain paise fields');
+assert.equal(managerPayments.response.status, 403, 'manager must not access payments');
 const managerExcel = await request('/api/documents/export.xls', { headers: { cookie: managerCookie } });
-assert.equal(managerExcel.response.status, 200, 'manager should be able to export documents to Excel');
-assert.match(managerExcel.response.headers.get('content-type') || '', /ms-excel/, 'document Excel export should use an Excel content type');
-assert.equal(managerExcel.body.includes ? managerExcel.body.includes('paise') : false, false, 'manager Excel export must not expose paise labels');
+assert.equal(managerExcel.response.status, 403, 'manager must not export documents');
 
 await request('/api/auth/logout', { method: 'POST', headers: { cookie: cookieFrom(ownerLogin.response) } });
 await request('/api/auth/logout', { method: 'POST', headers: { cookie: managerCookie } });

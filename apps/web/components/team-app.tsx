@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -16,12 +16,14 @@ import {
   PageHeader,
   Panel,
   Select,
-  TableActions,
   TableCard,
   Tab,
   TabRow,
 } from './ui';
+import { TableEditCell, TableEditModeButton } from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can } from '../lib/permissions';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -31,13 +33,12 @@ type AccountForm = { name: string; email: string; role: string; password: string
 const roles = ['admin', 'manager', 'accountant', 'gate_operator', 'production_operator', 'viewer'];
 const emptyAccount = (): AccountForm => ({ name: '', email: '', role: 'viewer', password: '' });
 
-const TEAM_COLUMNS = [
+const TEAM_COLUMNS_BASE = [
   { id: 'member', label: 'Member' },
   { id: 'email', label: 'Email' },
   { id: 'role', label: 'Role' },
   { id: 'status', label: 'Status' },
   { id: 'unit', label: 'Preferred unit' },
-  { id: 'actions', label: '' },
 ];
 
 export function TeamApp() {
@@ -49,13 +50,24 @@ export function TeamApp() {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [managing, setManaging] = useState<Member | null>(null);
+  const [manageForm, setManageForm] = useState({ role: 'viewer', active: '1' });
+  const manageDialogRef = useRef<HTMLDialogElement>(null);
+  const tableEdit = useTableEditMode();
 
   const load = async () => setMembers((await api<{ members: Member[] }>('/api/team')).members);
   useEffect(() => {
     if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load team'));
   }, [session]);
 
-  const canManage = session != null && ['owner', 'admin'].includes(session.role);
+  const canManage = can(session, 'team:manage');
+
+  useEffect(() => {
+    const dialog = manageDialogRef.current;
+    if (!dialog) return;
+    if (managing && !dialog.open) dialog.showModal();
+    if (!managing && dialog.open) dialog.close();
+  }, [managing]);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -82,13 +94,26 @@ export function TeamApp() {
     }
   }
 
-  async function updateMember(member: Member, patch: Record<string, unknown>) {
+  function startManage(member: Member) {
+    const role = member.role_code ?? member.role ?? 'viewer';
+    const active = !(member.active === false || member.active === 0);
+    setManaging(member);
+    setManageForm({ role, active: active ? '1' : '0' });
+  }
+
+  async function saveManage(event: FormEvent) {
+    event.preventDefault();
+    if (!managing) return;
+    setSaving(true);
+    setError(null);
     try {
-      setError(null);
-      await api(`/api/team/${member.id}`, json('PATCH', patch));
+      await api(`/api/team/${managing.id}`, json('PATCH', { role: manageForm.role, active: Number(manageForm.active) }));
+      setManaging(null);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not update team member');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -123,7 +148,16 @@ export function TeamApp() {
           subtitle="Accounts, roles, and shareable invitations are enforced by the Worker."
           date={headerMeta.date}
           season={headerMeta.season}
-          actions={<AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>}
+          actions={
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <TableEditModeButton
+                enabled={canManage}
+                editMode={tableEdit.editMode}
+                onToggle={tableEdit.toggleEditMode}
+              />
+              <AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>
+            </div>
+          }
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -174,41 +208,81 @@ export function TeamApp() {
           </Panel>
         )}
 
+        <dialog
+          ref={manageDialogRef}
+          className="app-dialog"
+          onClose={() => {
+            if (!saving) setManaging(null);
+          }}
+          onCancel={(event) => {
+            event.preventDefault();
+            if (!saving) setManaging(null);
+          }}
+        >
+          {managing ? (
+            <>
+              <div className="app-dialog-head">
+                <div>
+                  <h2>Manage {managing.name}</h2>
+                  <p><strong>{managing.email}</strong></p>
+                </div>
+                <button
+                  type="button"
+                  className="app-dialog-close ms-focus-ring"
+                  aria-label="Close manage member dialog"
+                  onClick={() => setManaging(null)}
+                  disabled={saving}
+                >
+                  ×
+                </button>
+              </div>
+              <FormGrid className="ui-form-grid--compact" onSubmit={saveManage}>
+                <Field label="Role">
+                  <Select value={manageForm.role} onChange={(e) => setManageForm({ ...manageForm, role: e.target.value })}>
+                    {roles.map((item) => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Access">
+                  <Select value={manageForm.active} onChange={(e) => setManageForm({ ...manageForm, active: e.target.value })}>
+                    <option value="1">Active</option>
+                    <option value="0">Deactivate access</option>
+                  </Select>
+                </Field>
+                <FormActions>
+                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save access'}</Button>
+                  <Button className="secondary" type="button" onClick={() => setManaging(null)} disabled={saving}>Cancel</Button>
+                </FormActions>
+              </FormGrid>
+            </>
+          ) : null}
+        </dialog>
+
         <TableCard title="Team members" subtitle={`${members.length} member${members.length === 1 ? '' : 's'}`}>
-          <DataTable columns={TEAM_COLUMNS}>
+          <DataTable columns={withEditModeColumns(TEAM_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage })}>
             {members.length ? members.map((member) => {
               const active = !(member.active === false || member.active === 0);
               const role = member.role_code ?? member.role ?? 'viewer';
               const self = member.id === session.id;
+              const manageable = canManage && !self && role !== 'owner';
               return (
                 <tr key={member.id}>
+                  {tableEdit.editMode && canManage && (
+                    manageable
+                      ? <TableEditCell label={member.name} onClick={() => startManage(member)} />
+                      : <td className="table-edit-col" />
+                  )}
                   <td><strong>{member.name}</strong></td>
                   <td>{member.email}</td>
-                  <td>
-                    {canManage && role !== 'owner' && !self ? (
-                      <Select aria-label={`Role for ${member.name}`} value={role} onChange={(e) => void updateMember(member, { role: e.target.value })}>
-                        {roles.map((item) => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}
-                      </Select>
-                    ) : role.replaceAll('_', ' ')}
-                  </td>
+                  <td>{role.replaceAll('_', ' ')}</td>
                   <td>
                     <Badge tone={active ? 'success' : 'danger'}>{active ? 'Active' : 'Inactive'}</Badge>
                   </td>
                   <td>{member.preferred_unit ?? '—'}</td>
-                  <td>
-                    {canManage && !self && role !== 'owner' && (
-                      <TableActions>
-                        <Button type="button" className="secondary" onClick={() => void updateMember(member, { active: active ? 0 : 1 })}>
-                          {active ? 'Deactivate' : 'Activate'}
-                        </Button>
-                      </TableActions>
-                    )}
-                  </td>
                 </tr>
               );
             }) : (
               <tr>
-                <td colSpan={TEAM_COLUMNS.length}><EmptyState>No team members found.</EmptyState></td>
+                <td colSpan={withEditModeColumns(TEAM_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage }).length}><EmptyState>No team members found.</EmptyState></td>
               </tr>
             )}
           </DataTable>

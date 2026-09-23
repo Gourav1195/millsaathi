@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from './app-header';
 import { Alert, Button, Card, PageHeader } from './ui';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
 
 type Billing = {
@@ -42,10 +43,6 @@ function formatDate(value: string | null) {
   return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function canManageBilling(role: string) {
-  return role === 'owner' || role === 'admin';
-}
-
 export function BillingApp() {
   const { session, sessionError } = useSession();
   const headerMeta = millHeaderMeta(session);
@@ -74,7 +71,7 @@ export function BillingApp() {
   }, [session, loadBilling]);
 
   async function startCheckout(planKey: string) {
-    if (!session || !canManageBilling(session.role)) return;
+    if (!session || !can(session, 'billing:manage')) return;
     setCheckoutPlan(planKey);
     setError(null);
     setNotice(null);
@@ -197,7 +194,7 @@ export function BillingApp() {
                   <ul className="billing-plan-features">
                     {plan.features.map((feature) => <li key={feature}>{feature}</li>)}
                   </ul>
-                  {canManageBilling(session.role) ? (
+                  {can(session, 'billing:manage') ? (
                     <Button type="button" disabled={checkoutPlan === plan.key} onClick={() => void startCheckout(plan.key)}>
                       {checkoutPlan === plan.key ? 'Opening checkout…' : `Subscribe to ${plan.label}`}
                     </Button>

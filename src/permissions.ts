@@ -192,13 +192,13 @@ export function shapeOverviewPayload(user: SessionUser, body: Record<string, unk
   }
 
   if (role === 'viewer') {
-    const redacted = applyFinancePolicy(user, { ...body, me });
+    const redacted = applyFinancePolicy(user, { ...body, me }) as Record<string, unknown>;
     delete redacted.saudas;
     return redacted;
   }
 
   if (role === 'manager' || role === 'operator') {
-    const redacted = applyFinancePolicy(user, { ...body, me });
+    const redacted = applyFinancePolicy(user, { ...body, me }) as Record<string, unknown>;
     delete redacted.saudas;
     return redacted;
   }

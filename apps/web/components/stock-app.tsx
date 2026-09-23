@@ -28,6 +28,9 @@ import { millHeaderMeta } from '../lib/app-meta';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { formatDate, formatQtl, formatRupee } from '../lib/format';
 import { useOperationalCounts } from '../lib/operational-counts';
+import { TableEditCell, TableEditModeButton } from './table-edit-mode';
+import { can, canViewFinance } from '../lib/permissions';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -140,6 +143,7 @@ export function StockApp() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const editDialogRef = useRef<HTMLDialogElement>(null);
+  const tableEdit = useTableEditMode();
 
   const load = async () => {
     const data = await api<Overview>('/api/overview');
@@ -167,9 +171,9 @@ export function StockApp() {
     if (!editing && dialog.open) dialog.close();
   }, [editing, editForm]);
 
-  const canMoney = session != null && session.role !== 'manager';
-  const canCreate = session != null && !['viewer', 'manager'].includes(session.role);
-  const canEdit = canCreate;
+  const canMoney = canViewFinance(session ?? { role: '' });
+  const canCreate = can(session, 'stock:create');
+  const canEdit = can(session, 'stock:edit');
 
   const filtered = useMemo(() => {
     const lots = overview?.lots ?? [];
@@ -193,7 +197,7 @@ export function StockApp() {
   const shownRejected = rejectedExpanded ? rejected : rejected.slice(0, 3);
 
   const columns = useMemo(
-    () => [
+    () => withEditModeColumns([
       { id: 'lot', label: 'Lot' },
       { id: 'godown', label: 'Godown' },
       { id: 'item', label: 'Item' },
@@ -202,9 +206,8 @@ export function StockApp() {
       { id: 'date', label: 'In date' },
       ...(canMoney ? [{ id: 'value', label: 'Value' }] : []),
       { id: 'note', label: 'Note' },
-      ...(canEdit ? [{ id: 'actions', label: '' }] : []),
-    ],
-    [canMoney, canEdit],
+    ], tableEdit.editMode, { canEdit }),
+    [canMoney, canEdit, tableEdit.editMode],
   );
 
   function closeEdit() {
@@ -383,6 +386,13 @@ export function StockApp() {
           subtitle="Live godown-wise inventory"
           date={headerMeta.date}
           season={headerMeta.season}
+          actions={
+            <TableEditModeButton
+              enabled={canEdit}
+              editMode={tableEdit.editMode}
+              onToggle={tableEdit.toggleEditMode}
+            />
+          }
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -664,6 +674,9 @@ export function StockApp() {
           <DataTable columns={columns}>
             {pageData.rows.length ? pageData.rows.map((lot) => (
               <tr key={lot.id}>
+                {tableEdit.editMode && canEdit && (
+                  <TableEditCell label={lot.code} onClick={() => startEdit(lot)} />
+                )}
                 <td><strong className="dashboard-token">{lot.code}</strong></td>
                 <td>{lot.godown_name ?? '—'}</td>
                 <td>{lot.item_name ?? '—'}</td>
@@ -672,13 +685,6 @@ export function StockApp() {
                 <td className="muted">{lot.in_date ? formatDate(lot.in_date) : '—'}</td>
                 {canMoney ? <td><strong>{formatRupee(lot.value_paise)}</strong></td> : null}
                 <td className="muted">{lot.note ?? ''}</td>
-                {canEdit ? (
-                  <td>
-                    <TableActions>
-                      <Button type="button" className="secondary" onClick={() => startEdit(lot)}>Edit</Button>
-                    </TableActions>
-                  </td>
-                ) : null}
               </tr>
             )) : (
               <tr>

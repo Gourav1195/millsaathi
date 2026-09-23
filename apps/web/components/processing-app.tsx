@@ -14,20 +14,20 @@ import {
   FormActions,
   Input,
   Select,
-  TableActions,
   TableCard,
 } from './ui';
+import { TableEditCell, TableEditModeButton } from './table-edit-mode';
 import { can } from '../lib/permissions';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { CatalogProcessType, ProcessCatalog } from './process-catalog';
 import { ProcessChainStudio } from './process-chain-studio';
 
-const RUN_COLUMNS = [
+const RUN_COLUMNS_BASE = [
   { id: 'date', label: 'Date' },
   { id: 'process', label: 'Process' },
   { id: 'inputs', label: 'Inputs' },
   { id: 'status', label: 'Status' },
-  { id: 'actions', label: '' },
 ];
 
 type ProcessType = CatalogProcessType;
@@ -94,6 +94,8 @@ export function ProcessingApp() {
   const [stepsExpanded, setStepsExpanded] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [editorTypeId, setEditorTypeId] = useState<string | null>(null);
+  const tableEdit = useTableEditMode();
+  const canVoidRun = can(session, 'processing:void');
   const [catalogTypes, setCatalogTypes] = useState<CatalogProcessType[]>([]);
   const [outputFormOpen, setOutputFormOpen] = useState(false);
   const [outputDraft, setOutputDraft] = useState({ itemId: '', semanticType: 'main', quantity: '' });
@@ -482,23 +484,33 @@ export function ProcessingApp() {
       </div></DndContext>}
       {workspace && <div className={`balance${balance.differenceKg < 0 || hasInputErrors ? ' warn' : ''}`}>Input: <strong>{(balance.inputKg / 100).toFixed(3)} qtl</strong> · Accounted: <strong>{(balance.outputKg / 100).toFixed(3)} qtl</strong> · {balance.differenceKg >= 0 ? 'Implied wastage' : 'Over by'}: <strong>{(Math.abs(balance.differenceKg) / 100).toFixed(3)} qtl</strong>{hasInputErrors && <span className="process-field-error" style={{ marginLeft: 12 }}>Fix input quantities above the available lot amount.</span>}<Button type="button" style={{ float: 'right' }} disabled={posting || !inputs.length || balance.differenceKg < 0 || hasInputErrors} onClick={() => void postRun()}>{posting ? 'Posting…' : 'Post run'}</Button></div>}
       <div style={{ marginTop: 16 }}>
-        <TableCard title="Recent process runs" subtitle={`${runs.length} run${runs.length === 1 ? '' : 's'}`}>
-          <DataTable columns={RUN_COLUMNS}>
+        <TableCard
+          title="Recent process runs"
+          subtitle={`${runs.length} run${runs.length === 1 ? '' : 's'}`}
+          actions={
+            <TableEditModeButton
+              enabled={canVoidRun}
+              editMode={tableEdit.editMode}
+              onToggle={tableEdit.toggleEditMode}
+            />
+          }
+        >
+          <DataTable columns={withEditModeColumns(RUN_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoidRun })}>
             {runs.length ? runs.slice(0, 8).map((run) => (
               <tr key={run.id}>
+                {tableEdit.editMode && canVoidRun && (
+                  run.status === 'POSTED'
+                    ? <TableEditCell label={run.process_type_name ?? 'process run'} onClick={() => void voidRun(run)} />
+                    : <td className="table-edit-col" />
+                )}
                 <td>{run.run_date ?? '—'}</td>
                 <td><strong>{run.process_type_name ?? 'Process run'}</strong></td>
                 <td>{(run.lines ?? []).filter((line) => line.line_type === 'INPUT').map((line) => `${line.item_name ?? 'Input'} ${((line.quantity_base ?? 0) / 100).toFixed(2)} qtl`).join(', ') || '—'}</td>
                 <td><Badge tone={run.status === 'POSTED' ? 'success' : 'neutral'}>{run.status ?? '—'}</Badge></td>
-                <td>
-                  <TableActions>
-                    {run.status === 'POSTED' && <Button type="button" className="secondary" onClick={() => void voidRun(run)}>Void</Button>}
-                  </TableActions>
-                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan={RUN_COLUMNS.length}><EmptyState>No process runs posted yet.</EmptyState></td>
+                <td colSpan={withEditModeColumns(RUN_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoidRun }).length}><EmptyState>No process runs posted yet.</EmptyState></td>
               </tr>
             )}
           </DataTable>

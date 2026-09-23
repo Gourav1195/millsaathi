@@ -17,6 +17,7 @@ import {
 } from './ui';
 import { millHeaderMeta } from '../lib/app-meta';
 import { formatDate } from '../lib/format';
+import { can, isOwnerRole } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 import type { Theme } from '../lib/theme';
@@ -111,8 +112,8 @@ export function SettingsApp() {
     if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load archived data'));
   }, [session]);
 
-  const isOwner = session?.role === 'owner';
-  const canRestore = session != null && ['owner', 'admin'].includes(session.role);
+  const isOwner = isOwnerRole(session ?? { role: '' });
+  const canRestore = can(session, 'settings:manage');
 
   const counts = useMemo(() => ({
     parties: (data?.suppliers.length ?? 0) + (data?.buyers.length ?? 0),

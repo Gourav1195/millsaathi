@@ -17,13 +17,14 @@ import {
   Panel,
   ScreenToolbar,
   Select,
-  TableActions,
   TableCard,
   Tab,
   TabRow,
 } from './ui';
+import { TableEditCell, TableEditModeButton } from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
 import { can } from '../lib/permissions';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -91,14 +92,13 @@ function editFormFromEntry(entry: GateEntry): GateEditForm {
   };
 }
 
-const GATE_COLUMNS = [
+const GATE_COLUMNS_BASE = [
   { id: 'vehicle', label: 'Vehicle' },
   { id: 'direction', label: 'Direction' },
   { id: 'party', label: 'Party' },
   { id: 'material', label: 'Material' },
   { id: 'net', label: 'Net weight' },
   { id: 'status', label: 'Status' },
-  { id: 'actions', label: '' },
 ];
 
 export function GateApp() {
@@ -115,6 +115,7 @@ export function GateApp() {
   const [editing, setEditing] = useState<GateEntry | null>(null);
   const [editForm, setEditForm] = useState<GateEditForm | null>(null);
   const editDialogRef = useRef<HTMLDialogElement>(null);
+  const tableEdit = useTableEditMode();
 
   const canCreate = can(session, 'gate:create');
   const canEdit = can(session, 'gate:edit');
@@ -230,6 +231,13 @@ export function GateApp() {
           subtitle="Capture controlled whole-kg weights. Completed weights remain immutable in the Worker."
           date={headerMeta.date}
           season={headerMeta.season}
+          actions={
+            <TableEditModeButton
+              enabled={canEdit}
+              editMode={tableEdit.editMode}
+              onToggle={tableEdit.toggleEditMode}
+            />
+          }
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -355,26 +363,24 @@ export function GateApp() {
             </ScreenToolbar>
           }
         >
-          <DataTable columns={GATE_COLUMNS}>
+          <DataTable columns={withEditModeColumns(GATE_COLUMNS_BASE, tableEdit.editMode, { canEdit })}>
             {visible.length ? visible.map((entry) => (
               <tr key={entry.id}>
+                {tableEdit.editMode && canEdit && (
+                  entry.status !== 'done'
+                    ? <TableEditCell label={entry.vehicle_no ?? 'gate entry'} onClick={() => startEdit(entry)} />
+                    : <td className="table-edit-col" />
+                )}
                 <td><strong>{entry.vehicle_no ?? '—'}</strong></td>
                 <td>{entry.direction === 'in' ? 'Arriving' : 'Dispatching'}</td>
                 <td>{entry.direction === 'in' ? entry.supplier_name ?? '—' : entry.buyer_name ?? '—'}</td>
                 <td>{entry.item_name ?? '—'}</td>
                 <td><strong>{qtl(entry.net_kg)}</strong></td>
                 <td><Badge tone={entry.status === 'done' ? 'success' : 'warning'}>{entry.status ?? '—'}</Badge></td>
-                <td>
-                  {canEdit && entry.status !== 'done' && (
-                    <TableActions>
-                      <Button type="button" className="secondary" onClick={() => startEdit(entry)}>Update</Button>
-                    </TableActions>
-                  )}
-                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan={GATE_COLUMNS.length}><EmptyState>No gate entries in this view.</EmptyState></td>
+                <td colSpan={withEditModeColumns(GATE_COLUMNS_BASE, tableEdit.editMode, { canEdit }).length}><EmptyState>No gate entries in this view.</EmptyState></td>
               </tr>
             )}
           </DataTable>
