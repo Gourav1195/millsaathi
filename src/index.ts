@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { hashPassword, hashToken, newSessionToken, sessionExpiry, verifyPassword } from './auth';
 import { api } from './api';
+import { billingConfigured, checkoutAvailable, handleBillingWebhook } from './billing';
 import { defaultGodownCapacity, millCatalog, normalizeMillType } from './millCatalog';
 
 export type UserRow = {
@@ -16,15 +17,30 @@ export type MillRow = {
   mill_type?: string | null;
   address?: string | null; phone?: string | null; email?: string | null; gstin?: string | null; place_of_supply?: string | null;
 };
-type AppBindings = Env & { TURNSTILE_SECRET_KEY?: string; TURNSTILE_SITE_KEY?: string; GEMINI_API_KEY?: string; GEMINI_MODEL?: string };
+type AppBindings = Env & {
+  TURNSTILE_SECRET_KEY?: string;
+  TURNSTILE_SITE_KEY?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
+  RAZORPAY_KEY?: string;
+  RAZORPAY_SECRET?: string;
+  RAZORPAY_WEBHOOK_SECRET?: string;
+  RAZORPAY_PLAN_STARTER?: string;
+  RAZORPAY_PLAN_PROFESSIONAL?: string;
+};
 export type AppEnv = {
   Bindings: AppBindings;
   Variables: { session: { user: UserRow; mill: MillRow } };
 };
 
 const COOKIE = 'ms_session';
+const WORKER_STARTED_AT = new Date().toISOString();
 
 const app = new Hono<AppEnv>();
+
+function isLocalDevHost(host: string): boolean {
+  return /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
+}
 
 app.use('*', async (c, next) => {
   await next();
@@ -211,6 +227,35 @@ app.post('/api/auth/accept-invite', async (c) => {
   await c.env.DB.prepare(`UPDATE users SET pass_hash = ?, pass_salt = ?, active = 1, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?`).bind(credentials.hash, credentials.salt, invited.id).run();
   setSessionCookie(c, await createSession(c.env.DB, invited.id));
   return c.json({ ok: true });
+});
+
+app.get('/api/dev/status', (c) => {
+  const host = c.req.header('host') ?? '';
+  if (!isLocalDevHost(host)) return c.json({ error: 'not found' }, 404);
+  return c.json({
+    mode: 'development',
+    worker_started_at: WORKER_STARTED_AT,
+    server_time: new Date().toISOString(),
+    billing: {
+      razorpay_configured: billingConfigured(c.env),
+      checkout_available: checkoutAvailable(c.env),
+      plan_starter: Boolean(c.env.RAZORPAY_PLAN_STARTER?.trim()),
+      plan_professional: Boolean(c.env.RAZORPAY_PLAN_PROFESSIONAL?.trim()),
+    },
+  });
+});
+
+app.post('/api/billing/webhook', async (c) => {
+  const signature = c.req.header('X-Razorpay-Signature') ?? '';
+  const rawBody = await c.req.text();
+  try {
+    const result = await handleBillingWebhook(c.env, c.env.DB, rawBody, signature);
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Webhook processing failed';
+    const status = message === 'Invalid webhook signature' ? 401 : 400;
+    return c.json({ error: message }, status);
+  }
 });
 
 // ---- Session guard for everything else under /api ----

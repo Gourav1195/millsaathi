@@ -8,5 +8,94 @@ const modules = [
 ];
 
 export default function HomePage() {
-  return <main className="site-home"><header className="site-nav"><Link className="site-brand" href="/"><span className="site-mark"><svg viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-5h6v5"/><path d="M12 4v3"/></svg></span><span>MillSaathi</span></Link><nav><a href="#how">How it works</a><a href="#modules">Modules</a><Link href="/calculators">Calculators</Link><a href="#faq">FAQ</a><Link href="/app">Log in</Link><Link className="site-cta" href="/app">Start free</Link></nav></header><section className="hero"><div className="hero-grid"/><div className="hero-content"><div className="hero-copy"><p className="site-eyebrow"><i/>Free operations & ERP for India&apos;s mills</p><h1>Your mill runs on paper, WhatsApp, and trust in your munshi. <em>MillSaathi tells you where every quintal actually went.</em></h1><p className="hero-hindi">पता चलेगा माल कहाँ जा रहा है।</p><p className="hero-summary">One system that captures reality at the source — weighbridge, lab, gate, production — and reconciles every lot. It doesn&apos;t replace Tally. It feeds it the truth.</p><div className="hero-actions"><Link className="site-cta large" href="/app">Start free — no card <span>→</span></Link><Link className="hero-secondary" href="/demo">See a demo mill</Link></div><p className="hero-note">Free for every mill · Built for rice mills first · Works on any device</p></div><div className="balance-card"><div className="balance-card-head"><div><small>Today&apos;s mass balance</small><h2>Sri Venkatesh Rice Mill</h2></div><b>● Live</b></div><div className="balance-numbers"><div><small>Paddy in</small><strong>1,000 <i>qtl</i></strong></div><span>→</span><div><small>Accounted out</small><strong>950 <i>qtl</i></strong></div></div><div className="balance-bar"><i/><i/><i/><i/></div><div className="balance-list"><p><span><i/>Rice</span><b>670 qtl · 67%</b></p><p><span><i/>Bran</span><b>80 qtl · 8%</b></p><p><span><i/>Husk</span><b>200 qtl · 20%</b></p></div><div className="loss-callout"><b>⚠ Unexplained <strong>50 qtl · 5.0%</strong></b><span>≈ ₹1.15 lakh today at ₹2,300/qtl. Flagged for the owner before the shift closes.</span></div></div></div></section><section className="site-section" id="how"><p className="section-kicker">Built for the mill floor</p><h2>Capture what happened, not what someone remembers later.</h2><p>MillSaathi connects gate entry, weighbridge, stock, processing, and payments into one record your whole mill can trust.</p></section><section className="module-section" id="modules">{modules.map(([title, copy], index) => <article key={title}><span>0{index + 1}</span><h2>{title}</h2><p>{copy}</p></article>)}</section><section className="site-section compact" id="faq"><p className="section-kicker">Simple by design</p><h2>Every module is free. No card. No setup fee.</h2><Link className="site-cta large" href="/app">Open MillSaathi <span>→</span></Link></section></main>;
+  return (
+    <main className="site-home">
+      <header className="site-nav">
+        <Link className="site-brand" href="/">
+          <span className="site-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-5h6v5"/><path d="M12 4v3"/></svg>
+          </span>
+          <span>MillSaathi</span>
+        </Link>
+        <nav>
+          <a href="#how">How it works</a>
+          <a href="#modules">Modules</a>
+          <Link href="/calculators">Calculators</Link>
+          <a href="#faq">FAQ</a>
+          <Link href="/app">Log in</Link>
+          <Link className="site-cta" href="/app">Start free</Link>
+        </nav>
+      </header>
+
+      <section className="hero">
+        <div className="hero-grid" aria-hidden="true" />
+        <div className="hero-content">
+          <div className="hero-copy">
+            <p className="site-eyebrow"><i aria-hidden="true" />Free operations &amp; ERP for India&apos;s mills</p>
+            <h1>
+              Your mill runs on paper, WhatsApp, and trust in your munshi.
+              <em> MillSaathi tells you where every quintal actually went.</em>
+            </h1>
+            <p className="deva">पता चलेगा माल कहाँ जा रहा है।</p>
+            <p className="hero-summary">
+              One system that captures reality at the source — weighbridge, lab, gate, production — and reconciles every lot.
+              It doesn&apos;t replace Tally. It feeds it the truth.
+            </p>
+            <div className="hero-actions">
+              <Link className="site-cta large" href="/app">Start free — no card <span aria-hidden="true">→</span></Link>
+              <Link className="hero-secondary" href="/demo">See a demo mill</Link>
+            </div>
+            <p className="hero-note">Free for every mill · Built for rice mills first · Works on any device · Hindi, Telugu &amp; Tamil coming to the mill floor</p>
+          </div>
+
+          <div className="balance-card">
+            <div className="balance-card-head">
+              <div>
+                <small>Today&apos;s mass balance</small>
+                <h2>Sri Venkatesh Rice Mill</h2>
+              </div>
+              <b>● Live</b>
+            </div>
+            <div className="balance-numbers">
+              <div><small>Paddy in</small><strong>1,000 <i>qtl</i></strong></div>
+              <span aria-hidden="true">→</span>
+              <div><small>Accounted out</small><strong>950 <i>qtl</i></strong></div>
+            </div>
+            <div className="balance-bar" aria-hidden="true"><i /><i /><i /><i /></div>
+            <div className="balance-list">
+              <p><span><i aria-hidden="true" />Rice</span><b>670 qtl · 67%</b></p>
+              <p><span><i aria-hidden="true" />Bran</span><b>80 qtl · 8%</b></p>
+              <p><span><i aria-hidden="true" />Husk</span><b>200 qtl · 20%</b></p>
+            </div>
+            <div className="loss-callout">
+              <b>⚠ Unexplained <strong>50 qtl · 5.0%</strong></b>
+              <span>≈ ₹1.15 lakh today at ₹2,300/qtl. Flagged for the owner before the shift closes.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="site-section" id="how">
+        <p className="section-kicker">Built for the mill floor</p>
+        <h2>Capture what happened, not what someone remembers later.</h2>
+        <p>MillSaathi connects gate entry, weighbridge, stock, processing, and payments into one record your whole mill can trust.</p>
+      </section>
+
+      <section className="module-section" id="modules">
+        {modules.map(([title, copy], index) => (
+          <article key={title}>
+            <span>0{index + 1}</span>
+            <h2>{title}</h2>
+            <p>{copy}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="site-section compact" id="faq">
+        <p className="section-kicker">Simple by design</p>
+        <h2>Every module is free. No card. No setup fee.</h2>
+        <Link className="site-cta large" href="/app">Open MillSaathi <span aria-hidden="true">→</span></Link>
+      </section>
+    </main>
+  );
 }

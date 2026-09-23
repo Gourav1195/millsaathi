@@ -1,0 +1,86 @@
+/* MillSaathi design tokens — sourced from millsaathi-legacy dashboard.css and public/assets/pages.css */
+
+:root {
+  color-scheme: light;
+
+  /* Typography (font-family set via next/font CSS variables on <html>) */
+  --font-sans: var(--font-ibm-plex), "IBM Plex Sans", system-ui, sans-serif;
+  --font-display: var(--font-archivo), "Archivo", var(--font-sans);
+  --font-deva: var(--font-noto-deva), "Noto Sans Devanagari", var(--font-sans);
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 0 rgba(16, 20, 27, 0.06);
+  --shadow-md: 0 5px 14px rgba(27, 36, 49, 0.08);
+  --shadow-accent: 0 1px 0 var(--accent-ink);
+
+  /* ---- Operational app palette (default) ---- */
+  --ink: #1B2431;
+  --muted: #667085;
+  --muted2: #475467;
+  --bg: #F4F6F8;
+  --surface: #FFFFFF;
+  --border: #E4E7EC;
+  --line: #F0F1F3;
+  --gold: #E8B93B;
+  --gold-dark: #BE8A16;
+  --green: #2E7D46;
+  --green-dark: #2E5B39;
+  --red: #C0451C;
+  --red-ink: #8F2E12;
+  --accent: #C0451C;
+  --accent-ink: #9E3714;
+  --active-action: #E8B93B;
+  --side: #1B2431;
+  --side-line: #2A3543;
+  --side-mut: #7D8A9A;
+  --side-text: #C7CFDA;
+  --nav-text: #98A2B3;
+  --focus-ring: #E8EDF4;
+  --warn-bg: #FBEDE7;
+  --warn-line: #E6BBAA;
+  --amber-bg: #FEF7E3;
+  --success: #256238;
+  --shell-cols: 256px minmax(0, 1fr);
+}
+
+/* Marketing / landing palette — mirrors public/assets/pages.css */
+.site-home {
+  --ink: #211F1A;
+  --muted: #6B655A;
+  --muted2: #8A8272;
+  --bg: #F6F1E6;
+  --bg2: #EDE5D2;
+  --surface: #FFFDF8;
+  --border: #E2D9C4;
+  --line: #EAE3D2;
+  --gold: #E8B93B;
+  --gold-dark: #BE8A16;
+  --green: #6FA85B;
+  --green-dark: #2E5B39;
+  --green-bg: #E4EDDF;
+  --red: #C0451C;
+  --red-ink: #9E3714;
+  --accent: #C0451C;
+  --accent-ink: #9E3714;
+  --warn-bg: #FCEDE7;
+  --warn-line: #E9B6A3;
+  --hero-ink: #F6F1E6;
+  --hero-muted: #C8C1B2;
+  --hero-grid: #2C2A24;
+}

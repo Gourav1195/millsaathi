@@ -7,7 +7,4 @@ const output = 'dist/web';
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await cp('public', output, { recursive: true });
-// Keep the old operational UI reachable until its remaining create/edit/void forms have React
-// parity. It uses the same same-origin Worker API and session cookie.
-await cp('public/app', `${output}/legacy-app`, { recursive: true });
 await cp('apps/web/out', output, { recursive: true, force: true });

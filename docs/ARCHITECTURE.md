@@ -30,7 +30,9 @@ millsaathi/
 ```
 
 Routing: static assets serve first; `run_worker_first` for `/api/*` and `/app*` (session check).
-`/` landing, `/demo` demo SPA (client-side data, zero backend cost), `/app` real SPA + `/api/*` JSON.
+`/` is the landing page and `/app` is the React application with `/api/*` JSON. The former
+vanilla-JavaScript operational UI and demo are retained outside this repository in the sibling
+`millsaathi-legacy` folder and are not part of this deployment.
 
 ## Multi-tenancy & roles
 

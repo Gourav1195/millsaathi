@@ -1,0 +1,75 @@
+.dev-indicator {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: grid;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  background: rgba(27, 36, 49, 0.96);
+  color: #f6f1e6;
+  border-top: 1px solid rgba(232, 185, 59, 0.45);
+  font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.dev-indicator-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.dev-indicator-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.dev-indicator-pill.ok { background: #2e5b39; color: #f6f1e6; }
+.dev-indicator-pill.warn { background: #a64b1f; color: #fff8ef; }
+
+.dev-indicator-sep { opacity: 0.45; }
+
+.dev-indicator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dev-indicator-button,
+.dev-indicator-link {
+  border: 1px solid rgba(246, 241, 230, 0.28);
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.dev-indicator-button:hover,
+.dev-indicator-link:hover {
+  border-color: #e8b93b;
+  color: #fff8e1;
+}
+
+.dev-indicator-note {
+  margin: 0;
+  color: #d8d0bf;
+  font-size: 11px;
+}
+
+.dev-indicator-note code {
+  color: #fff8e1;
+}
+
+.shell,
+.auth-page,
+.marketing-page {
+  padding-bottom: 72px;
+}

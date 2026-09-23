@@ -1,6 +1,6 @@
 /* Shared styles for generated SEO pages (calculators, states, mill types).
-   The landing page at / keeps its own inline styles — this file is only for
-   pages emitted by scripts/build-seo.mjs. Tokens mirror the landing design. */
+   The Next.js landing page at / uses apps/web/design/tokens.css + marketing.css.
+   Keep token values in sync when changing the public marketing palette. */
 
 :root {
   --bg: #F6F1E6;

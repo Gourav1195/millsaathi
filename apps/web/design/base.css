@@ -1,0 +1,113 @@
+/* Global resets and shared utilities */
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font: inherit; }
+
+::selection {
+  background: var(--ink);
+  color: #fff;
+}
+
+.site-home ::selection {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+input::placeholder { color: var(--nav-text); }
+
+.arch { font-family: var(--font-display); }
+
+/* Devanagari trust line — hidden for visitors outside India (see RegionScript). */
+.deva {
+  font-family: var(--font-deva);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+html[data-region="intl"] .deva { display: none; }
+
+.ms-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.ms-scroll::-webkit-scrollbar-thumb { background: #D0D5DD; border-radius: var(--radius-sm); }
+
+@keyframes ms-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes period-settle {
+  from { transform: translateY(1px) scale(0.94); opacity: 0.7; }
+  to { transform: translateY(-1px) scale(1); opacity: 1; }
+}
+
+.muted { color: var(--muted); }
+
+.error {
+  color: var(--red);
+  background: var(--warn-bg);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.primary {
+  display: inline-block;
+  margin-top: var(--space-4);
+  padding: var(--space-3) 18px;
+  border-radius: var(--radius-md);
+  color: #fff;
+  background: var(--accent);
+  text-decoration: none;
+  box-shadow: var(--shadow-accent);
+}
+
+.primary { margin-top: 0; }
+
+.post {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: var(--shadow-accent);
+}
+
+.post:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.secondary {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.active { color: var(--success); font-weight: 700; }
+.inactive { color: var(--red); font-weight: 700; }
+
+.status { text-transform: capitalize; font-weight: 700; }
+.status.done { color: var(--success); }
+.status.in_lab, .status.weighed { color: var(--gold-dark); }
+
+.alert {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-left: 4px solid var(--gold-dark);
+  background: var(--amber-bg);
+  margin-bottom: 10px;
+}
+
+.alert.red { border-color: var(--red); background: var(--warn-bg); }
+.alert.amber { border-color: var(--gold-dark); background: var(--amber-bg); }

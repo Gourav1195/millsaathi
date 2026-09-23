@@ -6,8 +6,10 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev:worker",
+    "dev": "node scripts/dev.mjs",
+    "dev:clean": "node -e \"require('node:fs').rmSync('apps/web/.next',{recursive:true,force:true})\" && node scripts/dev.mjs",
     "dev:worker": "wrangler dev",
+    "dev:worker:static": "npm run build:worker && wrangler dev",
     "dev:web": "npm --workspace @millsaathi/web run dev",
     "build:web": "npm --workspace @millsaathi/web run build",
     "build:worker": "npm run build:web && node scripts/build-worker-web.mjs",
@@ -18,6 +20,7 @@
     "types": "wrangler types",
     "check": "tsc --noEmit",
     "test:smoke": "node scripts/smoke-local.mjs",
+    "razorpay:plans": "node scripts/razorpay-create-plans.mjs",
     "db:migrate:local": "wrangler d1 migrations apply millsaathi --local",
     "db:migrate:remote": "wrangler d1 migrations apply millsaathi --remote",
     "db:seed:local": "wrangler d1 execute millsaathi --local --file=./db/seed-demo.sql"

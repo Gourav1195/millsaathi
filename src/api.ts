@@ -4,6 +4,14 @@ import { Hono } from 'hono';
 import type { AppEnv } from './index';
 import { hashPassword, hashToken } from './auth';
 import { answerAssistantQuestion } from './ai';
+import {
+  BILLING_PLANS,
+  billingPlans,
+  createCheckoutSubscription,
+  formatBillingStatus,
+  type BillingPlanKey,
+  verifyCheckoutPayment,
+} from './billing';
 
 const printStyles = `<style>
   :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#182230;font:14px/1.5 'IBM Plex Sans',Arial,sans-serif}.sheet{max-width:820px;margin:32px auto;padding:40px;background:#fff;box-shadow:0 12px 36px rgba(20,30,40,.12);border-top:7px solid #e8b93b}.brand{display:flex;justify-content:space-between;gap:24px;border-bottom:1px solid #e4e7ec;padding-bottom:22px}.brand h1{font:800 27px/1.1 Archivo,Arial,sans-serif;margin:0 0 6px}.muted{color:#667085}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#667085;font-weight:700}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.meta>div{background:#f7f8fa;border:1px solid #e4e7ec;border-radius:8px;padding:12px}.title{font:800 20px Archivo,Arial,sans-serif;margin:24px 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th{background:#182230;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left}th,td{padding:11px 12px;border-bottom:1px solid #e4e7ec}td:last-child,th:last-child{text-align:right}.total{margin:20px 0 0 auto;max-width:270px;background:#fff8e1;border:1px solid #efd98d;border-radius:8px;padding:16px;display:flex;justify-content:space-between;font-weight:800;font-size:17px}.notes{margin-top:24px;padding-top:16px;border-top:1px solid #e4e7ec;white-space:pre-line}.actions{text-align:right;margin-bottom:14px}.actions button{border:0;border-radius:7px;padding:9px 14px;background:#c0451c;color:#fff;font-weight:700;cursor:pointer}@media(max-width:700px){body{background:#fff}.sheet{margin:0;padding:24px;box-shadow:none}.brand{display:block}.meta{grid-template-columns:1fr 1fr}}@media print{body{background:#fff}.sheet{margin:0;max-width:none;padding:0;box-shadow:none;border-top:0}.actions{display:none}}
@@ -210,10 +218,65 @@ api.get('/billing/status', async (c) => {
     `SELECT ba.provider, bs.plan, bs.status, bs.current_period_start, bs.current_period_end
      FROM billing_accounts ba
      LEFT JOIN billing_subscriptions bs ON bs.billing_account_id = ba.id
-       AND bs.status IN ('active', 'trialing', 'past_due')
+       AND bs.status IN ('created', 'authenticated', 'active', 'trialing', 'past_due', 'pending')
      WHERE ba.mill_id = ? ORDER BY bs.created_at DESC LIMIT 1`,
   ).bind(mill.id).first<{ provider: string; plan: string | null; status: string | null; current_period_start: string | null; current_period_end: string | null }>();
-  return c.json({ billing: { plan: status?.plan || 'free', status: status?.status || 'free', provider: status?.provider || null, current_period_start: status?.current_period_start || null, current_period_end: status?.current_period_end || null, checkout_available: false } });
+  return c.json({ billing: formatBillingStatus(status, c.env) });
+});
+
+api.get('/billing/plans', async (c) => {
+  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const plans = billingPlans(c.env).map((plan) => ({
+    key: plan.key,
+    label: plan.label,
+    amount_paise: plan.amount_paise,
+    interval: plan.interval,
+    billing_note: plan.billing_note,
+    description: plan.description,
+    features: plan.features,
+    available: Boolean(plan.razorpay_plan_id),
+  }));
+  return c.json({ plans, checkout_available: plans.some((plan) => plan.available) });
+});
+
+api.post('/billing/checkout', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'only the owner or admin can manage billing' }, 403);
+  const body = await c.req.json<{ plan?: string }>().catch(() => ({}) as { plan?: string });
+  const plan = String(body.plan ?? '').trim() as BillingPlanKey;
+  if (!BILLING_PLANS[plan]) return c.json({ error: 'Choose a valid plan' }, 400);
+  try {
+    const checkout = await createCheckoutSubscription(c.env, c.env.DB, mill, user, plan);
+    return c.json({ checkout });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not start checkout';
+    return c.json({ error: message }, 400);
+  }
+});
+
+api.post('/billing/verify', async (c) => {
+  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'only the owner or admin can manage billing' }, 403);
+  const body = await c.req.json<Record<string, string>>().catch(() => ({} as Record<string, string>));
+  const paymentId = String(body.razorpay_payment_id ?? '').trim();
+  const subscriptionId = String(body.razorpay_subscription_id ?? '').trim();
+  const signature = String(body.razorpay_signature ?? '').trim();
+  if (!paymentId || !subscriptionId || !signature) return c.json({ error: 'Payment details are incomplete' }, 400);
+  try {
+    const subscription = await verifyCheckoutPayment(c.env, c.env.DB, mill.id, paymentId, subscriptionId, signature);
+    return c.json({ ok: true, billing: formatBillingStatus({
+      provider: 'razorpay',
+      plan: (subscription as { notes?: Record<string, string> }).notes?.plan || null,
+      status: subscription.status,
+      current_period_start: subscription.current_start ? new Date(subscription.current_start * 1000).toISOString() : null,
+      current_period_end: subscription.current_end ? new Date(subscription.current_end * 1000).toISOString() : null,
+    }, c.env) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Payment verification failed';
+    return c.json({ error: message }, 400);
+  }
 });
 
 // One round trip powers the whole SPA: batched reads, KPIs computed here.

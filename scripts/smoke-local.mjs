@@ -108,7 +108,7 @@ assert.ok(processChains.body.chains?.some((chain) => chain.name === 'Dal Milling
 const ownerBilling = await request('/api/billing/status', { headers: { cookie: cookieFrom(ownerLogin.response) } });
 assert.equal(ownerBilling.response.status, 200, 'owner should be able to view billing status');
 assert.equal(ownerBilling.body.billing?.plan, 'free', 'newly provisioned mills should start on the free plan');
-assert.equal(ownerBilling.body.billing?.checkout_available, false, 'billing checkout must remain disabled until it is implemented');
+assert.equal(typeof ownerBilling.body.billing?.checkout_available, 'boolean', 'billing checkout availability should be reported');
 const supplier = ownerOverview.body.suppliers?.[0];
 const item = ownerOverview.body.items?.[0];
 assert.ok(supplier?.id && item?.id, 'seeded overview should include a supplier and item');

@@ -4,7 +4,7 @@ Operations and ERP SaaS for India's rice mills — track every quintal from gate
 weighbridge, lab, and production, so the 2–6% that silently disappears becomes visible.
 Sugar, flour, oil and dal mills to follow.
 
-**Live → https://millsaathi.com** · **Try it with no signup → https://millsaathi.com/demo**
+**Live → https://millsaathi.com**
 
 Multi-tenant, deployed, and running entirely on the Cloudflare free tier — one Worker, one D1
 database, no other services and no secrets.
@@ -12,7 +12,6 @@ database, no other services and no secrets.
 | Surface | URL | What it is |
 |---|---|---|
 | Marketing site | `/` | Landing page |
-| Demo mill | `/demo` | Full interactive dashboard, client-side data, no login — the sales tool |
 | Real app | `/app` | Multi-tenant ERP: signup/login, gate & weighbridge, purchase/sales Saudās, stock ledger & lots, suppliers/buyers/items, processing, documents, team/RBAC, mass balance, night digest |
 | API | `/api/*` | Hono JSON API on Workers + D1 |
 
@@ -56,22 +55,29 @@ a real reconciliation problem, so the ambiguity is removed at the schema level.
 of which Cloudflare edge location the Worker happens to execute in. A shift that starts at 6am
 in Andhra Pradesh must not roll over because the request landed in a different timezone.
 
-**`/demo` needs no backend.** The demo mill runs on client-side data, so a prospect (or an
-interviewer) always sees a working product — no login, no cold start, nothing to break.
+**The former vanilla-JavaScript demo and operational UI are retired from this deployment.** They
+are retained separately in the sibling `millsaathi-legacy` folder, outside this repository.
 
 ## Develop
 
 ```sh
 npm install
 npm run db:migrate:local && npm run db:seed:local   # local D1
-npm run dev                                          # wrangler dev on :8787
+npm run dev                                          # API :8787 + Next hot reload :3000
 npm run check                                        # tsc
 ```
+
+`npm run dev` starts the Worker API and the Next.js dev server together. **Open
+`http://localhost:3000/app` while editing React** — changes apply instantly without a hard refresh.
+The Worker on `:8787` serves `/api/*`; Next proxies those calls in development.
+
+Use `npm run dev:worker:static` only when you need to verify the production static export on
+`:8787` (requires `npm run build:worker` first; no hot reload).
 
 ### Offline Processing test account
 
 After the local migration and demo seed commands above, run `npm run dev` and open
-`http://127.0.0.1:8787/app`. Use `owner@demo.millsaathi.com` with password `demo1234` as the
+`http://localhost:3000/app`. Use `owner@demo.millsaathi.com` with password `demo1234` as the
 development test ID; it includes seeded stock lots and process data for testing the Processing
 workspace without the hosted environment.
 
