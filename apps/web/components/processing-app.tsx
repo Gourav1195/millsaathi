@@ -19,6 +19,7 @@ import {
 } from './ui';
 import { useSession } from '../lib/session';
 import { CatalogProcessType, ProcessCatalog } from './process-catalog';
+import { ProcessChainStudio } from './process-chain-studio';
 
 const RUN_COLUMNS = [
   { id: 'date', label: 'Date' },
@@ -38,7 +39,7 @@ type Input = Lot & { quantity: string; unit: string };
 type Output = { templateLineId?: string; lineType: 'OUTPUT' | 'LOSS'; semanticType: string; itemId: string; itemName: string; quantity: string; unit: string; godownId: string; autoCalculate: boolean; required: boolean };
 type ProcessRun = { id: string; run_date?: string; process_type_name?: string; status?: string; lines?: { line_type?: string; item_name?: string; quantity_base?: number }[] };
 type ProcessingView = 'chain' | 'runs';
-type ProcessingChain = { id: string; name: string; steps: { process_type_id: string; step_number: number }[] };
+type ProcessingChain = { id: string; name: string; description?: string | null; steps: { id: string; process_type_id: string; step_number: number; process_type_name?: string; process_type_description?: string | null; notes?: string | null }[] };
 
 /** Terminal steps (or standalone types) assign stock to a godown; mid-chain outputs stay in-process. */
 function assignsDestinationGodown(typeId: string, chains: ProcessingChain[]) {
@@ -80,7 +81,7 @@ function ProcessDropzone({ children }: Readonly<{ children: React.ReactNode }>) 
 export function ProcessingApp() {
   const { session, setSession, sessionError } = useSession();
   const [types, setTypes] = useState<ProcessType[]>([]);
-  const [view, setView] = useState<ProcessingView>('runs');
+  const [view, setView] = useState<ProcessingView>('chain');
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [selectedTypeId, setSelectedTypeId] = useState('');
   const [inputs, setInputs] = useState<Input[]>([]);
@@ -91,6 +92,7 @@ export function ProcessingApp() {
   const [runs, setRuns] = useState<ProcessRun[]>([]);
   const [stepsExpanded, setStepsExpanded] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [editorTypeId, setEditorTypeId] = useState<string | null>(null);
   const [catalogTypes, setCatalogTypes] = useState<CatalogProcessType[]>([]);
   const [outputFormOpen, setOutputFormOpen] = useState(false);
   const [outputDraft, setOutputDraft] = useState({ itemId: '', semanticType: 'main', quantity: '' });
@@ -123,14 +125,17 @@ export function ProcessingApp() {
   };
   useEffect(() => { if (session) void loadRuns().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load process runs')); }, [session]);
 
+  const loadChains = useCallback(async () => {
+    const response = await fetch('/api/processing-chains', { credentials: 'include' });
+    const body = await response.json() as { chains?: ProcessingChain[]; error?: string };
+    if (!response.ok) throw new Error(body.error ?? 'Could not load processing chains');
+    setChains(body.chains ?? []);
+  }, []);
+
   useEffect(() => {
     if (!session) return;
-    void fetch('/api/processing-chains', { credentials: 'include' }).then(async (response) => {
-      const body = await response.json() as { chains?: ProcessingChain[]; error?: string };
-      if (!response.ok) throw new Error(body.error ?? 'Could not load processing chains');
-      setChains(body.chains ?? []);
-    }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load processing chains'));
-  }, [session]);
+    void loadChains().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load processing chains'));
+  }, [session, loadChains]);
 
   const loadWorkspace = useCallback(async (typeId: string) => {
     if (!typeId) return;
@@ -285,45 +290,58 @@ export function ProcessingApp() {
   if (!session) return <><AuthApp onSuccess={setSession} />{sessionError && <p className="error">{sessionError}</p>}</>;
   const today = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date());
   return <main className="shell"><AppHeader session={session} /><section className="workspace">
-    <div className="toolbar processing-topbar"><div><h2>Processing</h2><p className="muted">Transform inputs into traceable outputs</p></div><div className="processing-tabs"><button type="button" className={view === 'chain' ? 'selected' : ''} onClick={() => setView('chain')}>Chain view</button><button type="button" className={view === 'runs' ? 'selected' : ''} onClick={() => setView('runs')}>Run log</button></div><div className="processing-date"><strong>{today}</strong><small>Kharif season</small></div></div>
-    <div className="process-toolbar">
-      <div className="process-toolbar-actions">
-        <div className={`process-stepper${stepsExpanded ? ' expanded' : ''}`} aria-label="Process type">
-          {types.map((type, index) => (
-            <Fragment key={type.id}>
-              {index > 0 && <span className="process-step-arrow" aria-hidden="true">→</span>}
-              <button type="button" className={type.id === selectedTypeId ? 'on' : ''} onClick={() => setSelectedTypeId(type.id)}>{type.name}</button>
-            </Fragment>
-          ))}
+    <div className="toolbar processing-topbar"><div><h2>Processing</h2><p className="muted">Transform inputs into traceable outputs</p></div><div className="processing-tabs"><button type="button" className={view === 'chain' ? 'selected' : ''} onClick={() => setView('chain')}>Chain view</button><button type="button" className={view === 'runs' ? 'selected' : ''} onClick={() => setView('runs')}>Manual view</button></div><div className="processing-date"><strong>{today}</strong><small>Kharif season</small></div></div>
+    {view === 'runs' && (
+      <div className="process-toolbar">
+        <div className="process-toolbar-actions">
+          <div className={`process-stepper${stepsExpanded ? ' expanded' : ''}`} aria-label="Process type">
+            {types.map((type, index) => (
+              <Fragment key={type.id}>
+                {index > 0 && <span className="process-step-arrow" aria-hidden="true">→</span>}
+                <button type="button" className={type.id === selectedTypeId ? 'on' : ''} onClick={() => setSelectedTypeId(type.id)}>{type.name}</button>
+              </Fragment>
+            ))}
+          </div>
+          <Select className="process-select" value={selectedTypeId} onChange={(event) => setSelectedTypeId(event.target.value)} aria-label="Choose process">
+            {types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+          </Select>
+          {types.length > 1 && (
+            <button
+              type="button"
+              className="process-step-expand"
+              aria-label={stepsExpanded ? 'Show compact process list' : 'Show all process steps'}
+              onClick={() => setStepsExpanded((current) => !current)}
+            >
+              {stepsExpanded ? '⌃' : '⌄'}
+            </button>
+          )}
+          {canManageOrg && selectedTypeId ? (
+            <Button
+              type="button"
+              className="secondary process-catalog-toggle"
+              onClick={() => setEditorTypeId(selectedTypeId)}
+            >
+              Edit process
+            </Button>
+          ) : null}
+          {canManageOrg ? (
+            <Button
+              type="button"
+              className="quiet"
+              onClick={() => setCatalogOpen(true)}
+            >
+              All processes
+            </Button>
+          ) : null}
         </div>
-        <Select className="process-select" value={selectedTypeId} onChange={(event) => setSelectedTypeId(event.target.value)} aria-label="Choose process">
-          {types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
-        </Select>
-        {types.length > 1 && (
-          <button
-            type="button"
-            className="process-step-expand"
-            aria-label={stepsExpanded ? 'Show compact process list' : 'Show all process steps'}
-            onClick={() => setStepsExpanded((current) => !current)}
-          >
-            {stepsExpanded ? '⌃' : '⌄'}
-          </button>
-        )}
-        {canManageOrg && (
-          <Button
-            type="button"
-            className="secondary process-catalog-toggle"
-            onClick={() => setCatalogOpen((current) => !current)}
-          >
-            Edit processes
-          </Button>
-        )}
       </div>
-    </div>
+    )}
     {canManageOrg && (
       <ProcessCatalog
         open={catalogOpen}
         onClose={() => setCatalogOpen(false)}
+        editorTypeId={editorTypeId}
+        onEditorTypeIdChange={setEditorTypeId}
         types={catalogTypes}
         preferredUnit={session.preferred_unit ?? 'QUINTAL'}
         onChanged={async () => {
@@ -333,6 +351,15 @@ export function ProcessingApp() {
       />
     )}
     {error && <Alert title="Processing error" level="red">{error}</Alert>}
+    {view === 'chain' && (
+      <ProcessChainStudio
+        chains={chains}
+        types={catalogTypes}
+        canManage={canManageOrg}
+        onChainsChange={loadChains}
+        onError={setError}
+      />
+    )}
     {view === 'runs' && <>
       {!workspace && !error && <p className="muted">Loading processing workspace…</p>}
       {workspace && <DndContext onDragEnd={onDragEnd}><div className="process-flow">

@@ -304,7 +304,21 @@
 .process-catalog-card { margin-top: 14px; }
 .process-catalog-actions, .process-inline-editor-actions, .process-inline-create { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .process-inline-create { flex: 1; justify-content: flex-end; }
-.process-inline-editor { margin-top: 16px; }
+.process-editor-dialog {
+  width: min(920px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.process-editor-dialog-body {
+  padding: 0 22px 22px;
+}
+
+.process-editor-empty {
+  margin: 0;
+  padding: 0 0 8px;
+}
+
 .process-inline-editor-hint { margin: 0 0 16px; }
 .process-inline-editor-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .process-inline-editor-actions { justify-content: flex-end; padding-top: 12px; }
@@ -476,6 +490,18 @@
   color: var(--ink);
 }
 
+.stock-edit-dialog {
+  width: min(560px, 94vw);
+}
+
+.stock-edit-dialog-form {
+  padding: 0 22px 22px;
+}
+
+.stock-edit-dialog-actions {
+  margin-top: 4px;
+}
+
 .stock-godown-cap {
   font-size: 12.5px;
   font-weight: 600;
@@ -580,6 +606,28 @@
   max-width: 150px;
   padding: 5px 8px;
   font-size: 12.5px;
+}
+
+/* Gentle nudge on godown pickers — runs twice, then rests. */
+@keyframes stock-godown-nudge {
+  0%, 100% {
+    border-color: var(--border);
+    box-shadow: none;
+  }
+  50% {
+    border-color: var(--gold-dark);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold-dark) 16%, transparent);
+  }
+}
+
+.stock-godown-picker select {
+  animation: stock-godown-nudge 1.6s ease-in-out 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stock-godown-picker select {
+    animation: none;
+  }
 }
 
 .receipt-more,

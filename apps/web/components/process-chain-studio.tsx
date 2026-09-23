@@ -4,6 +4,7 @@ import {
   Background,
   BackgroundVariant,
   Connection,
+  ConnectionMode,
   Controls,
   Handle,
   MarkerType,
@@ -20,20 +21,25 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogProcessType } from './process-catalog';
-import { Button, Canvas, Field, Input, Select } from './ui';
+import { StudioFlowEdge } from './process-studio-edge';
+import { Button, Canvas, Field, IconButton, Input, Select } from './ui';
 import {
   STUDIO_GRID,
   buildLibrary,
+  cloneLayout,
   createNodeFromBlock,
+  isCellOccupied,
   layoutFromChain,
   materialFlowForType,
+  normalizeLayout,
   readStoredLayout,
   snapPosition,
   stepsFromLayout,
   writeStoredLayout,
   type ProcessingChainRecord,
+  type StudioLayout,
   type StudioLibraryBlock,
   type StudioNodeData,
 } from '../lib/process-studio';
@@ -41,22 +47,21 @@ import {
 const DRAG_TYPE = 'application/millsaathi-process-block';
 
 const defaultEdgeOptions = {
-  type: 'smoothstep' as const,
+  type: 'studio' as const,
   markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--edge-color)' },
   style: { stroke: 'var(--edge-color)', strokeWidth: 2 },
-  labelStyle: { fill: 'var(--green-dark)', fontWeight: 800, fontSize: 10 },
-  labelBgStyle: { fill: '#E6F0E9', fillOpacity: 0.96 },
-  labelBgPadding: [8, 5] as [number, number],
-  labelBgBorderRadius: 10,
 };
 
+const edgeTypes = { studio: StudioFlowEdge };
+
+/** One connectable dot per side — loose mode allows any side to any side (e.g. top → top). */
 function StudioHandles() {
   return (
     <>
-      <Handle className="process-studio-handle" type="target" position={Position.Left} />
-      <Handle className="process-studio-handle" type="source" position={Position.Right} />
-      <Handle className="process-studio-handle process-studio-handle--top" type="target" position={Position.Top} id="top-target" />
-      <Handle className="process-studio-handle process-studio-handle--bottom" type="source" position={Position.Bottom} id="bottom-source" />
+      <Handle className="process-studio-handle" type="source" position={Position.Left} id="left" />
+      <Handle className="process-studio-handle" type="source" position={Position.Right} id="right" />
+      <Handle className="process-studio-handle" type="source" position={Position.Top} id="top" />
+      <Handle className="process-studio-handle" type="source" position={Position.Bottom} id="bottom" />
     </>
   );
 }
@@ -146,6 +151,10 @@ function StudioCanvas({
   onError: (message: string | null) => void;
 }) {
   const reactFlow = useReactFlow<Node<StudioNodeData>, Edge>();
+  const studioRef = useRef<HTMLDivElement>(null);
+  const undoStackRef = useRef<StudioLayout[]>([]);
+  const redoStackRef = useRef<StudioLayout[]>([]);
+  const dragOriginRef = useRef<{ nodeId: string; position: { x: number; y: number } } | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StudioNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -153,6 +162,9 @@ function StudioCanvas({
   const [edgeLabelDraft, setEdgeLabelDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [libraryQuery, setLibraryQuery] = useState('');
+  const [fullscreen, setFullscreen] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const library = useMemo(() => buildLibrary(types), [types]);
   const filteredLibrary = useMemo(() => {
@@ -161,19 +173,54 @@ function StudioCanvas({
     return library.filter((block) => block.name.toLowerCase().includes(query) || block.description.toLowerCase().includes(query));
   }, [library, libraryQuery]);
 
+  const resetHistory = useCallback(() => {
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    setCanUndo(false);
+    setCanRedo(false);
+  }, []);
+
+  const snapshotLayout = useCallback(() => cloneLayout({ nodes, edges }), [nodes, edges]);
+
+  const pushUndo = useCallback(() => {
+    undoStackRef.current.push(snapshotLayout());
+    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+    redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, [snapshotLayout]);
+
+  const applyLayout = useCallback((layout: StudioLayout) => {
+    setNodes(layout.nodes);
+    setEdges(layout.edges.map((edge) => ({ ...edge, type: 'studio' })));
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    onError(null);
+  }, [onError, setEdges, setNodes]);
+
   const loadLayout = useCallback(() => {
     const stored = readStoredLayout(chain.id);
     const fallback = layoutFromChain(chain, types);
-    const next = stored?.nodes.length ? stored : fallback;
+    const next = normalizeLayout(stored?.nodes.length ? stored : fallback);
     setNodes(next.nodes);
-    setEdges(next.edges);
+    setEdges(next.edges.map((edge) => ({ ...edge, type: 'studio' })));
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
-  }, [chain, types, setEdges, setNodes]);
+    resetHistory();
+  }, [chain, types, resetHistory, setEdges, setNodes]);
 
   useEffect(() => {
     loadLayout();
   }, [loadLayout]);
+
+  useEffect(() => {
+    function onFullscreenChange() {
+      setFullscreen(document.fullscreenElement === studioRef.current);
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
 
   useEffect(() => {
     if (!nodes.length) return;
@@ -189,9 +236,64 @@ function StudioCanvas({
     setEdgeLabelDraft(typeof selectedEdge?.label === 'string' ? selectedEdge.label : '');
   }, [selectedEdge]);
 
+  const undo = useCallback(() => {
+    const previous = undoStackRef.current.pop();
+    if (!previous) return;
+    redoStackRef.current.push(snapshotLayout());
+    if (redoStackRef.current.length > 50) redoStackRef.current.shift();
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(true);
+    applyLayout(previous);
+  }, [applyLayout, snapshotLayout]);
+
+  const redo = useCallback(() => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current.push(snapshotLayout());
+    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+    setCanUndo(true);
+    setCanRedo(redoStackRef.current.length > 0);
+    applyLayout(next);
+  }, [applyLayout, snapshotLayout]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!canManage) return;
+      const key = event.key.toLowerCase();
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (key === 'z' && event.shiftKey) {
+        event.preventDefault();
+        redo();
+        return;
+      }
+      if (key === 'z') {
+        event.preventDefault();
+        undo();
+        return;
+      }
+      if (key === 'y') {
+        event.preventDefault();
+        redo();
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [canManage, redo, undo]);
+
+  function toggleFullscreen() {
+    const element = studioRef.current;
+    if (!element) return;
+    if (document.fullscreenElement === element) {
+      void document.exitFullscreen();
+      return;
+    }
+    void element.requestFullscreen();
+  }
+
   const onConnect = useCallback((connection: Connection) => {
+    pushUndo();
     setEdges((current) => addEdge({ ...connection, ...defaultEdgeOptions }, current));
-  }, [setEdges]);
+  }, [pushUndo, setEdges]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -209,11 +311,17 @@ function StudioCanvas({
       return;
     }
     const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const node = createNodeFromBlock(block, position);
+    const node = createNodeFromBlock(block, position, nodes);
+    if (!node) {
+      onError('No empty grid cell is available here. Move or remove a block first.');
+      return;
+    }
+    pushUndo();
     setNodes((current) => [...current, node]);
     setSelectedNodeId(node.id);
     setSelectedEdgeId(null);
-  }, [reactFlow, setNodes]);
+    onError(null);
+  }, [nodes, onError, pushUndo, reactFlow, setNodes]);
 
   function updateSelectedNode(patch: Partial<StudioNodeData>) {
     if (!selectedNodeId) return;
@@ -231,12 +339,14 @@ function StudioCanvas({
 
   function removeSelected() {
     if (selectedNodeId) {
+      pushUndo();
       setNodes((current) => current.filter((node) => node.id !== selectedNodeId));
       setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
       setSelectedNodeId(null);
       return;
     }
     if (selectedEdgeId) {
+      pushUndo();
       setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
       setSelectedEdgeId(null);
     }
@@ -273,13 +383,22 @@ function StudioCanvas({
   const utilityBlocks = filteredLibrary.filter((block) => block.section === 'utility');
 
   return (
-    <div className="process-studio">
+    <div ref={studioRef} className={`process-studio${fullscreen ? ' process-studio--fullscreen' : ''}`}>
       <div className="process-studio-head">
         <div>
           <h3 className="process-studio-title">Your milling process</h3>
           <p className="muted">Drag blocks onto the grid, then connect them with arrows.</p>
         </div>
         <div className="process-studio-head-actions">
+          {canManage && (
+            <div className="process-studio-history-actions">
+              <IconButton type="button" disabled={!canUndo} onClick={undo} aria-label="Undo" title="Undo (Ctrl+Z)">↶</IconButton>
+              <IconButton type="button" disabled={!canRedo} onClick={redo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)">↷</IconButton>
+            </div>
+          )}
+          <Button type="button" className="secondary" onClick={toggleFullscreen}>
+            {fullscreen ? 'Exit full screen' : 'Full screen'}
+          </Button>
           {canManage && (
             <>
               <Button type="button" className="secondary" onClick={loadLayout}>Reset layout</Button>
@@ -326,7 +445,10 @@ function StudioCanvas({
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               defaultEdgeOptions={defaultEdgeOptions}
+              connectionMode={ConnectionMode.Loose}
+              connectionRadius={28}
               snapToGrid
               snapGrid={[STUDIO_GRID.col, STUDIO_GRID.row]}
               fitView
@@ -349,10 +471,30 @@ function StudioCanvas({
                 setSelectedNodeId(null);
                 setSelectedEdgeId(null);
               }}
+              onNodeDragStart={(_, node) => {
+                dragOriginRef.current = { nodeId: node.id, position: { ...node.position } };
+              }}
               onNodeDragStop={(_, node) => {
+                const origin = dragOriginRef.current?.nodeId === node.id ? dragOriginRef.current.position : node.position;
+                dragOriginRef.current = null;
+                const snapped = snapPosition(node.position);
+                const occupied = isCellOccupied(nodes, snapped, node.id);
+                const nextPosition = occupied ? origin : snapped;
+                if (occupied && (nextPosition.x !== snapped.x || nextPosition.y !== snapped.y)) {
+                  onError('That grid cell is already occupied.');
+                } else {
+                  onError(null);
+                }
+                if (nextPosition.x !== origin.x || nextPosition.y !== origin.y) {
+                  pushUndo();
+                }
                 setNodes((current) => current.map((entry) => (
-                  entry.id === node.id ? { ...entry, position: snapPosition(node.position) } : entry
+                  entry.id === node.id ? { ...entry, position: nextPosition } : entry
                 )));
+              }}
+              onBeforeDelete={async () => {
+                pushUndo();
+                return true;
               }}
             >
               <Background variant={BackgroundVariant.Lines} gap={[STUDIO_GRID.col, STUDIO_GRID.row]} color="var(--canvas-grid)" />
@@ -372,6 +514,7 @@ function StudioCanvas({
 
         <aside className="process-studio-detail">
           <p className="process-studio-section-label">Process details</p>
+          <div className="process-studio-detail-body">
           {selectedNode ? (
             <>
               <h4 className="process-studio-detail-title">{selectedNode.data.name}</h4>
@@ -473,6 +616,7 @@ function StudioCanvas({
           ) : (
             <p className="muted process-studio-empty">Select a block on the canvas to edit machine details and material flow.</p>
           )}
+          </div>
         </aside>
       </div>
     </div>

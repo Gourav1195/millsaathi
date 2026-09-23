@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -37,6 +37,8 @@ type Lot = {
   item_id?: string;
   item_name?: string;
   qty_kg?: number;
+  entered_quantity?: number | null;
+  entered_unit?: string | null;
   godown_id?: string | null;
   godown_name?: string;
   in_date?: string;
@@ -88,8 +90,10 @@ const pct = (value: number | null | undefined) =>
   value == null ? '—' : `${value.toLocaleString('en-IN', { maximumFractionDigits: 1 })}%`;
 
 const initialEditForm = (lot: Lot): LotForm => ({
-  quantity: String((lot.qty_kg ?? 0) / 100),
-  unit: 'QUINTAL',
+  quantity: lot.entered_quantity != null
+    ? String(lot.entered_quantity)
+    : String((lot.qty_kg ?? 0) / 100),
+  unit: lot.entered_unit ?? 'QUINTAL',
   godown_id: lot.godown_id ?? '',
   moisture: lot.moisture_pct == null ? '' : String(lot.moisture_pct),
   value: lot.value_paise == null ? '' : String(lot.value_paise / 100),
@@ -135,6 +139,7 @@ export function StockApp() {
   const [rejectedExpanded, setRejectedExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const editDialogRef = useRef<HTMLDialogElement>(null);
 
   const load = async () => {
     const data = await api<Overview>('/api/overview');
@@ -154,6 +159,13 @@ export function StockApp() {
   useEffect(() => {
     if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load stock'));
   }, [session]);
+
+  useEffect(() => {
+    const dialog = editDialogRef.current;
+    if (!dialog) return;
+    if (editing && editForm && !dialog.open) dialog.showModal();
+    if (!editing && dialog.open) dialog.close();
+  }, [editing, editForm]);
 
   const canMoney = session != null && session.role !== 'manager';
   const canCreate = session != null && !['viewer', 'manager'].includes(session.role);
@@ -194,6 +206,12 @@ export function StockApp() {
     ],
     [canMoney, canEdit],
   );
+
+  function closeEdit() {
+    if (saving) return;
+    setEditing(null);
+    setEditForm(null);
+  }
 
   function startEdit(lot: Lot) {
     setError(null);
@@ -407,7 +425,7 @@ export function StockApp() {
                 </div>
                 <div className="receipt-toast-actions">
                   {(overview?.godowns.length ?? 0) > 0 ? (
-                    <label className="receipt-godown">
+                    <label className="receipt-godown stock-godown-picker">
                       <span>Godown</span>
                       <Select
                         value={receiptGodowns[receipt.id] ?? overview?.godowns[0]?.id ?? ''}
@@ -527,45 +545,77 @@ export function StockApp() {
           </Panel>
         )}
 
-        {editing && editForm && (
-          <Panel title={`Edit ${editing.code}`}>
-            <FormGrid className="ui-form-grid--compact" onSubmit={saveEdit}>
-              <Field label="Quantity (qtl)">
-                <Input required type="number" min="0.001" step="0.001" value={editForm.quantity} onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })} />
-              </Field>
-              <Field label="Unit">
-                <Select value={editForm.unit} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}>
-                  <option>KG</option>
-                  <option>QUINTAL</option>
-                  <option>TONNE</option>
-                </Select>
-              </Field>
-              <Field label="Godown">
-                <Select value={editForm.godown_id} onChange={(e) => setEditForm({ ...editForm, godown_id: e.target.value })}>
-                  <option value="">Not specified</option>
-                  {(overview?.godowns ?? []).map((godown) => (
-                    <option key={godown.id} value={godown.id}>{godown.name}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Moisture %">
-                <Input type="number" min="0" max="100" step="0.1" value={editForm.moisture} onChange={(e) => setEditForm({ ...editForm, moisture: e.target.value })} />
-              </Field>
-              {canMoney ? (
-                <Field label="Value ₹">
-                  <Input type="number" min="0" step="0.01" value={editForm.value} onChange={(e) => setEditForm({ ...editForm, value: e.target.value })} />
+        <dialog
+          ref={editDialogRef}
+          className="app-dialog stock-edit-dialog"
+          onClose={() => {
+            if (!saving) closeEdit();
+          }}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeEdit();
+          }}
+        >
+          {editing && editForm ? (
+            <>
+              <div className="app-dialog-head">
+                <div>
+                  <h2>Edit {editing.code}</h2>
+                  <p>
+                    <strong>{editing.item_name ?? 'Item'}</strong>
+                    {editing.godown_name ? ` · ${editing.godown_name}` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="app-dialog-close ms-focus-ring"
+                  aria-label="Close edit lot dialog"
+                  onClick={closeEdit}
+                  disabled={saving}
+                >
+                  ×
+                </button>
+              </div>
+              <FormGrid className="ui-form-grid--compact stock-edit-dialog-form" onSubmit={saveEdit}>
+                <Field label="Quantity">
+                  <Input required type="number" min="0.001" step="0.001" value={editForm.quantity} onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })} />
                 </Field>
-              ) : null}
-              <Field label="Note">
-                <Textarea value={editForm.note} onChange={(e) => setEditForm({ ...editForm, note: e.target.value })} />
-              </Field>
-              <FormActions>
-                <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
-                <Button className="secondary" type="button" onClick={() => { setEditing(null); setEditForm(null); }}>Cancel</Button>
-              </FormActions>
-            </FormGrid>
-          </Panel>
-        )}
+                <Field label="Unit">
+                  <Select value={editForm.unit} onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}>
+                    <option>KG</option>
+                    <option>QUINTAL</option>
+                    <option>TONNE</option>
+                  </Select>
+                </Field>
+                <div className="stock-godown-picker">
+                  <Field label="Godown">
+                    <Select value={editForm.godown_id} onChange={(e) => setEditForm({ ...editForm, godown_id: e.target.value })}>
+                      <option value="">Not specified</option>
+                      {(overview?.godowns ?? []).map((godown) => (
+                        <option key={godown.id} value={godown.id}>{godown.name}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+                <Field label="Moisture %">
+                  <Input type="number" min="0" max="100" step="0.1" value={editForm.moisture} onChange={(e) => setEditForm({ ...editForm, moisture: e.target.value })} />
+                </Field>
+                {canMoney ? (
+                  <Field label="Value ₹">
+                    <Input type="number" min="0" step="0.01" value={editForm.value} onChange={(e) => setEditForm({ ...editForm, value: e.target.value })} />
+                  </Field>
+                ) : null}
+                <Field label="Note">
+                  <Textarea value={editForm.note} onChange={(e) => setEditForm({ ...editForm, note: e.target.value })} />
+                </Field>
+                <FormActions className="stock-edit-dialog-actions">
+                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+                  <Button className="secondary" type="button" onClick={closeEdit} disabled={saving}>Cancel</Button>
+                </FormActions>
+              </FormGrid>
+            </>
+          ) : null}
+        </dialog>
 
         <TableCard
           title="Lots on hand"

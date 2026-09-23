@@ -1,7 +1,8 @@
 import type { Edge, Node } from '@xyflow/react';
 import type { CatalogProcessType } from '../components/process-catalog';
 
-export const STUDIO_GRID = { col: 200, row: 140 };
+/** Horizontal cell width is wider than the node so arrows have room between cards. */
+export const STUDIO_GRID = { col: 300, row: 140 };
 export const STUDIO_NODE_SIZE = { width: 176, height: 104 };
 
 export type StudioNodeKind = 'process' | 'storage' | 'gate' | 'custom';
@@ -74,6 +75,66 @@ export function snapPosition(position: { x: number; y: number }) {
   };
 }
 
+export function gridCellKey(position: { x: number; y: number }) {
+  const snapped = snapPosition(position);
+  return `${snapped.x},${snapped.y}`;
+}
+
+export function isCellOccupied(
+  nodes: Node<StudioNodeData>[],
+  position: { x: number; y: number },
+  ignoreNodeId?: string,
+) {
+  const key = gridCellKey(position);
+  return nodes.some((node) => node.id !== ignoreNodeId && gridCellKey(node.position) === key);
+}
+
+/** Returns a snapped grid cell for `position`, or the nearest free cell within `maxRadius`. */
+export function resolveFreeCell(
+  nodes: Node<StudioNodeData>[],
+  position: { x: number; y: number },
+  ignoreNodeId?: string,
+  maxRadius = 16,
+) {
+  const origin = snapPosition(position);
+  if (!isCellOccupied(nodes, origin, ignoreNodeId)) return origin;
+
+  for (let radius = 1; radius <= maxRadius; radius += 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+        const candidate = {
+          x: origin.x + dx * STUDIO_GRID.col,
+          y: origin.y + dy * STUDIO_GRID.row,
+        };
+        if (candidate.x < 0 || candidate.y < 0) continue;
+        if (!isCellOccupied(nodes, candidate, ignoreNodeId)) return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function cloneLayout(layout: StudioLayout): StudioLayout {
+  return {
+    nodes: JSON.parse(JSON.stringify(layout.nodes)) as Node<StudioNodeData>[],
+    edges: JSON.parse(JSON.stringify(layout.edges)) as Edge[],
+  };
+}
+
+/** Ensures every node sits on a unique grid cell when loading saved layouts. */
+export function normalizeLayout(layout: StudioLayout): StudioLayout {
+  const nodes: Node<StudioNodeData>[] = [];
+
+  for (const node of layout.nodes) {
+    const position = resolveFreeCell(nodes, node.position, node.id) ?? snapPosition(node.position);
+    nodes.push({ ...node, position });
+  }
+
+  return { nodes, edges: layout.edges };
+}
+
 export function layoutStorageKey(chainId: string) {
   return `millsaathi-process-studio:${chainId}`;
 }
@@ -141,15 +202,21 @@ export function layoutFromChain(chain: ProcessingChainRecord, types: CatalogProc
     id: `edge-${nodes[index].id}-${node.id}`,
     source: nodes[index].id,
     target: node.id,
-    type: 'smoothstep',
+    type: 'studio',
   }));
 
   return { nodes, edges };
 }
 
-export function createNodeFromBlock(block: StudioLibraryBlock, position: { x: number; y: number }) {
+export function createNodeFromBlock(
+  block: StudioLibraryBlock,
+  position: { x: number; y: number },
+  nodes: Node<StudioNodeData>[] = [],
+) {
   const nodeId = `node-${block.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  return nodeFromBlock(block, position, nodeId);
+  const freeCell = resolveFreeCell(nodes, position);
+  if (!freeCell) return null;
+  return nodeFromBlock(block, freeCell, nodeId);
 }
 
 export function stepsFromLayout(nodes: Node<StudioNodeData>[]) {
