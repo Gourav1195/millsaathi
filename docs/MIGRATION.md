@@ -17,9 +17,18 @@ Worker in development. Use `npm run dev:worker:static` only to verify the export
 In production, the Worker serves the exported Next application and its `/api/*` routes on the
 same origin; no database URL or Cloudflare API token is required at runtime.
 
-The first migrated surface is `/app`: the Processing workspace uses React state, `@dnd-kit/core`
-for drag and drop, and `@xyflow/react` for an extensible processing-chain canvas. It reads the
-existing Worker endpoints and does not alter stock until the operator posts a run.
+The first migrated surface is `/app`: the Processing workspace uses React state and
+`@dnd-kit/core` for drag and drop. It reads the existing Worker endpoints and does not alter
+stock until the operator posts a run.
+
+### Processing destination godown
+
+Intermediate chain steps do not expose per-output or run-level destination godown controls in
+the React workspace. Only the terminal step in a processing chain (or a standalone process type
+that is not part of any chain) shows the destination godown selector when posting a run.
+
+Future follow-up: double-check godown placement from Stock and Lots, similar to vehicle
+traceability checks, once chain execution and stock views are migrated.
 
 ## Frontend route map
 

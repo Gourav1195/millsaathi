@@ -1,13 +1,23 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { api, json } from './api';
+import { applyTheme, type Theme } from './theme';
 
-export type Session = { id: string; name: string; role: string; mill: { id: string; name: string } };
+export type Session = {
+  id: string;
+  name: string;
+  role: string;
+  theme?: Theme;
+  preferred_unit?: string;
+  mill: { id: string; name: string; season_label?: string };
+};
 
 type SessionContextValue = {
   session: Session | null | undefined;
   setSession: (session: Session | null) => void;
   sessionError: string | null;
+  updateTheme: (theme: Theme) => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -33,8 +43,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
+  useEffect(() => {
+    if (!session?.theme) return;
+    applyTheme(session.theme);
+  }, [session?.theme]);
+
+  const updateTheme = useCallback(async (theme: Theme) => {
+    const result = await api<{ theme: Theme }>('/api/auth/me', json('PATCH', { theme }));
+    setSession((current) => current ? { ...current, theme: result.theme } : current);
+    applyTheme(result.theme);
+  }, []);
+
   return (
-    <SessionContext.Provider value={{ session, setSession, sessionError }}>
+    <SessionContext.Provider value={{ session, setSession, sessionError, updateTheme }}>
       {children}
     </SessionContext.Provider>
   );

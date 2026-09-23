@@ -1246,6 +1246,76 @@ api.delete('/:master{suppliers|buyers|items|godowns}/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+async function restoreSoftDeleted(c: any, table: string, master: string, id: string) {
+  const { mill } = c.get('session');
+  const result = await c.env.DB.prepare(`UPDATE ${table} SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
+  if (!result.meta.changes) return c.json({ error: 'archived record not found' }, 404);
+  await audit(c, master, id, 'RESTORE');
+  return c.json({ ok: true });
+}
+
+api.get('/archived', async (c) => {
+  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const db = c.env.DB;
+  const owner = effectiveRole(user) === 'owner';
+  const [suppliers, buyers, items, godowns, processTypes, chains, saudas] = await db.batch([
+    db.prepare(`SELECT id, name, type, deleted_at FROM suppliers WHERE mill_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`).bind(mill.id),
+    db.prepare(`SELECT id, name, type, deleted_at FROM buyers WHERE mill_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`).bind(mill.id),
+    db.prepare(`SELECT id, name, category, deleted_at FROM items WHERE mill_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`).bind(mill.id),
+    db.prepare(`SELECT id, name, location FROM godowns WHERE mill_id = ? AND active = 0 ORDER BY name`).bind(mill.id),
+    db.prepare(`SELECT id, name, deleted_at FROM process_types WHERE mill_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`).bind(mill.id),
+    db.prepare(`SELECT id, name, deleted_at FROM processing_chains WHERE mill_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`).bind(mill.id),
+    owner
+      ? db.prepare(`SELECT sa.id, sa.code, sa.direction, COALESCE(s.name, b.name) AS party_name, i.name AS item_name, sa.deleted_at FROM saudas sa LEFT JOIN suppliers s ON s.id = sa.supplier_id LEFT JOIN buyers b ON b.id = sa.buyer_id LEFT JOIN items i ON i.id = sa.item_id WHERE sa.mill_id = ? AND sa.deleted_at IS NOT NULL ORDER BY sa.deleted_at DESC LIMIT 500`).bind(mill.id)
+      : db.prepare(`SELECT 1 WHERE 0`),
+  ]);
+  return c.json({
+    suppliers: suppliers.results,
+    buyers: buyers.results,
+    items: items.results,
+    godowns: godowns.results,
+    process_types: processTypes.results,
+    processing_chains: chains.results,
+    saudas: owner ? saudas.results : [],
+  });
+});
+
+api.patch('/suppliers/:id/restore', async (c) => {
+  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  return restoreSoftDeleted(c, 'suppliers', 'suppliers', c.req.param('id'));
+});
+
+api.patch('/buyers/:id/restore', async (c) => {
+  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  return restoreSoftDeleted(c, 'buyers', 'buyers', c.req.param('id'));
+});
+
+api.patch('/items/:id/restore', async (c) => {
+  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  return restoreSoftDeleted(c, 'items', 'items', c.req.param('id'));
+});
+
+api.patch('/godowns/:id/restore', async (c) => {
+  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const { mill } = c.get('session');
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare(`UPDATE godowns SET active = 1 WHERE id = ? AND mill_id = ? AND active = 0`).bind(id, mill.id).run();
+  if (!result.meta.changes) return c.json({ error: 'archived godown not found' }, 404);
+  await audit(c, 'godowns', id, 'RESTORE');
+  return c.json({ ok: true });
+});
+
+api.patch('/saudas/:id/restore', async (c) => {
+  const { user, mill } = c.get('session');
+  if (effectiveRole(user) !== 'owner') return c.json({ error: 'only the owner can restore saudas' }, 403);
+  const id = c.req.param('id');
+  const result = await c.env.DB.prepare(`UPDATE saudas SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
+  if (!result.meta.changes) return c.json({ error: 'archived sauda not found' }, 404);
+  await audit(c, 'sauda', id, 'RESTORE');
+  return c.json({ ok: true });
+});
+
 api.get('/team', async (c) => {
   const denied = denyUnless(c, 'MANAGE_MEMBERS'); if (denied) return denied;
   const { mill } = c.get('session');

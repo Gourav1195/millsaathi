@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Archivo, IBM_Plex_Sans, Noto_Sans_Devanagari } from 'next/font/google';
 import { RegionScript } from '../components/region-script';
+import { ThemeScript } from '../components/theme-script';
 import './globals.css';
 
 const ibmPlexSans = IBM_Plex_Sans({
@@ -36,8 +37,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       className={`${ibmPlexSans.variable} ${archivo.variable} ${notoDevanagari.variable}`}
       suppressHydrationWarning
     >
-      <body suppressHydrationWarning>
+      <head>
+        <ThemeScript />
         <RegionScript />
+      </head>
+      <body suppressHydrationWarning>
         {children}
       </body>
     </html>

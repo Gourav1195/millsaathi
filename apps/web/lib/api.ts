@@ -7,6 +7,6 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export function json(method: 'POST' | 'PATCH' | 'DELETE', value: unknown): RequestInit {
+export function json(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', value: unknown): RequestInit {
   return { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) };
 }

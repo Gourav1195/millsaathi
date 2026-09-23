@@ -1,31 +1,472 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './app-header';
+import {
+  Alert,
+  Badge,
+  Button,
+  DataTable,
+  EmptyState,
+  Field,
+  FilterSearch,
+  FormActions,
+  FormGrid,
+  Input,
+  PageHeader,
+  Panel,
+  RangeField,
+  Select,
+  TableActions,
+  TableCard,
+  TableFilters,
+  TablePager,
+  Tab,
+  TabRow,
+} from './ui';
+import { useArchiveDialog } from './archive-dialog';
+import { millHeaderMeta } from '../lib/app-meta';
+import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
+import { balanceColumnLabel, brokerCommissionDuePaise, brokerSaudaCount, partyBalanceMeta, type SaudaBrokerRef } from '../lib/party-balance';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
-type Party = { id: string; name: string; phone?: string | null; city?: string | null; gstin?: string | null; outstanding_paise?: number; receivable_paise?: number; supplied_kg?: number; purchased_kg?: number; last_at?: string | null };
-type PartyKind = 'suppliers' | 'buyers';
-const money = (paise: number | undefined) => paise == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(paise / 100);
+type PartyTab = 'all' | 'buyers' | 'sellers' | 'brokers';
+type PartyRole = 'buyer' | 'seller' | 'broker';
+type SourceKind = 'buyer' | 'supplier';
+
+type RawSupplier = {
+  id: string;
+  name: string;
+  type?: string;
+  phone?: string | null;
+  place?: string | null;
+  gstin?: string | null;
+  outstanding_paise?: number;
+  supplied_kg?: number;
+  last_at?: string | null;
+};
+
+type RawBuyer = {
+  id: string;
+  name: string;
+  type?: string;
+  phone?: string | null;
+  location?: string | null;
+  gstin?: string | null;
+  receivable_paise?: number;
+  bought_kg?: number;
+  last_at?: string | null;
+};
+
+type UnifiedParty = {
+  id: string;
+  name: string;
+  role: PartyRole;
+  sourceKind: SourceKind;
+  subtype: string;
+  phone?: string | null;
+  city?: string | null;
+  gstin?: string | null;
+  balance_paise?: number;
+  volume_kg?: number;
+  broker_deals?: number;
+  last_at?: string | null;
+};
+
+const qtl = (kg: number | undefined) => `${((kg ?? 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} qtl`;
+
+const initials = (name: string) => name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
+
+const ago = (value: string | null | undefined) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const days = Math.floor((Date.now() - date.getTime()) / 86400000);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
+
+const ROLE_LABEL: Record<PartyRole, string> = { buyer: 'Buyer', seller: 'Seller', broker: 'Broker' };
+
+// Matches Worker validation in src/api.ts (suppliers.type / buyers.type).
+const SELLER_TYPES = [
+  { value: 'farmer', label: 'Farmer' },
+  { value: 'trader', label: 'Trader' },
+];
+
+const BUYER_TYPES = ['Wholesaler', 'Distributor', 'Retailer', 'Exporter', 'Bran buyer', 'Husk buyer'];
+
+function normalizeParties(suppliers: RawSupplier[], buyers: RawBuyer[], saudas: SaudaBrokerRef[]): UnifiedParty[] {
+  const sellerParties = suppliers.map((party) => {
+    const isBroker = String(party.type ?? 'farmer').toLowerCase() === 'broker';
+    return {
+      id: party.id,
+      name: party.name,
+      role: isBroker ? 'broker' as const : 'seller' as const,
+      sourceKind: 'supplier' as const,
+      subtype: party.type ?? (isBroker ? 'broker' : 'farmer'),
+      phone: party.phone,
+      city: party.place,
+      gstin: party.gstin,
+      balance_paise: isBroker ? brokerCommissionDuePaise(party.name, saudas) : party.outstanding_paise,
+      volume_kg: isBroker ? undefined : party.supplied_kg,
+      broker_deals: isBroker ? brokerSaudaCount(party.name, saudas) : undefined,
+      last_at: party.last_at,
+    };
+  });
+  const buyerParties = buyers.map((party) => ({
+    id: party.id,
+    name: party.name,
+    role: 'buyer' as const,
+    sourceKind: 'buyer' as const,
+    subtype: party.type ?? 'Wholesaler',
+    phone: party.phone,
+    city: party.location,
+    gstin: party.gstin,
+    balance_paise: party.receivable_paise,
+    volume_kg: party.bought_kg,
+    last_at: party.last_at,
+  }));
+  return [...sellerParties, ...buyerParties].sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export function PartiesApp() {
   const { session, sessionError } = useSession();
-  const [kind, setKind] = useState<PartyKind>('suppliers');
-  const [suppliers, setSuppliers] = useState<Party[]>([]);
-  const [buyers, setBuyers] = useState<Party[]>([]);
+  const { requestArchive } = useArchiveDialog();
+  const headerMeta = millHeaderMeta(session);
+  const [parties, setParties] = useState<UnifiedParty[]>([]);
+  const [tab, setTab] = useState<PartyTab>('all');
   const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [page, setPage] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', phone: '', city: '' });
-  const load = async () => { const body = await api<{ suppliers: Party[]; buyers: Party[] }>('/api/overview'); setSuppliers(body.suppliers); setBuyers(body.buyers); };
-  useEffect(() => { if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load parties')); }, [session]);
-  async function create(event: React.FormEvent) { event.preventDefault(); if (!form.name.trim()) return setError('Party name is required.'); const endpoint = kind === 'suppliers' ? '/api/suppliers' : '/api/buyers'; const payload = kind === 'suppliers' ? { name: form.name, phone: form.phone, place: form.city, type: 'farmer' } : { name: form.name, phone: form.phone, location: form.city, type: 'Wholesaler' }; try { await api(endpoint, json('POST', payload)); setForm({name:'',phone:'',city:''}); await load(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create party'); } }
-  async function archive(party: Party) { if (!window.confirm(`Archive ${party.name}?`)) return; try { await api(`/api/${kind}/${party.id}`, json('DELETE', {})); await load(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not archive party'); } }
-  async function payment(party: Party) { const amount = window.prompt('Amount in rupees'); if (!amount) return; const paise = Math.round(Number(amount) * 100); if (!Number.isFinite(paise) || paise <= 0) return setError('Enter a positive payment amount.'); try { await api('/api/payments', json('POST', { party_kind: kind === 'suppliers' ? 'supplier' : 'buyer', party_id: party.id, amount_paise: paise, method: 'cash' })); await load(); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not record payment'); } }
-  const parties = kind === 'suppliers' ? suppliers : buyers;
-  const filtered = useMemo(() => parties.filter((party) => `${party.name} ${party.phone ?? ''} ${party.city ?? ''}`.toLowerCase().includes(query.toLowerCase())), [parties, query]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({
+    name: '',
+    phone: '',
+    city: '',
+    kind: 'seller' as 'buyer' | 'seller' | 'broker',
+    sellerType: 'farmer',
+    buyerType: 'Wholesaler',
+  });
+
+  const load = async () => {
+    const body = await api<{ suppliers: RawSupplier[]; buyers: RawBuyer[]; saudas: SaudaBrokerRef[] }>('/api/overview');
+    setParties(normalizeParties(body.suppliers, body.buyers, body.saudas ?? []));
+  };
+
+  useEffect(() => {
+    if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load parties'));
+  }, [session]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [tab, query, filters]);
+
+  const tabParties = useMemo(() => {
+    if (tab === 'all') return parties;
+    if (tab === 'buyers') return parties.filter((party) => party.role === 'buyer');
+    if (tab === 'sellers') return parties.filter((party) => party.role === 'seller');
+    return parties.filter((party) => party.role === 'broker');
+  }, [parties, tab]);
+
+  const filtered = useMemo(
+    () => filterRows(tabParties, query, filters, {
+      quantityKg: (party) => party.volume_kg,
+      match: (party, activeFilters) => {
+        const location = party.city ?? '';
+        const subtype = party.subtype ?? '';
+        return (!activeFilters.type || activeFilters.type === subtype)
+          && (!activeFilters.location || activeFilters.location === location);
+      },
+    }),
+    [tabParties, query, filters],
+  );
+
+  const pageData = useMemo(() => paginate(filtered, page), [filtered, page]);
+  const typeOptions = useMemo(() => uniqueValues(tabParties, (party) => party.subtype), [tabParties]);
+  const locationOptions = useMemo(() => uniqueValues(tabParties, (party) => party.city), [tabParties]);
+  const partyColumns = useMemo(() => [
+    { id: 'name', label: 'Name' },
+    { id: 'type', label: 'Type' },
+    { id: 'location', label: 'Location' },
+    { id: 'volume', label: tab === 'brokers' ? 'Linked saudas' : 'Season volume' },
+    { id: 'balance', label: balanceColumnLabel(tab) },
+    { id: 'last', label: 'Last' },
+    { id: 'actions', label: '' },
+  ], [tab]);
+  const restrictedMoney = session?.role === 'manager';
+
+  const effectiveKind = tab === 'all' ? form.kind : tab === 'buyers' ? 'buyer' : tab === 'brokers' ? 'broker' : 'seller';
+  const addTitle = tab === 'all'
+    ? 'Add New Party'
+    : effectiveKind === 'buyer'
+      ? 'Add New buyer'
+      : effectiveKind === 'broker'
+        ? 'Add New broker'
+        : 'Add New seller';
+  const addButtonLabel = tab === 'all' ? 'Add New Party' : addTitle;
+  const addPanelClass = `party-add-panel--${effectiveKind === 'buyer' ? 'buyer' : effectiveKind === 'broker' ? 'broker' : effectiveKind === 'seller' ? 'seller' : 'default'}`;
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    if (!form.name.trim()) return setError('Party name is required.');
+
+    try {
+      if (effectiveKind === 'buyer') {
+        await api('/api/buyers', json('POST', {
+          name: form.name,
+          phone: form.phone,
+          location: form.city,
+          type: form.buyerType,
+        }));
+      } else {
+        await api('/api/suppliers', json('POST', {
+          name: form.name,
+          phone: form.phone,
+          place: form.city,
+          type: effectiveKind === 'broker' ? 'broker' : form.sellerType,
+        }));
+      }
+      setForm({ name: '', phone: '', city: '', kind: effectiveKind === 'buyer' ? 'buyer' : effectiveKind === 'broker' ? 'broker' : 'seller', sellerType: 'farmer', buyerType: 'Wholesaler' });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not create party');
+    }
+  }
+
+  function archive(party: UnifiedParty) {
+    const endpoint = party.sourceKind === 'supplier' ? 'suppliers' : 'buyers';
+    requestArchive({
+      title: `Archive ${ROLE_LABEL[party.role].toLowerCase()}?`,
+      name: party.name,
+      confirmLabel: `Archive ${ROLE_LABEL[party.role].toLowerCase()}`,
+      onConfirm: async () => {
+        await api(`/api/${endpoint}/${party.id}`, json('DELETE', {}));
+        await load();
+      },
+    });
+  }
+
+  async function payment(party: UnifiedParty) {
+    const amount = window.prompt('Amount in rupees');
+    if (!amount) return;
+    const paise = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(paise) || paise <= 0) return setError('Enter a positive payment amount.');
+    try {
+      await api('/api/payments', json('POST', {
+        party_kind: party.sourceKind,
+        party_id: party.id,
+        amount_paise: paise,
+        method: 'cash',
+      }));
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not record payment');
+    }
+  }
+
+  function clearFilters() {
+    setQuery('');
+    setFilters({});
+  }
+
   if (session === undefined) return <main className="auth-page"><p className="muted">Loading parties…</p></main>;
-  if (!session) return <main className="auth-page"><div className="auth-card"><h1>Sign in required</h1>{sessionError && <p className="error">{sessionError}</p>}<AppLink className="primary" href="/app">Go to login</AppLink></div></main>;
-  return <main className="shell"><AppHeader session={session} /><section className="workspace"><div className="dashboard-heading"><div><h2>Parties</h2><p className="muted">Party mutations are validated and tenant-scoped by the Worker.</p></div><AppLink className="primary" href="/app/purchase">Open Saudās</AppLink></div>{error && <p className="error">{error}</p>}<div className="party-controls"><div className="filter-tabs" role="group" aria-label="Party type"><button className={kind === 'suppliers' ? 'selected' : ''} onClick={() => setKind('suppliers')}>Suppliers</button><button className={kind === 'buyers' ? 'selected' : ''} onClick={() => setKind('buyers')}>Buyers</button></div><input className="stock-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, phone, or city" aria-label="Search parties" /></div><section className="panel" style={{marginTop:16}}><h2>New {kind.slice(0,-1)}</h2><form className="workflow-form" onSubmit={create}><label>Name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></label><label>Phone<input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})}/></label><label>City<input value={form.city} onChange={e=>setForm({...form,city:e.target.value})}/></label><button className="post">Create</button></form></section><section className="panel" style={{ marginTop: 16 }}><div className="party-header"><span>Name</span><span>Phone</span><span>City</span><span>GSTIN</span><span>{kind === 'suppliers' ? 'Payable' : 'Receivable'}</span></div>{filtered.map((party) => <div className="party-row" key={party.id}><strong>{party.name}</strong><span>{party.phone ?? '—'}</span><span>{party.city ?? '—'}</span><span>{party.gstin ?? '—'}</span><strong className="inline-actions">{session.role === 'manager' ? 'Restricted' : money(kind === 'suppliers' ? party.outstanding_paise : party.receivable_paise)}{session.role !== 'manager' && <><button onClick={() => void payment(party)}>Payment</button><button onClick={() => void archive(party)}>Archive</button></>}</strong></div>)}{!filtered.length && <p className="muted">No matching {kind}.</p>}</section></section></main>;
+  if (!session) {
+    return (
+      <main className="auth-page">
+        <div className="auth-card">
+          <h1>Sign in required</h1>
+          {sessionError && <p className="error">{sessionError}</p>}
+          <AppLink className="primary" href="/app">Go to login</AppLink>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="shell">
+      <AppHeader session={session} />
+      <section className="workspace">
+        <PageHeader
+          title="Parties"
+          subtitle="Buyers, sellers, and brokers in one directory."
+          date={headerMeta.date}
+          season={headerMeta.season}
+          actions={
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span className="hint">{filtered.length} part{filtered.length === 1 ? 'y' : 'ies'}</span>
+              <AppLink href="/app/purchase"><Button className="quiet">Open Saudās</Button></AppLink>
+            </div>
+          }
+        />
+
+        {error && <Alert title="Action failed" level="red">{error}</Alert>}
+
+        <div className="party-toolbar">
+          <TabRow role="tablist" aria-label="Party groups">
+            <Tab selected={tab === 'all'} onClick={() => setTab('all')}>All Parties</Tab>
+            <Tab selected={tab === 'buyers'} onClick={() => setTab('buyers')}>Buyers</Tab>
+            <Tab selected={tab === 'sellers'} onClick={() => setTab('sellers')}>Sellers</Tab>
+            <Tab selected={tab === 'brokers'} onClick={() => setTab('brokers')}>Brokers</Tab>
+          </TabRow>
+          {!showAdd && (
+            <Button type="button" className="party-add-btn" onClick={() => setShowAdd(true)}>
+              + {addButtonLabel}
+              {tab === 'all' ? <span className="party-add-btn-chevron" aria-hidden="true">▾</span> : null}
+            </Button>
+          )}
+        </div>
+
+        {showAdd && (
+          <Panel
+            title={addTitle}
+            className={`party-add-panel ${addPanelClass}`}
+            actions={
+              <Button type="button" className="secondary" onClick={() => setShowAdd(false)} aria-label={`Close ${addTitle}`}>
+                Close
+              </Button>
+            }
+          >
+            <FormGrid onSubmit={create}>
+              <Field label="Name">
+                <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </Field>
+              {tab === 'all' && (
+                <Field label="Party kind">
+                  <Select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as 'buyer' | 'seller' | 'broker' })}>
+                    <option value="buyer">Buyer</option>
+                    <option value="seller">Seller</option>
+                    <option value="broker">Broker</option>
+                  </Select>
+                </Field>
+              )}
+              {effectiveKind === 'seller' && (
+                <Field label="Seller type">
+                  <Select value={form.sellerType} onChange={(e) => setForm({ ...form, sellerType: e.target.value })}>
+                    {SELLER_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </Select>
+                </Field>
+              )}
+              {effectiveKind === 'buyer' && (
+                <Field label="Buyer type">
+                  <Select value={form.buyerType} onChange={(e) => setForm({ ...form, buyerType: e.target.value })}>
+                    {BUYER_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}
+                  </Select>
+                </Field>
+              )}
+              <Field label="Phone">
+                <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              </Field>
+              <Field label="City / village">
+                <Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+              </Field>
+              <FormActions>
+                <Button type="submit">Save party</Button>
+              </FormActions>
+            </FormGrid>
+          </Panel>
+        )}
+
+        <TableCard>
+          <TableFilters
+            compact
+            onClear={clearFilters}
+            clearDisabled={!query && !Object.keys(filters).length}
+          >
+            <FilterSearch value={query} onChange={setQuery} placeholder="Search parties…" aria-label="Search parties" />
+            <Select
+              className="table-filter"
+              aria-label="Filter by type"
+              value={filters.type ?? ''}
+              onChange={(e) => setFilters({ ...filters, type: e.target.value })}
+            >
+              <option value="">All types</option>
+              {typeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+            </Select>
+            <Select
+              className="table-filter"
+              aria-label="Filter by location"
+              value={filters.location ?? ''}
+              onChange={(e) => setFilters({ ...filters, location: e.target.value })}
+            >
+              <option value="">All locations</option>
+              {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+            </Select>
+            <RangeField
+              label="Qty qtl"
+              min={filters.min_qty ?? ''}
+              max={filters.max_qty ?? ''}
+              onMinChange={(value) => setFilters({ ...filters, min_qty: value })}
+              onMaxChange={(value) => setFilters({ ...filters, max_qty: value })}
+            />
+          </TableFilters>
+
+          <DataTable columns={partyColumns}>
+            {pageData.rows.length ? pageData.rows.map((party) => {
+              const balance = partyBalanceMeta(party.role, party.balance_paise, restrictedMoney);
+              return (
+              <tr key={`${party.sourceKind}-${party.id}`} className={`party-row--${party.role}`}>
+                <td>
+                  <div className="party-name-cell">
+                    <span className={`party-avatar party-avatar--${party.role}`} aria-hidden="true">{initials(party.name)}</span>
+                    <strong>{party.name}</strong>
+                  </div>
+                </td>
+                <td>
+                  <Badge tone={party.role === 'buyer' ? 'success' : party.role === 'broker' ? 'gold' : 'neutral'}>
+                    {ROLE_LABEL[party.role]} · {party.subtype}
+                  </Badge>
+                </td>
+                <td>{party.city ?? '—'}</td>
+                <td>
+                  <strong>
+                    {party.role === 'broker'
+                      ? (party.broker_deals ? `${party.broker_deals} sauda${party.broker_deals === 1 ? '' : 's'}` : '—')
+                      : qtl(party.volume_kg)}
+                  </strong>
+                </td>
+                <td>
+                  <div className="party-balance-cell">
+                    {tab === 'all' ? <span className="party-balance-label">{balance.label}</span> : null}
+                    <strong style={{ color: balance.color }}>{balance.display}</strong>
+                  </div>
+                </td>
+                <td className="muted">{ago(party.last_at)}</td>
+                <td>
+                  {session.role !== 'manager' && (
+                    <TableActions>
+                      {party.role !== 'broker' && (
+                        <Button type="button" className="secondary" onClick={() => void payment(party)}>
+                          {party.role === 'buyer' ? 'Receive' : 'Pay'}
+                        </Button>
+                      )}
+                      <Button type="button" className="secondary" onClick={() => archive(party)}>Archive</Button>
+                    </TableActions>
+                  )}
+                </td>
+              </tr>
+              );
+            }) : (
+              <tr>
+                <td colSpan={partyColumns.length}><EmptyState>No matching parties.</EmptyState></td>
+              </tr>
+            )}
+          </DataTable>
+
+          <TablePager
+            total={pageData.total}
+            index={pageData.index}
+            pageSize={PAGE_SIZE}
+            onPrevious={() => setPage((current) => Math.max(0, current - 1))}
+            onNext={() => setPage((current) => current + 1)}
+          />
+        </TableCard>
+      </section>
+    </main>
+  );
 }

@@ -9,14 +9,17 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
 button, input, select, textarea { font: inherit; }
 
 ::selection {
-  background: var(--ink);
-  color: #fff;
+  background: var(--solid-bg);
+  color: var(--solid-fg);
 }
 
 .site-home ::selection {
@@ -38,7 +41,7 @@ input::placeholder { color: var(--nav-text); }
 html[data-region="intl"] .deva { display: none; }
 
 .ms-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
-.ms-scroll::-webkit-scrollbar-thumb { background: #D0D5DD; border-radius: var(--radius-sm); }
+.ms-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-sm); }
 
 @keyframes ms-pulse {
   0%, 100% { opacity: 1; }
@@ -50,7 +53,16 @@ html[data-region="intl"] .deva { display: none; }
   to { transform: translateY(-1px) scale(1); opacity: 1; }
 }
 
-.muted { color: var(--muted); }
+.muted {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
 
 .error {
   color: var(--red);
@@ -109,5 +121,21 @@ html[data-region="intl"] .deva { display: none; }
   margin-bottom: 10px;
 }
 
+.alert strong {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.alert span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted2);
+  line-height: 1.45;
+}
+
 .alert.red { border-color: var(--red); background: var(--warn-bg); }
+.alert.red strong { color: var(--red-ink); }
 .alert.amber { border-color: var(--gold-dark); background: var(--amber-bg); }
+.alert.blue { border-color: #7BA4D4; background: var(--blue-bg); }
+.alert.blue strong { color: #2A5CA8; }

@@ -269,7 +269,7 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/auth/me', (c) => {
   const { user, mill } = c.get('session');
-  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', mill: { id: mill.id, name: mill.name, plan: mill.plan, mill_type: mill.mill_type || 'RICE' } });
+  return c.json({ id: user.id, name: user.name, email: user.email, role: user.role_code || user.role, preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', mill: { id: mill.id, name: mill.name, plan: mill.plan, mill_type: mill.mill_type || 'RICE', season_label: mill.season_label || '' } });
 });
 
 app.patch('/api/auth/me', async (c) => {

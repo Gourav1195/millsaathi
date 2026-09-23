@@ -18,17 +18,29 @@ function formatClock(value: string) {
   return new Date(value).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+type RuntimeEnv = {
+  port: string;
+  onNextDev: boolean;
+  onWorkerStatic: boolean;
+};
+
 export function DevIndicator() {
   const [status, setStatus] = useState<DevStatus | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [uiUpdatedAt, setUiUpdatedAt] = useState(() => new Date());
   const [hmrCount, setHmrCount] = useState(0);
+  const [runtime, setRuntime] = useState<RuntimeEnv | null>(null);
 
-  const port = typeof window !== 'undefined' ? window.location.port : '';
-  const host = typeof window !== 'undefined' ? window.location.hostname : '';
-  const onNextDev = port === '3000';
-  const onWorkerStatic = port === '8787';
-  const onLocal = host === 'localhost' || host === '127.0.0.1';
+  useEffect(() => {
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') return;
+    const port = window.location.port;
+    setRuntime({
+      port,
+      onNextDev: port === '3000',
+      onWorkerStatic: port === '8787',
+    });
+  }, []);
 
   const pingApi = useCallback(async () => {
     try {
@@ -55,16 +67,27 @@ export function DevIndicator() {
 
   useEffect(() => {
     if (process.env.NODE_ENV !== 'development') return;
-    const hot = (module as { hot?: { accept: (callback: () => void) => void } }).hot;
-    if (!hot) return;
-    hot.accept(() => {
+
+    const onHotUpdate = () => {
       setHmrCount((count) => count + 1);
       void pingApi();
-    });
+    };
+
+    const turbopackHot = import.meta.turbopackHot;
+    if (turbopackHot) {
+      turbopackHot.accept(onHotUpdate);
+      return;
+    }
+
+    if (typeof module !== 'undefined') {
+      const webpackHot = (module as { hot?: { accept: (callback: () => void) => void } }).hot;
+      webpackHot?.accept(onHotUpdate);
+    }
   }, [pingApi]);
 
-  if (process.env.NODE_ENV !== 'development' || !onLocal) return null;
+  if (process.env.NODE_ENV !== 'development' || !runtime) return null;
 
+  const { port, onNextDev, onWorkerStatic } = runtime;
   const surface = onNextDev ? 'Next dev :3000 (hot reload)' : onWorkerStatic ? 'Worker static :8787 (rebuild needed)' : `Local :${port || '80'}`;
 
   return (

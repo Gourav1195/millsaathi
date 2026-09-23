@@ -3,5 +3,6 @@
 @import '../design/app-shell.css';
 @import '../design/app-screens.css';
 @import '../design/ui-primitives.css';
+@import '../design/interactive.css';
 @import '../design/marketing.css';
-@import '../design/dev-indicator.css';
+@import '../design/dashboard.css';

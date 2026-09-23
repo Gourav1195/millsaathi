@@ -3,7 +3,8 @@
 import { AppLink } from './app-link';
 import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from './app-header';
-import { Button, Card } from './ui';
+import { Alert, Button, Card, PageHeader } from './ui';
+import { millHeaderMeta } from '../lib/app-meta';
 import { useSession } from '../lib/session';
 
 type Billing = {
@@ -47,6 +48,7 @@ function canManageBilling(role: string) {
 
 export function BillingApp() {
   const { session, sessionError } = useSession();
+  const headerMeta = millHeaderMeta(session);
   const [billing, setBilling] = useState<Billing | null>(null);
   const [plans, setPlans] = useState<BillingPlan[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -151,16 +153,16 @@ export function BillingApp() {
     <main className="shell">
       <AppHeader session={session} />
       <section className="workspace">
-        <div className="dashboard-heading">
-          <div>
-            <h2>Billing</h2>
-            <p className="muted">Manage your MillSaathi subscription.</p>
-          </div>
-          <AppLink className="primary" href="/app/dashboard">Dashboard</AppLink>
-        </div>
+        <PageHeader
+          title="Billing"
+          subtitle="Manage your MillSaathi subscription."
+          date={headerMeta.date}
+          season={headerMeta.season}
+          actions={<AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>}
+        />
 
-        {error && <p className="error">{error}</p>}
-        {notice && <p className="muted">{notice}</p>}
+        {error && <Alert title="Billing error" level="red">{error}</Alert>}
+        {notice && <Alert title="Subscription updated" level="blue">{notice}</Alert>}
         {!billing && !error && <p className="muted">Loading billing status…</p>}
 
         {billing && (
@@ -179,12 +181,12 @@ export function BillingApp() {
 
         {showPlans && (
           <section className="billing-plans">
-            <div className="dashboard-heading">
+            <header className="card-title-row" style={{ marginTop: 24 }}>
               <div>
-                <h3>Choose a plan</h3>
-                <p className="muted">Annual billing through Razorpay. Existing mills keep what they use today free until you choose to upgrade.</p>
+                <h2>Choose a plan</h2>
+                <p>Annual billing through Razorpay. Existing mills keep what they use today free until you choose to upgrade.</p>
               </div>
-            </div>
+            </header>
             <div className="billing-plan-grid">
               {plans.filter((plan) => plan.available).map((plan) => (
                 <Card key={plan.key} className="billing-plan-card">

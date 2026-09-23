@@ -41,11 +41,20 @@
   --gold-dark: #BE8A16;
   --green: #2E7D46;
   --green-dark: #2E5B39;
+  --green-bg: #E6F0E9;
   --red: #C0451C;
   --red-ink: #8F2E12;
   --accent: #C0451C;
   --accent-ink: #9E3714;
   --active-action: #E8B93B;
+  --active-fg: #1B2431;
+  --active-shadow: 0 2px 7px rgba(190, 138, 22, 0.25);
+  --tab-selected-bg: var(--solid-bg);
+  --tab-selected-fg: var(--solid-fg);
+  --tab-selected-border: var(--solid-bg);
+  --tab-selected-shadow: none;
+  --warning-fg: #8A6A16;
+  --gold-fg: #845B08;
   --side: #1B2431;
   --side-line: #2A3543;
   --side-mut: #7D8A9A;
@@ -56,7 +65,144 @@
   --warn-line: #E6BBAA;
   --amber-bg: #FEF7E3;
   --success: #256238;
+  --muted-bg: #EEF1F5;
+  --table-header-bg: #FAFBFC;
+  --input-fill: #FFFFFF;
+  --row-buyer-bg: #F5FBF7;
+  --row-seller-bg: #F5F8FC;
+  --row-broker-bg: #FEFCE8;
+  --panel-buyer-bg: #F5FBF7;
+  --panel-buyer-border: #D8EADF;
+  --panel-seller-bg: #F5F8FC;
+  --panel-seller-border: #D5E0EE;
+  --panel-broker-bg: #FEFCE8;
+  --panel-broker-border: #F5E9A8;
+  --avatar-buyer-bg: #E6F0E9;
+  --avatar-seller-bg: #E7EEF8;
+  --avatar-broker-bg: #FEF9C3;
+  --blue-bg: #E7EEF8;
+  --success-bg: #E6F0E9;
+  --warning-bg: #FEF3D6;
+  --process-cta-bg: #FEF7E3;
+  --process-cta-border: #BE8A16;
+  --process-cta-fg: #1B2431;
+  --solid-bg: #1B2431;
+  --solid-fg: #FFFFFF;
+  --solid-hover: #2A3543;
   --shell-cols: 256px minmax(0, 1fr);
+
+  /* Typography scale */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 14.5px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+  --text-3xl: 36px;
+
+  /* Elevation / z-index */
+  --z-base: 1;
+  --z-sticky: 20;
+  --z-dropdown: 40;
+  --z-sidebar: 50;
+  --z-modal: 60;
+  --z-toast: 80;
+  --z-drag: 90;
+
+  /* Motion */
+  --duration-fast: 0.14s;
+  --duration-normal: 0.2s;
+  --duration-slow: 0.32s;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snap: cubic-bezier(0.34, 1.2, 0.64, 1);
+
+  /* Subtle gradients — used on canvas cards and drop targets, not flat UI chrome */
+  --gradient-canvas: linear-gradient(135deg, #FFFDF7 0%, #F4F8F4 100%);
+  --gradient-dropzone: linear-gradient(145deg, #fffdf4 0%, #fff 100%);
+  --gradient-surface-warm: linear-gradient(135deg, #F5FBF7 0%, #fff 55%, #FEF7E3 100%);
+  --gradient-sidebar-fade: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%);
+
+  /* Canvas / mind-map / flow */
+  --canvas-bg: #FAFBFC;
+  --canvas-grid: #E4E7EC;
+  --canvas-stage: rgba(255, 255, 255, 0.55);
+  --canvas-border: #D5DFD4;
+  --node-bg: #fff;
+  --node-border: #C8D7C8;
+  --node-border-hover: #4E8A59;
+  --node-border-review: #E3B64F;
+  --node-shadow: 0 4px 12px rgba(36, 61, 43, 0.08);
+  --node-shadow-focus: 0 0 0 3px rgba(78, 138, 89, 0.15);
+  --edge-color: #4E8A59;
+  --edge-animated: var(--gold);
+  --library-bg: rgba(255, 255, 255, 0.78);
+  --drag-outline: rgba(232, 185, 59, 0.4);
+  --drag-glow: 0 0 0 3px rgba(232, 185, 59, 0.2);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --ink: #E8EDF4;
+  --muted: #98A2B3;
+  --muted2: #C7CFDA;
+  --bg: #0F1419;
+  --surface: #1A222D;
+  --border: #2D3848;
+  --line: #232C38;
+  --focus-ring: rgba(232, 185, 59, 0.22);
+  --warn-bg: #3A251C;
+  --warn-line: #5C3A2A;
+  --amber-bg: #3A3218;
+  --green-bg: #1E3326;
+  --muted-bg: #222B38;
+  --table-header-bg: #151B24;
+  --input-fill: #1A222D;
+  --row-buyer-bg: #152019;
+  --row-seller-bg: #141D28;
+  --row-broker-bg: #231F14;
+  --panel-buyer-bg: #152019;
+  --panel-buyer-border: #254030;
+  --panel-seller-bg: #141D28;
+  --panel-seller-border: #243448;
+  --panel-broker-bg: #231F14;
+  --panel-broker-border: #3A3218;
+  --avatar-buyer-bg: #1E3326;
+  --avatar-seller-bg: #1E2A3A;
+  --avatar-broker-bg: #3A3218;
+  --blue-bg: #1E2A3A;
+  --success-bg: #1E3326;
+  --warning-bg: #3A3218;
+  --warning-fg: #E8B93B;
+  --gold-fg: #E8B93B;
+  --process-cta-bg: #2A2418;
+  --process-cta-border: #BE8A16;
+  --process-cta-fg: #E8EDF4;
+  --active-fg: #1B2431;
+  --active-shadow: 0 2px 10px rgba(232, 185, 59, 0.28);
+  --tab-selected-bg: var(--active-action);
+  --tab-selected-fg: var(--active-fg);
+  --tab-selected-border: #BE8A16;
+  --tab-selected-shadow: var(--active-shadow);
+  --solid-bg: #2A3543;
+  --solid-fg: #E8EDF4;
+  --solid-hover: #354456;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.32);
+  --canvas-bg: #141B24;
+  --canvas-grid: #2D3848;
+  --canvas-stage: rgba(26, 34, 45, 0.55);
+  --canvas-border: #2D3848;
+  --node-bg: #1A222D;
+  --node-border: #2D3848;
+  --node-border-hover: #6FA85B;
+  --node-border-review: #BE8A16;
+  --node-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+  --library-bg: rgba(27, 36, 49, 0.78);
+  --gradient-canvas: linear-gradient(135deg, #1A222D 0%, #141B24 100%);
+  --gradient-dropzone: linear-gradient(145deg, #1E2733 0%, #1A222D 100%);
+  --gradient-surface-warm: linear-gradient(135deg, #152019 0%, #1A222D 55%, #231F14 100%);
 }
 
 /* Marketing / landing palette — mirrors public/assets/pages.css */

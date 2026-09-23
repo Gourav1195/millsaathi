@@ -2,18 +2,21 @@
 
 import { AppLink } from './app-link';
 import { usePathname } from 'next/navigation';
+import { useOperationalCounts } from '../lib/operational-counts';
 import type { Session } from '../lib/session';
 
-type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'suppliers' | 'buyers' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest';
+type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'parties' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest' | 'settings';
 type NavigationItem = { label: string; href: string; icon: IconName } | { divider: true };
 
 const navigation: NavigationItem[] = [
   { label: 'Dashboard', href: '/app/dashboard', icon: 'dashboard' }, { label: 'Gate & Weighbridge', href: '/app/gate', icon: 'gate' },
   { label: 'Purchase & Saudas', href: '/app/purchase', icon: 'purchase' }, { label: 'Stock & Lots', href: '/app/stock', icon: 'stock' },
-  { label: 'Suppliers', href: '/app/parties?type=suppliers', icon: 'suppliers' }, { label: 'Buyers', href: '/app/parties?type=buyers', icon: 'buyers' },
+  { label: 'Parties', href: '/app/parties', icon: 'parties' },
   { label: 'Items', href: '/app/items', icon: 'items' }, { label: 'Processing', href: '/app', icon: 'processing' }, { divider: true },
   { label: 'Billing', href: '/app/billing', icon: 'billing' }, { label: 'Team', href: '/app/team', icon: 'team' },
   { label: 'Documents', href: '/app/documents', icon: 'documents' }, { label: 'Night Digest', href: '/app/digest', icon: 'digest' },
+  { divider: true },
+  { label: 'Settings', href: '/app/settings', icon: 'settings' },
 ];
 
 function NavIcon({ name }: { name: IconName }) {
@@ -23,12 +26,21 @@ function NavIcon({ name }: { name: IconName }) {
   if (name === 'gate') return <svg {...common}><path d="M12 3v3M5 9h14l-2 7H7L5 9Z" {...stroke} strokeLinejoin="round"/><path d="M4 20h16" {...stroke} strokeLinecap="round"/></svg>;
   if (name === 'purchase' || name === 'billing') return <svg {...common}><path d="M5 4h14v16H5z" {...stroke}/><path d="M8 9h8M8 13h8M8 17h5" {...stroke} strokeLinecap="round"/></svg>;
   if (name === 'stock') return <svg {...common}><path d="M3 8l9-5 9 5v8l-9 5-9-5V8Z" {...stroke} strokeLinejoin="round"/><path d="M3 8l9 5 9-5M12 13v8" {...stroke}/></svg>;
-  if (name === 'suppliers') return <svg {...common}><circle cx="12" cy="8" r="3.5" {...stroke}/><path d="M5 20a7 7 0 0 1 14 0" {...stroke} strokeLinecap="round"/></svg>;
-  if (name === 'buyers') return <svg {...common}><path d="M4 8h16l-1.4 10.5A2 2 0 0 1 16.6 20H7.4a2 2 0 0 1-2-1.5L4 8Z" {...stroke} strokeLinejoin="round"/><path d="M9 8a3 3 0 0 1 6 0" {...stroke} strokeLinecap="round"/></svg>;
+  if (name === 'parties') return <svg {...common}><circle cx="9" cy="8" r="2.8" {...stroke}/><circle cx="16" cy="9" r="2.2" {...stroke}/><path d="M4 20a5 5 0 0 1 10 0M12 20a4 4 0 0 1 8 0" {...stroke} strokeLinecap="round"/></svg>;
   if (name === 'items') return <svg {...common}><path d="M4 7h16v13H4z" {...stroke}/><path d="M9 7V4h6v3M4 12h16" {...stroke}/></svg>;
   if (name === 'processing') return <svg {...common}><path d="M4 5h6v6H4zM14 13h6v6h-6zM10 8h4v8h-4z" {...stroke}/></svg>;
   if (name === 'team') return <svg {...common}><circle cx="9" cy="8" r="3" {...stroke}/><circle cx="17" cy="9" r="2.5" {...stroke}/><path d="M3 20a6 6 0 0 1 12 0M15 20a4 4 0 0 1 6 0" {...stroke} strokeLinecap="round"/></svg>;
   if (name === 'documents') return <svg {...common}><path d="M6 3h9l3 3v15H6z" {...stroke}/><path d="M9 11h6M9 15h6M9 7h4" {...stroke} strokeLinecap="round"/></svg>;
+  if (name === 'settings') return (
+    <svg {...common}>
+      <path
+        d="M10.8 2.5h2.4l.45 2.05a7.4 7.4 0 0 1 1.85.95l1.85-.82 1.2 2.08-.82 1.85c.42.58.76 1.22.95 1.85l2.05.45v2.4l-2.05.45a7.4 7.4 0 0 1-.95 1.85l.82 1.85-1.2 2.08-1.85-.82a7.4 7.4 0 0 1-1.85.95l-.45 2.05h-2.4l-.45-2.05a7.4 7.4 0 0 1-1.85-.95l-1.85.82-1.2-2.08.82-1.85a7.4 7.4 0 0 1-.95-1.85l-2.05-.45v-2.4l2.05-.45c.19-.63.53-1.27.95-1.85l-.82-1.85 1.2-2.08 1.85.82c.58-.42 1.22-.76 1.85-.95l.45-2.05Z"
+        {...stroke}
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="2.8" {...stroke} />
+    </svg>
+  );
   return <svg {...common}><rect x="7" y="2" width="10" height="20" rx="2" {...stroke}/><path d="M10 5h4" {...stroke} strokeLinecap="round"/></svg>;
 }
 
@@ -38,6 +50,7 @@ function initials(name: string) {
 
 export function AppHeader({ session }: { session: Session }) {
   const pathname = usePathname();
+  const { pendingStockReceipts } = useOperationalCounts();
   const active = (href: string) => {
     const path = href.split('?')[0];
     return path === '/app' ? pathname === path : pathname === path || pathname.startsWith(`${path}/`);
@@ -65,7 +78,12 @@ export function AppHeader({ session }: { session: Session }) {
           ) : (
             <AppLink key={item.label} href={item.href} className={active(item.href) ? 'active' : ''}>
               <NavIcon name={item.icon} />
-              {item.label}
+              <span className="app-sidebar-link-label">{item.label}</span>
+              {item.icon === 'stock' && pendingStockReceipts > 0 ? (
+                <span className="app-nav-badge" aria-label={`${pendingStockReceipts} pending truck${pendingStockReceipts === 1 ? '' : 's'}`}>
+                  {pendingStockReceipts}
+                </span>
+              ) : null}
             </AppLink>
           )
         )}
