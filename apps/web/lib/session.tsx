@@ -8,6 +8,8 @@ export type Session = {
   id: string;
   name: string;
   role: string;
+  role_label?: string;
+  capabilities?: string[];
   theme?: Theme;
   preferred_unit?: string;
   mill: { id: string; name: string; season_label?: string };

@@ -12,6 +12,21 @@ import {
   type BillingPlanKey,
   verifyCheckoutPayment,
 } from './billing';
+import {
+  applyFinancePolicy,
+  canAssignRole,
+  canViewFinance,
+  denyUnlessCapability,
+  effectiveRole,
+  hasCapability,
+  isOwnerRole,
+  masterArchiveCapability,
+  masterCreateCapability,
+  masterEditCapability,
+  redactFinanceData,
+  shapeOverviewPayload,
+  stripMoney,
+} from './permissions';
 
 const printStyles = `<style>
   :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#182230;font:14px/1.5 'IBM Plex Sans',Arial,sans-serif}.sheet{max-width:820px;margin:32px auto;padding:40px;background:#fff;box-shadow:0 12px 36px rgba(20,30,40,.12);border-top:7px solid #e8b93b}.brand{display:flex;justify-content:space-between;gap:24px;border-bottom:1px solid #e4e7ec;padding-bottom:22px}.brand h1{font:800 27px/1.1 Archivo,Arial,sans-serif;margin:0 0 6px}.muted{color:#667085}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#667085;font-weight:700}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.meta>div{background:#f7f8fa;border:1px solid #e4e7ec;border-radius:8px;padding:12px}.title{font:800 20px Archivo,Arial,sans-serif;margin:24px 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th{background:#182230;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left}th,td{padding:11px 12px;border-bottom:1px solid #e4e7ec}td:last-child,th:last-child{text-align:right}.total{margin:20px 0 0 auto;max-width:270px;background:#fff8e1;border:1px solid #efd98d;border-radius:8px;padding:16px;display:flex;justify-content:space-between;font-weight:800;font-size:17px}.notes{margin-top:24px;padding-top:16px;border-top:1px solid #e4e7ec;white-space:pre-line}.actions{text-align:right;margin-bottom:14px}.actions button{border:0;border-radius:7px;padding:9px 14px;background:#c0451c;color:#fff;font-weight:700;cursor:pointer}@media(max-width:700px){body{background:#fff}.sheet{margin:0;padding:24px;box-shadow:none}.brand{display:block}.meta{grid-template-columns:1fr 1fr}}@media print{body{background:#fff}.sheet{margin:0;max-width:none;padding:0;box-shadow:none;border-top:0}.actions{display:none}}
@@ -127,25 +142,6 @@ function isSupportAdmin(user: { email: string }): boolean {
   return user.email.trim().toLowerCase() === SUPPORT_ADMIN_EMAIL;
 }
 
-type Permission = 'VIEW' | 'CREATE' | 'EDIT' | 'VOID' | 'MANAGE_MEMBERS' | 'MANAGE_ORGANISATION' | 'EXPORT';
-const ROLE_PERMISSIONS: Record<string, Permission[]> = {
-  owner: ['VIEW', 'CREATE', 'EDIT', 'VOID', 'MANAGE_MEMBERS', 'MANAGE_ORGANISATION', 'EXPORT'],
-  admin: ['VIEW', 'CREATE', 'EDIT', 'VOID', 'MANAGE_MEMBERS', 'MANAGE_ORGANISATION', 'EXPORT'],
-  manager: ['VIEW', 'CREATE', 'EDIT', 'EXPORT'],
-  accountant: ['VIEW', 'CREATE', 'EDIT', 'EXPORT'],
-  gate_operator: ['VIEW', 'CREATE', 'EDIT'],
-  production_operator: ['VIEW', 'CREATE', 'EDIT'],
-  operator: ['VIEW', 'CREATE', 'EDIT'],
-  viewer: ['VIEW'],
-};
-function effectiveRole(user: { role: string; role_code?: string | null }): string { return user.role_code || user.role; }
-function hasPermission(user: { role: string; role_code?: string | null }, permission: Permission): boolean {
-  return (ROLE_PERMISSIONS[effectiveRole(user)] || []).includes(permission);
-}
-function denyUnless(c: any, permission: Permission): Response | null {
-  return hasPermission(c.get('session').user, permission) ? null : c.json({ error: 'not allowed for this role' }, 403);
-}
-
 async function syncCompletedGate(c: any, gateId: string) {
   const { mill, user } = c.get('session');
   const db: D1Database = c.env.DB;
@@ -180,20 +176,6 @@ async function syncCompletedGate(c: any, gateId: string) {
   }
 }
 
-// The Manager role must never receive money. Strip every *paise* field server-side,
-// wherever it appears — new fields are money-safe by default.
-export function stripMoney(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripMoney);
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (!k.includes('paise')) out[k] = stripMoney(v);
-    }
-    return out;
-  }
-  return value;
-}
-
 type MassBalance = {
   in_kg: number; rice_kg: number; bran_kg: number; husk_kg: number; broken_kg: number;
   unexplained_kg: number; unexplained_pct: number;
@@ -212,7 +194,7 @@ function massBalance(run: { paddy_in_kg: number; rice_out_kg: number; bran_out_k
 export const api = new Hono<AppEnv>();
 
 api.get('/billing/status', async (c) => {
-  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'billing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const status = await c.env.DB.prepare(
     `SELECT ba.provider, bs.plan, bs.status, bs.current_period_start, bs.current_period_end
@@ -225,7 +207,7 @@ api.get('/billing/status', async (c) => {
 });
 
 api.get('/billing/plans', async (c) => {
-  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'billing:view'); if (denied) return denied;
   const plans = billingPlans(c.env).map((plan) => ({
     key: plan.key,
     label: plan.label,
@@ -240,9 +222,8 @@ api.get('/billing/plans', async (c) => {
 });
 
 api.post('/billing/checkout', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'only the owner or admin can manage billing' }, 403);
+  const denied = denyUnlessCapability(c, 'billing:manage'); if (denied) return denied;
+  const { mill } = c.get('session');
   const body = await c.req.json<{ plan?: string }>().catch(() => ({}) as { plan?: string });
   const plan = String(body.plan ?? '').trim() as BillingPlanKey;
   if (!BILLING_PLANS[plan]) return c.json({ error: 'Choose a valid plan' }, 400);
@@ -256,9 +237,8 @@ api.post('/billing/checkout', async (c) => {
 });
 
 api.post('/billing/verify', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'only the owner or admin can manage billing' }, 403);
+  const denied = denyUnlessCapability(c, 'billing:manage'); if (denied) return denied;
+  const { mill } = c.get('session');
   const body = await c.req.json<Record<string, string>>().catch(() => ({} as Record<string, string>));
   const paymentId = String(body.razorpay_payment_id ?? '').trim();
   const subscriptionId = String(body.razorpay_subscription_id ?? '').trim();
@@ -281,6 +261,7 @@ api.post('/billing/verify', async (c) => {
 
 // One round trip powers the whole SPA: batched reads, KPIs computed here.
 api.get('/overview', async (c) => {
+  const denied = denyUnlessCapability(c, 'dashboard:view'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const db = c.env.DB;
   const today = istToday();
@@ -543,7 +524,7 @@ api.get('/overview', async (c) => {
   if (labPending > 0) alerts.push({ level: 'amber', title: `${labPending} lab test${labPending > 1 ? 's' : ''} pending`, body: 'Trucks are waiting on moisture results at the lab.' });
 
   const body = {
-    me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light', permissions: ROLE_PERMISSIONS[effectiveRole(user)] || [] },
+    me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light' },
     mill: { id: mill.id, name: mill.name, mill_type: mill.mill_type || 'RICE', address: mill.address, phone: mill.phone, email: mill.email, gstin: mill.gstin, place_of_supply: mill.place_of_supply, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
     today,
     kpis: {
@@ -590,17 +571,17 @@ api.get('/overview', async (c) => {
     chain_yield_summary: chainYieldSummaryRes ?? { completed_runs: 0, average_yield_pct: 0, total_input_base: 0, total_output_base: 0 },
   };
 
-  return c.json(effectiveRole(user) === 'manager' ? (stripMoney(body) as typeof body) : body);
+  return c.json(shapeOverviewPayload(user, body as Record<string, unknown>));
 });
 
 api.get('/organisation', async (c) => {
-  const { user, mill } = c.get('session');
-  if (!hasPermission(user, 'VIEW')) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'organisation:view'); if (denied) return denied;
+  const { mill } = c.get('session');
   return c.json({ organisation: { id: mill.id, name: mill.name, slug: mill.slug, address: mill.address || null, phone: mill.phone || null, email: mill.email || null, gstin: mill.gstin || null, place_of_supply: mill.place_of_supply || null } });
 });
 
 api.patch('/organisation', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'organisation:manage'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const name = String(b.name ?? '').trim();
@@ -613,7 +594,7 @@ api.patch('/organisation', async (c) => {
 
 // ---- Gate & weighbridge workflow ----
 api.post('/gate', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'gate:create'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const direction = b.direction === 'out' ? 'out' : 'in';
@@ -649,7 +630,7 @@ api.post('/gate', async (c) => {
 });
 
 api.patch('/gate/:id', async (c) => {
-  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'gate:edit'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const currentGate = await c.env.DB.prepare(`SELECT direction, item_id, gross_kg, tare_kg, status FROM gate_entries WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ direction: string; item_id: string | null; gross_kg: number | null; tare_kg: number | null; status: string }>();
@@ -691,9 +672,8 @@ api.patch('/gate/:id', async (c) => {
 
 // ---- Saudas (owner/accountant only — managers never see rates) ----
 api.post('/saudas', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'saudas:create'); if (denied) return denied;
+  const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const direction = String(b.direction ?? 'in');
   if (!['in', 'out'].includes(direction)) return c.json({ error: 'invalid sauda direction' }, 400);
@@ -735,9 +715,8 @@ api.post('/saudas', async (c) => {
 });
 
 api.patch('/saudas/:id', async (c) => {
-  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'saudas:edit'); if (denied) return denied;
+  const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   if (typeof b.status !== 'string' || !SAUDA_STATUSES.includes(b.status as (typeof SAUDA_STATUSES)[number])) {
     return c.json({ error: 'invalid status' }, 400);
@@ -750,7 +729,7 @@ api.patch('/saudas/:id', async (c) => {
 
 // ---- Lots & production ----
 api.post('/lots', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'stock:create'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const requestedQuantity = b.quantity != null ? b.quantity : b.qty_kg;
@@ -821,7 +800,7 @@ api.post('/lots', async (c) => {
 });
 
 api.post('/saudas/:id/deliveries', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'saudas:edit'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const sauda = await c.env.DB.prepare(`SELECT id, direction, item_id, qty_kg, delivery_tolerance_pct FROM saudas WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ id: string; direction: string; item_id: string | null; qty_kg: number; delivery_tolerance_pct: number }>();
@@ -852,7 +831,8 @@ api.post('/saudas/:id/deliveries', async (c) => {
 });
 
 api.get('/saudas/:id/deliveries', async (c) => {
-  const { mill } = c.get('session');
+  const denied = denyUnlessCapability(c, 'saudas:view'); if (denied) return denied;
+  const { user, mill } = c.get('session');
   const sauda = await c.env.DB.prepare(`SELECT id FROM saudas WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first();
   if (!sauda) return c.json({ error: 'sauda not found' }, 404);
   const rows = await c.env.DB.prepare(
@@ -862,11 +842,11 @@ api.get('/saudas/:id/deliveries', async (c) => {
      LEFT JOIN lots l ON l.id = d.lot_id AND l.mill_id = d.mill_id
      WHERE d.sauda_id = ? AND d.mill_id = ? ORDER BY d.actual_date DESC, d.created_at DESC`,
   ).bind(c.req.param('id'), mill.id).all();
-  return c.json({ deliveries: rows.results });
+  return c.json(applyFinancePolicy(user, { deliveries: rows.results }));
 });
 
 api.post('/sauda-deliveries/:id/void', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'saudas:void'); if (denied) return denied;
   const { mill, user } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const reason = String(b.reason ?? '').trim();
@@ -891,7 +871,7 @@ api.post('/sauda-deliveries/:id/void', async (c) => {
 });
 
 api.get('/saudas/export.csv', async (c) => {
-  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'finance:export'); if (denied) return denied;
   const { mill } = c.get('session');
   const result = await c.env.DB.prepare(`SELECT sa.code, sa.direction, COALESCE(b.name, s.name) AS party, i.name AS item, sa.agreed_quantity AS quantity, sa.agreed_unit AS unit, sa.rate_paise_per_qtl, sa.broker_name, sa.moisture_pct, sa.agreement_date, sa.delivery_start, sa.delivery_end, sa.delivery_tolerance_pct, sa.commission_type, sa.commission_value, sa.commission_paise, sa.advance_paise, sa.status, sa.note FROM saudas sa LEFT JOIN suppliers s ON s.id = sa.supplier_id LEFT JOIN buyers b ON b.id = sa.buyer_id LEFT JOIN items i ON i.id = sa.item_id WHERE sa.mill_id = ? AND sa.deleted_at IS NULL ORDER BY sa.created_at DESC`).bind(mill.id).all<Record<string, unknown>>();
   const safe = (value: unknown) => { const text = String(value ?? ''); return /^[=+\-@]/.test(text) ? "'" + text : text; };
@@ -902,7 +882,7 @@ api.get('/saudas/export.csv', async (c) => {
 });
 
 api.get('/saudas/import/template.csv', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'saudas:create'); if (denied) return denied;
   const header = 'direction,party,item,quantity,unit,rate,broker,moisture_pct,agreement_date,delivery_start,delivery_end,delivery_tolerance_pct,commission_type,commission_value,advance,note\r\n';
   return new Response(header, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="millsaathi-saudas-import-template.csv"' } });
 });
@@ -941,9 +921,8 @@ async function parseSaudaImportRows(db: D1Database, millId: string, rows: Record
 }
 
 api.post('/saudas/import/validate', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'saudas:create'); if (denied) return denied;
+  const { mill } = c.get('session');
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const rows = Array.isArray(body.rows) ? body.rows as Record<string, unknown>[] : [];
   if (!rows.length || rows.length > 200) return c.json({ error: 'upload between 1 and 200 rows' }, 400);
@@ -952,9 +931,8 @@ api.post('/saudas/import/validate', async (c) => {
 });
 
 api.post('/saudas/import/commit', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'saudas:create'); if (denied) return denied;
+  const { mill } = c.get('session');
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const rows = Array.isArray(body.rows) ? body.rows as Record<string, unknown>[] : [];
   if (!rows.length || rows.length > 200) return c.json({ error: 'upload between 1 and 200 rows' }, 400);
@@ -973,8 +951,8 @@ api.post('/saudas/import/commit', async (c) => {
 });
 
 api.post('/saudas/bulk-archive', async (c) => {
+  const denied = denyUnlessCapability(c, 'saudas:archive'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (effectiveRole(user) !== 'owner') return c.json({ error: 'only the owner can archive saudas' }, 403);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const ids = [...new Set(Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [])].slice(0, 200);
   if (!ids.length) return c.json({ error: 'select at least one sauda' }, 400);
@@ -985,7 +963,7 @@ api.post('/saudas/bulk-archive', async (c) => {
 });
 
 api.patch('/lots/:id', async (c) => {
-  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'stock:edit'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const lot = await c.env.DB.prepare(`SELECT id, item_id, godown_id, qty_kg FROM lots WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ id: string; item_id: string | null; godown_id: string | null; qty_kg: number }>();
@@ -1040,7 +1018,7 @@ api.patch('/lots/:id', async (c) => {
 });
 
 api.post('/stock-receipts/:id/skip', async (c) => {
-  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'stock:receive'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
   const res = await c.env.DB.prepare(
@@ -1055,7 +1033,7 @@ api.post('/stock-receipts/:id/skip', async (c) => {
 });
 
 api.post('/stock-receipts/:id/reopen', async (c) => {
-  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'stock:receive'); if (denied) return denied;
   const { mill } = c.get('session');
   const res = await c.env.DB.prepare(
     `UPDATE gate_entries
@@ -1069,7 +1047,7 @@ api.post('/stock-receipts/:id/reopen', async (c) => {
 });
 
 api.post('/production', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:create'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const productionFields = ['paddy_in_kg', 'rice_out_kg', 'bran_out_kg', 'husk_out_kg', 'broken_out_kg'] as const;
@@ -1090,9 +1068,8 @@ api.post('/production', async (c) => {
 
 // ---- Payments (owner/accountant only) ----
 api.post('/payments', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'payments:create'); if (denied) return denied;
+  const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
   const amount = Math.round(Number(b.amount_paise) || 0);
   if (amount <= 0) return c.json({ error: 'amount_paise must be positive' }, 400);
@@ -1115,7 +1092,7 @@ api.post('/payments', async (c) => {
 });
 
 api.post('/payments/:id/void', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'payments:void'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const reason = String(body.reason ?? '').trim();
@@ -1127,14 +1104,14 @@ api.post('/payments/:id/void', async (c) => {
 });
 
 api.get('/payments', async (c) => {
+  const denied = denyUnlessCapability(c, 'payments:view'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const result = await c.env.DB.prepare(`SELECT p.id, p.party_kind, p.party_id, p.direction, p.amount_paise, p.method, p.note, p.pay_date, p.status, p.created_at, COALESCE(s.name, b.name) AS party_name FROM payments p LEFT JOIN suppliers s ON p.party_kind = 'supplier' AND s.id = p.party_id AND s.mill_id = p.mill_id LEFT JOIN buyers b ON p.party_kind = 'buyer' AND b.id = p.party_id AND b.mill_id = p.mill_id WHERE p.mill_id = ? ORDER BY p.pay_date DESC, p.created_at DESC LIMIT 1000`).bind(mill.id).all<Record<string, unknown>>();
-  const body = { payments: result.results };
-  return c.json(user.role_code === 'manager' || user.role === 'manager' ? stripMoney(body) : body);
+  return c.json(applyFinancePolicy(user, { payments: result.results }));
 });
 
 api.get('/payments/:id/print', async (c) => {
-  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'payments:view'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const payment = await c.env.DB.prepare(`SELECT p.*, COALESCE(s.name, b.name) AS party_name, COALESCE(s.address, b.address) AS party_address, COALESCE(s.phone, b.phone) AS party_phone FROM payments p LEFT JOIN suppliers s ON p.party_kind = 'supplier' AND s.id = p.party_id AND s.mill_id = p.mill_id LEFT JOIN buyers b ON p.party_kind = 'buyer' AND b.id = p.party_id AND b.mill_id = p.mill_id WHERE p.id = ? AND p.mill_id = ?`).bind(c.req.param('id'), mill.id).first<Record<string, unknown>>();
   if (!payment) return c.html('<h1>Receipt not found</h1>', 404);
@@ -1191,11 +1168,12 @@ function normalizeMasterPayload(master: string, body: Record<string, unknown>, c
 }
 
 api.post('/:master{suppliers|buyers|items|godowns}', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const master = c.req.param('master');
+  const denied = denyUnlessCapability(c, masterCreateCapability(master)); if (denied) return denied;
   const { mill, user } = c.get('session');
-  const def = MASTERS[c.req.param('master')];
+  const def = MASTERS[master];
   const b = await c.req.json<Record<string, unknown>>();
-  const validationError = normalizeMasterPayload(c.req.param('master'), b, true, user.preferred_unit || 'QUINTAL');
+  const validationError = normalizeMasterPayload(master, b, true, user.preferred_unit || 'QUINTAL');
   if (validationError) return c.json({ error: validationError }, 400);
   const id = uuid();
   const present = def.cols.filter((col) => b[col] != null && b[col] !== '');
@@ -1205,14 +1183,14 @@ api.post('/:master{suppliers|buyers|items|godowns}', async (c) => {
   )
     .bind(id, mill.id, ...present.map((col) => b[col]))
     .run();
-  await audit(c, c.req.param('master'), id, 'CREATE');
+  await audit(c, master, id, 'CREATE');
   return c.json({ id }, 201);
 });
 
 api.patch('/:master{suppliers|buyers|items|godowns}/:id', async (c) => {
-  const denied = denyUnless(c, 'EDIT'); if (denied) return denied;
-  const { user, mill } = c.get('session');
   const master = c.req.param('master');
+  const denied = denyUnlessCapability(c, masterEditCapability(master)); if (denied) return denied;
+  const { user, mill } = c.get('session');
   const def = MASTERS[master];
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const validationError = normalizeMasterPayload(master, body);
@@ -1229,9 +1207,9 @@ api.patch('/:master{suppliers|buyers|items|godowns}/:id', async (c) => {
 });
 
 api.delete('/:master{suppliers|buyers|items|godowns}/:id', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
-  const { user, mill } = c.get('session');
   const master = c.req.param('master');
+  const denied = denyUnlessCapability(c, masterArchiveCapability(master)); if (denied) return denied;
+  const { user, mill } = c.get('session');
   const id = c.req.param('id');
   const table = master === 'suppliers' ? 'suppliers' : master === 'buyers' ? 'buyers' : master === 'items' ? 'items' : master === 'godowns' ? 'godowns' : '';
   if (!table) return c.json({ error: 'unsupported master' }, 400);
@@ -1255,7 +1233,7 @@ async function restoreSoftDeleted(c: any, table: string, master: string, id: str
 }
 
 api.get('/archived', async (c) => {
-  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const db = c.env.DB;
   const owner = effectiveRole(user) === 'owner';
@@ -1282,22 +1260,22 @@ api.get('/archived', async (c) => {
 });
 
 api.patch('/suppliers/:id/restore', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   return restoreSoftDeleted(c, 'suppliers', 'suppliers', c.req.param('id'));
 });
 
 api.patch('/buyers/:id/restore', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   return restoreSoftDeleted(c, 'buyers', 'buyers', c.req.param('id'));
 });
 
 api.patch('/items/:id/restore', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   return restoreSoftDeleted(c, 'items', 'items', c.req.param('id'));
 });
 
 api.patch('/godowns/:id/restore', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   const { mill } = c.get('session');
   const id = c.req.param('id');
   const result = await c.env.DB.prepare(`UPDATE godowns SET active = 1 WHERE id = ? AND mill_id = ? AND active = 0`).bind(id, mill.id).run();
@@ -1307,8 +1285,9 @@ api.patch('/godowns/:id/restore', async (c) => {
 });
 
 api.patch('/saudas/:id/restore', async (c) => {
+  const denied = denyUnlessCapability(c, 'saudas:restore'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (effectiveRole(user) !== 'owner') return c.json({ error: 'only the owner can restore saudas' }, 403);
+  if (!isOwnerRole(user)) return c.json({ error: 'only the owner can restore saudas' }, 403);
   const id = c.req.param('id');
   const result = await c.env.DB.prepare(`UPDATE saudas SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
   if (!result.meta.changes) return c.json({ error: 'archived sauda not found' }, 404);
@@ -1317,22 +1296,21 @@ api.patch('/saudas/:id/restore', async (c) => {
 });
 
 api.get('/team', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_MEMBERS'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'team:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const result = await c.env.DB.prepare(`SELECT id, name, email, phone, COALESCE(role_code, role) AS role, active, created_at FROM users WHERE mill_id = ? ORDER BY name`).bind(mill.id).all();
   return c.json({ members: result.results });
 });
 
 api.post('/team/invite', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_MEMBERS'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'team:manage'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const email = String(b.email ?? '').trim().toLowerCase();
   const name = String(b.name ?? '').trim();
   const role = String(b.role ?? 'viewer').toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email) || !name) return c.json({ error: 'name and valid email are required' }, 400);
-  if (!['admin', 'manager', 'accountant', 'gate_operator', 'production_operator', 'viewer'].includes(role)) return c.json({ error: 'invalid role' }, 400);
+  if (!canAssignRole(user, role)) return c.json({ error: 'invalid role' }, 400);
   const legacyRole = role === 'admin' || role === 'manager' ? 'manager' : role === 'accountant' ? 'accountant' : 'operator';
   const existing = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
   if (existing) return c.json({ error: 'an account with this email already exists' }, 409);
@@ -1346,9 +1324,8 @@ api.post('/team/invite', async (c) => {
 });
 
 api.post('/team/account', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_MEMBERS'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'team:manage'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const email = String(b.email ?? '').trim().toLowerCase();
   const name = String(b.name ?? '').trim();
@@ -1357,7 +1334,7 @@ api.post('/team/account', async (c) => {
   const allowedRoles = ['admin', 'manager', 'accountant', 'gate_operator', 'production_operator', 'operator', 'viewer'];
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) return c.json({ error: 'name and valid email are required' }, 400);
   if (password.length < 8) return c.json({ error: 'password must be at least 8 characters' }, 400);
-  if (!allowedRoles.includes(role)) return c.json({ error: 'invalid role' }, 400);
+  if (!allowedRoles.includes(role) || !canAssignRole(user, role)) return c.json({ error: 'invalid role' }, 400);
   if (await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first()) return c.json({ error: 'an account with this email already exists' }, 409);
   const legacyRole = role === 'admin' ? 'manager' : role === 'manager' ? 'manager' : ['accountant'].includes(role) ? 'accountant' : 'operator';
   const credentials = await hashPassword(password);
@@ -1370,7 +1347,7 @@ api.post('/team/account', async (c) => {
 
 api.patch('/team/:id', async (c) => {
   const { user, mill } = c.get('session');
-  const denied = denyUnless(c, 'MANAGE_MEMBERS'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'team:manage'); if (denied) return denied;
   const id = c.req.param('id');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   if (id === user.id && b.active === 0) return c.json({ error: 'you cannot deactivate your own account' }, 400);
@@ -1378,6 +1355,7 @@ api.patch('/team/:id', async (c) => {
   if (!target) return c.json({ error: 'member not found' }, 404);
   if (typeof b.role === 'string' && effectiveRole(target) === 'owner') return c.json({ error: 'the owner role cannot be changed' }, 400);
   if (id === user.id && typeof b.role === 'string') return c.json({ error: 'you cannot change your own role' }, 400);
+  if (typeof b.role === 'string' && !canAssignRole(user, String(b.role))) return c.json({ error: 'not allowed to assign this role' }, 403);
   if (b.active === 0) {
     if (effectiveRole(target) === 'owner') {
       const owners = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM users WHERE mill_id = ? AND active = 1 AND role = 'owner'`).bind(mill.id).first<{ count: number }>();
@@ -1396,9 +1374,8 @@ api.patch('/team/:id', async (c) => {
 });
 
 api.post('/process-types', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:configure'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const name = String(b.name ?? '').trim();
   if (!name) return c.json({ error: 'name is required' }, 400);
@@ -1413,6 +1390,7 @@ api.post('/process-types', async (c) => {
 });
 
 api.get('/process-types', async (c) => {
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const includeArchived = c.req.query('include_archived') === '1';
   const result = await c.env.DB.prepare(`SELECT * FROM process_types WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY name`).bind(mill.id).all();
@@ -1427,9 +1405,8 @@ api.get('/process-types', async (c) => {
 });
 
 api.put('/process-types/:id/template', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:configure'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const processTypeId = c.req.param('id');
   const processType = await c.env.DB.prepare(`SELECT id FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first();
   if (!processType) return c.json({ error: 'process type not found' }, 404);
@@ -1468,7 +1445,8 @@ api.put('/process-types/:id/template', async (c) => {
 });
 
 api.get('/process-workspace', async (c) => {
-  const { mill } = c.get('session');
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
+  const { user, mill } = c.get('session');
   const processTypeId = String(c.req.query('process_type_id') ?? '');
   const processType = await c.env.DB.prepare(`SELECT * FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first<Record<string, unknown>>();
   if (!processType) return c.json({ error: 'process type not found' }, 404);
@@ -1478,11 +1456,11 @@ api.get('/process-workspace', async (c) => {
     c.env.DB.prepare(`SELECT * FROM godowns WHERE mill_id = ? AND active = 1 ORDER BY name`).bind(mill.id),
     c.env.DB.prepare(`SELECT id, name, base_unit, display_unit, package_unit, package_quantity_base FROM items WHERE mill_id = ? AND deleted_at IS NULL ORDER BY category, name`).bind(mill.id),
   ]);
-  return c.json({ process_type: processType, template_lines: lines.results, lots: lots.results, godowns: godowns.results, items: items.results });
+  return c.json(applyFinancePolicy(user, { process_type: processType, template_lines: lines.results, lots: lots.results, godowns: godowns.results, items: items.results }));
 });
 
 api.delete('/process-types/:id', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:configure'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const id = c.req.param('id');
   const result = await c.env.DB.prepare(`UPDATE process_types SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), deleted_by = ? WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(user.id, id, mill.id).run();
@@ -1492,7 +1470,7 @@ api.delete('/process-types/:id', async (c) => {
 });
 
 api.patch('/process-types/:id/restore', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const id = c.req.param('id');
   const result = await c.env.DB.prepare(`UPDATE process_types SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
@@ -1502,6 +1480,7 @@ api.patch('/process-types/:id/restore', async (c) => {
 });
 
 api.get('/process-runs', async (c) => {
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const runs = await c.env.DB.prepare(`SELECT r.*, pt.name AS process_type_name, u.name AS creator_name, pc.name AS chain_name, cs.step_number AS chain_step_number FROM process_runs r LEFT JOIN process_types pt ON pt.id = r.process_type_id LEFT JOIN users u ON u.id = r.created_by LEFT JOIN processing_chains pc ON pc.id = r.chain_run_id LEFT JOIN processing_chain_steps cs ON cs.id = r.chain_step_id WHERE r.mill_id = ? ORDER BY r.run_date DESC, r.created_at DESC LIMIT 1000`).bind(mill.id).all<Record<string, unknown>>();
   const runIds = runs.results.map((run) => String(run.id));
@@ -1514,13 +1493,14 @@ api.get('/process-runs', async (c) => {
 });
 
 api.get('/stock-summary', async (c) => {
+  const denied = denyUnlessCapability(c, 'stock:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const result = await c.env.DB.prepare(`SELECT i.id AS item_id, i.name AS item_name, i.base_unit, COALESCE(SUM(CASE WHEN m.direction = 'IN' THEN m.quantity_base WHEN m.direction = 'OUT' THEN -m.quantity_base ELSE m.quantity_base END), 0) AS quantity_base FROM items i LEFT JOIN stock_movements m ON m.item_id = i.id AND m.mill_id = i.mill_id AND m.status = 'POSTED' WHERE i.mill_id = ? AND i.deleted_at IS NULL GROUP BY i.id ORDER BY i.name`).bind(mill.id).all();
   return c.json({ stock: result.results });
 });
 
 api.post('/stock-movements', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'stock:create'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const direction = ['IN', 'OUT', 'ADJUSTMENT'].includes(String(b.direction)) ? String(b.direction) : '';
@@ -1544,7 +1524,7 @@ api.post('/stock-movements', async (c) => {
 });
 
 api.post('/stock-movements/:id/void', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'stock:void'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const result = await c.env.DB.prepare(`UPDATE stock_movements SET status = 'VOID', voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), voided_by = ? WHERE id = ? AND mill_id = ? AND status = 'POSTED'`).bind(user.id, c.req.param('id'), mill.id).run();
@@ -1554,9 +1534,8 @@ api.post('/stock-movements/:id/void', async (c) => {
 });
 
 api.post('/process-runs', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:create'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'manager', 'production_operator', 'operator'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const processTypeId = String(b.process_type_id ?? '');
   const lines = Array.isArray(b.lines) ? b.lines as Record<string, unknown>[] : [];
@@ -1653,7 +1632,7 @@ api.post('/process-runs', async (c) => {
 });
 
 api.post('/process-runs/:id/void', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:void'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const id = c.req.param('id');
   const run = await c.env.DB.prepare(`SELECT id, status FROM process_runs WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<{ id: string; status: string }>();
@@ -1683,9 +1662,8 @@ api.post('/process-runs/:id/void', async (c) => {
 // ---- Processing Chains: Definition CRUD ----
 
 api.post('/processing-chains', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'processing:configure'); if (denied) return denied;
+  const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const name = String(b.name ?? '').trim();
   if (!name) return c.json({ error: 'name is required' }, 400);
@@ -1697,6 +1675,7 @@ api.post('/processing-chains', async (c) => {
 });
 
 api.get('/processing-chains', async (c) => {
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const includeArchived = c.req.query('include_archived') === '1';
   const chains = await c.env.DB.prepare(`SELECT * FROM processing_chains WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY sort_order, name`).bind(mill.id).all<Record<string, unknown>>();
@@ -1710,6 +1689,7 @@ api.get('/processing-chains', async (c) => {
 });
 
 api.get('/processing-chains/:id', async (c) => {
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const id = c.req.param('id');
   const chain = await c.env.DB.prepare(`SELECT * FROM processing_chains WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<Record<string, unknown>>();
@@ -1732,9 +1712,8 @@ api.get('/processing-chains/:id', async (c) => {
 });
 
 api.put('/processing-chains/:id/steps', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
-  const { user, mill } = c.get('session');
-  if (!['owner', 'admin'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
+  const denied = denyUnlessCapability(c, 'processing:configure'); if (denied) return denied;
+  const { mill } = c.get('session');
   const chainId = c.req.param('id');
   const chain = await c.env.DB.prepare(`SELECT id FROM processing_chains WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(chainId, mill.id).first();
   if (!chain) return c.json({ error: 'chain not found' }, 404);
@@ -1775,7 +1754,7 @@ api.put('/processing-chains/:id/steps', async (c) => {
 });
 
 api.delete('/processing-chains/:id', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:configure'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const id = c.req.param('id');
   const activeRun = await c.env.DB.prepare(`SELECT id FROM processing_chain_runs WHERE chain_id = ? AND mill_id = ? AND status = 'IN_PROGRESS' LIMIT 1`).bind(id, mill.id).first();
@@ -1787,7 +1766,7 @@ api.delete('/processing-chains/:id', async (c) => {
 });
 
 api.patch('/processing-chains/:id/restore', async (c) => {
-  const denied = denyUnless(c, 'MANAGE_ORGANISATION'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'settings:manage'); if (denied) return denied;
   const { mill } = c.get('session');
   const id = c.req.param('id');
   const result = await c.env.DB.prepare(`UPDATE processing_chains SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND mill_id = ? AND deleted_at IS NOT NULL`).bind(id, mill.id).run();
@@ -1799,9 +1778,8 @@ api.patch('/processing-chains/:id/restore', async (c) => {
 // ---- Processing Chain Runs: Execution ----
 
 api.post('/chain-runs', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:create'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'manager', 'production_operator', 'operator'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const chainId = String(b.chain_id ?? '');
   if (!chainId) return c.json({ error: 'chain_id is required' }, 400);
@@ -1818,6 +1796,7 @@ api.post('/chain-runs', async (c) => {
 });
 
 api.get('/chain-runs', async (c) => {
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const statusFilter = c.req.query('status');
   const chainFilter = c.req.query('chain_id');
@@ -1840,6 +1819,7 @@ api.get('/chain-runs', async (c) => {
 });
 
 api.get('/chain-runs/:id', async (c) => {
+  const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const id = c.req.param('id');
   const run = await c.env.DB.prepare(`SELECT cr.*, pc.name AS chain_name FROM processing_chain_runs cr LEFT JOIN processing_chains pc ON pc.id = cr.chain_id WHERE cr.id = ? AND cr.mill_id = ?`).bind(id, mill.id).first<Record<string, unknown>>();
@@ -1885,9 +1865,8 @@ api.get('/chain-runs/:id', async (c) => {
 });
 
 api.post('/chain-runs/:id/advance', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:create'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'manager', 'production_operator', 'operator'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const chainRunId = c.req.param('id');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const run = await c.env.DB.prepare(`SELECT * FROM processing_chain_runs WHERE id = ? AND mill_id = ? AND status = 'IN_PROGRESS'`).bind(chainRunId, mill.id).first<Record<string, unknown>>();
@@ -2058,8 +2037,8 @@ api.post('/chain-runs/:id/advance', async (c) => {
 });
 
 api.post('/chain-runs/:id/complete', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { user, mill } = c.get('session');
+  const denied = denyUnlessCapability(c, 'processing:create'); if (denied) return denied;
+  const { mill } = c.get('session');
   const id = c.req.param('id');
   const run = await c.env.DB.prepare(`SELECT id, status, chain_id FROM processing_chain_runs WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<{ id: string; status: string; chain_id: string }>();
   if (!run) return c.json({ error: 'chain run not found' }, 404);
@@ -2092,7 +2071,7 @@ api.post('/chain-runs/:id/complete', async (c) => {
 });
 
 api.post('/chain-runs/:id/void', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'processing:void'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const id = c.req.param('id');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
@@ -2145,6 +2124,7 @@ function validatePartyRow(kind: string, row: Record<string, unknown>): string | 
 }
 
 api.post('/parties/import/validate', async (c) => {
+  const denied = denyUnlessCapability(c, 'parties:create'); if (denied) return denied;
   const { mill } = c.get('session');
   if (Number(c.req.header('content-length') || 0) > 2 * 1024 * 1024) return c.json({ error: 'import payload must be 2 MB or smaller' }, 413);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
@@ -2167,7 +2147,7 @@ api.post('/parties/import/validate', async (c) => {
 });
 
 api.get('/parties/import/template.csv', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'parties:create'); if (denied) return denied;
   const kind = String(c.req.query('kind') ?? 'supplier');
   if (!['supplier', 'buyer'].includes(kind)) return c.json({ error: 'invalid party kind' }, 400);
   const header = kind === 'supplier'
@@ -2177,10 +2157,9 @@ api.get('/parties/import/template.csv', async (c) => {
 });
 
 api.post('/parties/import/commit', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
-  const { user, mill } = c.get('session');
+  const denied = denyUnlessCapability(c, 'parties:create'); if (denied) return denied;
+  const { mill } = c.get('session');
   if (Number(c.req.header('content-length') || 0) > 2 * 1024 * 1024) return c.json({ error: 'import payload must be 2 MB or smaller' }, 413);
-  if (!['owner', 'admin', 'manager', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const kind = String(b.kind ?? '');
   const rows = Array.isArray(b.rows) ? b.rows as Record<string, unknown>[] : [];
@@ -2207,9 +2186,8 @@ api.post('/parties/import/commit', async (c) => {
 });
 
 api.post('/documents', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'documents:create'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  if (!['owner', 'admin', 'manager', 'accountant'].includes(effectiveRole(user))) return c.json({ error: 'not allowed for this role' }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const type = String(b.document_type ?? '');
   const lines = Array.isArray(b.lines) ? b.lines as Record<string, unknown>[] : [];
@@ -2265,7 +2243,7 @@ api.post('/documents', async (c) => {
 });
 
 api.post('/documents/upload', async (c) => {
-  const denied = denyUnless(c, 'CREATE'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'documents:upload'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const form = await c.req.formData();
   const file = form.get('file');
@@ -2282,13 +2260,14 @@ api.post('/documents/upload', async (c) => {
 });
 
 api.get('/documents', async (c) => {
+  const denied = denyUnlessCapability(c, 'documents:view'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const result = await c.env.DB.prepare(`SELECT d.*, COALESCE(b.name, s.name) AS party_name, COALESCE((SELECT SUM(p.amount_paise) FROM payments p WHERE p.mill_id = d.mill_id AND p.document_id = d.id AND p.status = 'POSTED'), 0) AS paid_paise FROM documents d LEFT JOIN buyers b ON d.party_kind='buyer' AND b.id=d.party_id LEFT JOIN suppliers s ON d.party_kind='supplier' AND s.id=d.party_id WHERE d.mill_id = ? ORDER BY d.issue_date DESC, d.created_at DESC LIMIT 500`).bind(mill.id).all();
-  const body = { documents: result.results };
-  return c.json(user.role_code === 'manager' || user.role === 'manager' ? stripMoney(body) : body);
+  return c.json(applyFinancePolicy(user, { documents: result.results }));
 });
 
 api.get('/documents/:id/file', async (c) => {
+  const denied = denyUnlessCapability(c, 'documents:view'); if (denied) return denied;
   const { mill } = c.get('session');
   const file = await c.env.DB.prepare(`SELECT upload_name, upload_mime, hex(upload_data) AS upload_data_hex FROM documents WHERE id = ? AND mill_id = ? AND source = 'UPLOADED'`).bind(c.req.param('id'), mill.id).first<{ upload_name: string; upload_mime: string; upload_data_hex: string }>();
   if (!file?.upload_data_hex) return c.json({ error: 'uploaded file not found' }, 404);
@@ -2298,9 +2277,9 @@ api.get('/documents/:id/file', async (c) => {
 });
 
 api.get('/documents/export.csv', async (c) => {
-  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'documents:export'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  const moneyColumns = user.role_code === 'manager' || user.role === 'manager' ? '' : ', subtotal_paise, total_paise';
+  const moneyColumns = canViewFinance(user) ? ', subtotal_paise, total_paise' : '';
   const result = await c.env.DB.prepare(`SELECT document_no, document_type, issue_date, financial_year, party_kind, party_id${moneyColumns}, status, notes FROM documents WHERE mill_id = ? ORDER BY issue_date DESC, created_at DESC`).bind(mill.id).all<Record<string, unknown>>();
   const safe = (value: unknown) => { const s = String(value ?? ''); return /^[=+\-@]/.test(s) ? "'" + s : s; };
   const cell = (value: unknown) => '"' + safe(value).replaceAll('"', '""') + '"';
@@ -2309,9 +2288,9 @@ api.get('/documents/export.csv', async (c) => {
 });
 
 api.get('/documents/export.xls', async (c) => {
-  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'documents:export'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  const showMoney = effectiveRole(user) !== 'manager';
+  const showMoney = canViewFinance(user);
   const result = await c.env.DB.prepare(`SELECT document_no, document_type, issue_date, financial_year, party_kind, party_id${showMoney ? ', subtotal_paise, total_paise' : ''}, status, notes FROM documents WHERE mill_id = ? ORDER BY issue_date DESC, created_at DESC`).bind(mill.id).all<Record<string, unknown>>();
   const fields = ['Document No', 'Type', 'Issue Date', 'Financial Year', 'Party Kind', 'Party ID'].concat(showMoney ? ['Subtotal (₹)', 'Total (₹)'] : [], ['Status', 'Notes']);
   const xml = (value: unknown) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
@@ -2328,7 +2307,7 @@ api.get('/documents/export.xls', async (c) => {
 });
 
 api.post('/documents/:id/void', async (c) => {
-  const denied = denyUnless(c, 'VOID'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'documents:void'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const reason = String(b.reason ?? '').trim();
@@ -2341,9 +2320,9 @@ api.post('/documents/:id/void', async (c) => {
 });
 
 api.get('/documents/:id/print', async (c) => {
-  const denied = denyUnless(c, 'EXPORT'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'documents:view'); if (denied) return denied;
   const { user, mill } = c.get('session');
-  const showMoney = effectiveRole(user) !== 'manager';
+  const showMoney = canViewFinance(user);
   const document = await c.env.DB.prepare(`SELECT * FROM documents WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<Record<string, unknown>>();
   if (!document) return c.html('<h1>Document not found</h1>', 404);
   let party: Record<string, unknown> | null = null;
@@ -2361,7 +2340,7 @@ api.get('/documents/:id/print', async (c) => {
 // Assistant requests are deliberately read-only and scoped to the signed-in mill.
 // The optional Gemini key stays in the Worker environment, never the browser.
 api.post('/assistant/chat', async (c) => {
-  const denied = denyUnless(c, 'VIEW'); if (denied) return denied;
+  const denied = denyUnlessCapability(c, 'dashboard:view'); if (denied) return denied;
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const message = String(body.message ?? '').trim();
   if (!message || message.length > 2000) return c.json({ error: 'Ask a question between 1 and 2,000 characters.' }, 400);
@@ -2424,6 +2403,7 @@ api.patch('/feedback/tickets/:id/status', async (c) => {
 
 // ---- Night digest (free path: in-app + wa.me share text) ----
 api.get('/digest', async (c) => {
+  const denied = denyUnlessCapability(c, 'digest:view'); if (denied) return denied;
   const { user, mill } = c.get('session');
   const db = c.env.DB;
   const today = istToday();
@@ -2446,7 +2426,7 @@ api.get('/digest', async (c) => {
     `*${mill.name}* — Night Digest, ${today}`,
     `Incoming: ${byDir.in?.trucks ?? 0} trucks · ${qtl(byDir.in?.net_kg ?? 0)} qtl`,
     `Dispatched: ${qtl(byDir.out?.net_kg ?? 0)} qtl`,
-    ...(effectiveRole(user) !== 'manager' ? [`Cash paid: ${lakh(paid)}`] : []),
+    ...(canViewFinance(user) ? [`Cash paid: ${lakh(paid)}`] : []),
     mb.in_kg > 0 ? `Unexplained loss: ${mb.unexplained_pct}%${mb.unexplained_pct > mill.loss_limit_pct ? ` ⚠ above your ${mill.loss_limit_pct}% limit` : ''}` : 'No production entered today.',
     '— MillSaathi · पता चलेगा माल कहाँ जा रहा है।',
   ];
@@ -2461,5 +2441,5 @@ api.get('/digest', async (c) => {
     text,
     wa_share_url: `https://wa.me/?text=${encodeURIComponent(text)}`,
   };
-  return c.json(effectiveRole(user) === 'manager' ? (stripMoney(body) as typeof body) : body);
+  return c.json(applyFinancePolicy(user, body));
 });

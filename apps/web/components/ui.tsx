@@ -4,7 +4,6 @@ import type {
   HTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
-  SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react';
 
@@ -24,9 +23,7 @@ export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInpu
   return <input className={`ui-input ms-focus-ring ${className}`} {...props} />;
 }
 
-export function Select({ className = '', children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={`ui-select ms-focus-ring ${className}`} {...props}>{children}</select>;
-}
+export { Dropdown as Select } from './dropdown';
 
 export function Textarea({ className = '', ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea className={`ui-input ui-textarea ms-focus-ring ${className}`} {...props} />;

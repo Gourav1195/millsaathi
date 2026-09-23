@@ -89,6 +89,10 @@
   --solid-bg: #1B2431;
   --solid-fg: #FFFFFF;
   --solid-hover: #2A3543;
+  --hero-bg: var(--solid-bg);
+  --hero-ink: var(--solid-fg);
+  --hero-muted: var(--side-text);
+  --hero-grid: var(--side-line);
   --shell-cols: 256px minmax(0, 1fr);
 
   /* Typography scale */
@@ -203,6 +207,10 @@
   --gradient-canvas: linear-gradient(135deg, #1A222D 0%, #141B24 100%);
   --gradient-dropzone: linear-gradient(145deg, #1E2733 0%, #1A222D 100%);
   --gradient-surface-warm: linear-gradient(135deg, #152019 0%, #1A222D 55%, #231F14 100%);
+  --hero-bg: #0F1419;
+  --hero-ink: #E8EDF4;
+  --hero-muted: #98A2B3;
+  --hero-grid: #232C38;
 }
 
 /* Marketing / landing palette — mirrors public/assets/pages.css */
@@ -226,7 +234,26 @@
   --accent-ink: #9E3714;
   --warn-bg: #FCEDE7;
   --warn-line: #E9B6A3;
+  --hero-bg: #211F1A;
   --hero-ink: #F6F1E6;
   --hero-muted: #C8C1B2;
   --hero-grid: #2C2A24;
+}
+
+:root[data-theme='dark'] .site-home {
+  --ink: #F6F1E6;
+  --muted: #C8C1B2;
+  --muted2: #9A9384;
+  --bg: #14110D;
+  --bg2: #1C1914;
+  --surface: #1F1B16;
+  --border: #3A342C;
+  --line: #2C2820;
+  --green-bg: #1E3326;
+  --warn-bg: #3A251C;
+  --warn-line: #5C3A2A;
+  --hero-bg: #0C0A08;
+  --hero-ink: #F6F1E6;
+  --hero-muted: #C8C1B2;
+  --hero-grid: #242019;
 }

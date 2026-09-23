@@ -38,9 +38,10 @@ function BrandMark() {
 
 export function NotFoundPage({ context = 'site' }: { context?: NotFoundContext }) {
   const text = copy[context];
+  const pageClass = context === 'site' ? 'site-home not-found-page' : 'not-found-page';
 
   return (
-    <main className="not-found-page">
+    <main className={pageClass}>
       <header className="site-nav">
         <Link className="site-brand" href="/">
           <BrandMark />
@@ -53,14 +54,14 @@ export function NotFoundPage({ context = 'site' }: { context?: NotFoundContext }
         </nav>
       </header>
 
-      <section className="not-found-hero" aria-labelledby="not-found-title">
+      <section className="hero not-found-hero" aria-labelledby="not-found-title">
         <div className="hero-grid" aria-hidden="true" />
-        <div className="not-found-content">
-          <div className="not-found-copy">
+        <div className="hero-content">
+          <div className="hero-copy">
             <p className="site-eyebrow"><i aria-hidden="true" />Error 404</p>
             <p className="not-found-code" aria-hidden="true">404</p>
             <h1 id="not-found-title">{text.headline}</h1>
-            <p className="deva not-found-hindi">{text.hindi}</p>
+            <p className="deva">{text.hindi}</p>
             <p className="hero-summary">{text.summary}</p>
             <div className="hero-actions">
               <Link className="site-cta large" href={text.primary.href}>
@@ -70,13 +71,13 @@ export function NotFoundPage({ context = 'site' }: { context?: NotFoundContext }
             </div>
           </div>
 
-          <aside className="not-found-card" aria-label="Missing page record">
-            <div className="not-found-card-head">
+          <aside className="balance-card not-found-card" aria-label="Missing page record">
+            <div className="balance-card-head">
               <div>
                 <small>System lookup</small>
                 <h2>Page not found</h2>
               </div>
-              <b>Missing</b>
+              <b className="not-found-badge">Missing</b>
             </div>
 
             <dl className="not-found-meta">

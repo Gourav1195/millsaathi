@@ -4,6 +4,7 @@ import { AppLink } from './app-link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './app-header';
 import { millHeaderMeta } from '../lib/app-meta';
+import { canViewFinance } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { Button, Card } from './ui';
 
@@ -247,7 +248,26 @@ function ProcessingBalanceCard({ summary }: { summary: Overview['processing_toda
   );
 }
 
-function OnboardingCard({ overview }: { overview: Overview }) {
+const ONBOARDING_CONNECTED_KEY = (millKey: string) => `ms-onboarding-connected:${millKey}`;
+const ONBOARDING_CELEBRATION_MS = 8000;
+
+function readOnboardingDismissed(millKey: string) {
+  try {
+    return localStorage.getItem(ONBOARDING_CONNECTED_KEY(millKey)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistOnboardingDismissed(millKey: string) {
+  try {
+    localStorage.setItem(ONBOARDING_CONNECTED_KEY(millKey), '1');
+  } catch {
+    // Ignore storage failures in private mode.
+  }
+}
+
+function OnboardingCard({ overview, millKey }: { overview: Overview; millKey: string }) {
   const steps = [
     { title: 'Add parties', done: overview.suppliers.length > 0 && overview.buyers.length > 0, detail: 'Buyers, sellers, and brokers in one directory.', href: '/app/parties' },
     { title: 'Check items', done: overview.items.length > 0, detail: 'Raw material, finished goods and by-products.', href: '/app/items' },
@@ -256,7 +276,19 @@ function OnboardingCard({ overview }: { overview: Overview }) {
     { title: 'Move to stock', done: overview.lots.length > 0, detail: 'Add completed incoming trucks into a godown lot.', href: '/app/stock' },
   ];
   const done = steps.every((step) => step.done);
+  const [celebrationVisible, setCelebrationVisible] = useState(() => !readOnboardingDismissed(millKey));
+
+  useEffect(() => {
+    if (!done || !celebrationVisible) return;
+    const timer = window.setTimeout(() => {
+      persistOnboardingDismissed(millKey);
+      setCelebrationVisible(false);
+    }, ONBOARDING_CELEBRATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [done, celebrationVisible, millKey]);
+
   if (done) {
+    if (!celebrationVisible) return null;
     return (
       <Card className="dashboard-card guide-card celebrate-card">
         <div className="celebrate-mark" aria-hidden="true">
@@ -325,7 +357,7 @@ export function DashboardApp() {
     const k = overview.kpis;
     const mb = overview.mass_balance;
     const lossLimit = overview.mill.loss_limit_pct;
-    if (session.role === 'manager') {
+    if (!canViewFinance(session)) {
       return [
         { label: 'In gate queue', value: String(k.trucks_in_queue ?? 0), detail: 'trucks now inside' },
         { label: 'Arriving today', value: qtl(k.incoming_today_kg), detail: `${k.weighed_today ?? 0} trucks weighed` },
@@ -338,7 +370,7 @@ export function DashboardApp() {
         },
       ];
     }
-    if (session.role === 'accountant') {
+    if (session.role === 'accountant' && canViewFinance(session)) {
       return [
         { label: 'Payables', value: rupees(k.payables_paise), detail: 'to suppliers', tone: 'red' as const },
         { label: 'Receivables', value: rupees(k.receivables_paise), detail: 'from buyers', tone: 'green' as const },
@@ -455,7 +487,7 @@ export function DashboardApp() {
 
         {overview && (
           <>
-            <OnboardingCard overview={overview} />
+            <OnboardingCard overview={overview} millKey={session.mill.id || session.mill.name} />
 
             <div className="kpi-grid dashboard-kpis">
               {kpis.map((kpi) => (

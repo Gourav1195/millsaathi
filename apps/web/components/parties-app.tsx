@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -26,7 +26,14 @@ import {
   TabRow,
 } from './ui';
 import { useArchiveDialog } from './archive-dialog';
+import {
+  commitPartyImport,
+  SpreadsheetImportButton,
+  validatePartyImport,
+} from './spreadsheet-import-button';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can, canViewFinance } from '../lib/permissions';
+import { mapPartyImportRows } from '../lib/spreadsheet';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { balanceColumnLabel, brokerCommissionDuePaise, brokerSaudaCount, partyBalanceMeta, type SaudaBrokerRef } from '../lib/party-balance';
 import { useSession } from '../lib/session';
@@ -153,6 +160,10 @@ export function PartiesApp() {
     sellerType: 'farmer',
     buyerType: 'Wholesaler',
   });
+  const [editing, setEditing] = useState<UnifiedParty | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', phone: '', city: '', sellerType: 'farmer', buyerType: 'Wholesaler' });
+  const [saving, setSaving] = useState(false);
+  const editDialogRef = useRef<HTMLDialogElement>(null);
 
   const load = async () => {
     const body = await api<{ suppliers: RawSupplier[]; buyers: RawBuyer[]; saudas: SaudaBrokerRef[] }>('/api/overview');
@@ -166,6 +177,13 @@ export function PartiesApp() {
   useEffect(() => {
     setPage(0);
   }, [tab, query, filters]);
+
+  useEffect(() => {
+    const dialog = editDialogRef.current;
+    if (!dialog) return;
+    if (editing && !dialog.open) dialog.showModal();
+    if (!editing && dialog.open) dialog.close();
+  }, [editing]);
 
   const tabParties = useMemo(() => {
     if (tab === 'all') return parties;
@@ -199,7 +217,11 @@ export function PartiesApp() {
     { id: 'last', label: 'Last' },
     { id: 'actions', label: '' },
   ], [tab]);
-  const restrictedMoney = session?.role === 'manager';
+  const restrictedMoney = !canViewFinance(session ?? { role: '' });
+  const canEditParty = can(session, 'parties:edit');
+  const canArchiveParty = can(session, 'parties:archive');
+  const canImportParty = can(session, 'parties:create');
+  const importKind = tab === 'buyers' ? 'buyer' : 'supplier';
 
   const effectiveKind = tab === 'all' ? form.kind : tab === 'buyers' ? 'buyer' : tab === 'brokers' ? 'broker' : 'seller';
   const addTitle = tab === 'all'
@@ -236,6 +258,51 @@ export function PartiesApp() {
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create party');
+    }
+  }
+
+  function startEdit(party: UnifiedParty) {
+    setEditing(party);
+    setEditForm({
+      name: party.name,
+      phone: party.phone ?? '',
+      city: party.city ?? '',
+      sellerType: party.sourceKind === 'supplier' ? (party.subtype === 'broker' ? 'broker' : party.subtype) : 'farmer',
+      buyerType: party.sourceKind === 'buyer' ? party.subtype : 'Wholesaler',
+    });
+  }
+
+  function closeEdit() {
+    if (saving) return;
+    setEditing(null);
+  }
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing || !editForm.name.trim()) return setError('Party name is required.');
+    setSaving(true);
+    setError(null);
+    try {
+      const endpoint = editing.sourceKind === 'supplier' ? 'suppliers' : 'buyers';
+      await api(`/api/${endpoint}/${editing.id}`, json('PATCH', editing.sourceKind === 'supplier'
+        ? {
+            name: editForm.name.trim(),
+            phone: editForm.phone,
+            place: editForm.city,
+            type: editing.role === 'broker' ? 'broker' : editForm.sellerType,
+          }
+        : {
+            name: editForm.name.trim(),
+            phone: editForm.phone,
+            location: editForm.city,
+            type: editForm.buyerType,
+          }));
+      setEditing(null);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not update party');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -372,7 +439,82 @@ export function PartiesApp() {
           </Panel>
         )}
 
-        <TableCard>
+        <dialog
+          ref={editDialogRef}
+          className="app-dialog"
+          onClose={() => {
+            if (!saving) setEditing(null);
+          }}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeEdit();
+          }}
+        >
+          {editing ? (
+            <>
+              <div className="app-dialog-head">
+                <div>
+                  <h2>Edit {ROLE_LABEL[editing.role].toLowerCase()}</h2>
+                  <p><strong>{editing.name}</strong></p>
+                </div>
+                <button
+                  type="button"
+                  className="app-dialog-close ms-focus-ring"
+                  aria-label="Close edit party dialog"
+                  onClick={closeEdit}
+                  disabled={saving}
+                >
+                  ×
+                </button>
+              </div>
+              <FormGrid className="ui-form-grid--compact" onSubmit={saveEdit}>
+                <Field label="Name">
+                  <Input required value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+                </Field>
+                {editing.role === 'seller' && (
+                  <Field label="Seller type">
+                    <Select value={editForm.sellerType} onChange={(e) => setEditForm({ ...editForm, sellerType: e.target.value })}>
+                      {SELLER_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </Select>
+                  </Field>
+                )}
+                {editing.role === 'buyer' && (
+                  <Field label="Buyer type">
+                    <Select value={editForm.buyerType} onChange={(e) => setEditForm({ ...editForm, buyerType: e.target.value })}>
+                      {BUYER_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </Select>
+                  </Field>
+                )}
+                <Field label="Phone">
+                  <Input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} />
+                </Field>
+                <Field label="City / village">
+                  <Input value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} />
+                </Field>
+                <FormActions>
+                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+                  <Button className="secondary" type="button" onClick={closeEdit} disabled={saving}>Cancel</Button>
+                </FormActions>
+              </FormGrid>
+            </>
+          ) : null}
+        </dialog>
+
+        <TableCard
+          actions={canImportParty && tab !== 'brokers' ? (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <SpreadsheetImportButton
+                templateHref={`/api/parties/import/template.csv?kind=${importKind}`}
+                maxRows={1000}
+                mapRows={(rows) => mapPartyImportRows(importKind, rows)}
+                validate={(rows) => validatePartyImport(importKind, rows)}
+                commit={(rows) => commitPartyImport(importKind, rows)}
+                onImported={load}
+                onError={setError}
+              />
+            </div>
+          ) : null}
+        >
           <TableFilters
             compact
             onClear={clearFilters}
@@ -438,14 +580,19 @@ export function PartiesApp() {
                 </td>
                 <td className="muted">{ago(party.last_at)}</td>
                 <td>
-                  {session.role !== 'manager' && (
+                  {(canEditParty || canArchiveParty) && (
                     <TableActions>
-                      {party.role !== 'broker' && (
+                      {party.role !== 'broker' && can(session, 'payments:create') && (
                         <Button type="button" className="secondary" onClick={() => void payment(party)}>
                           {party.role === 'buyer' ? 'Receive' : 'Pay'}
                         </Button>
                       )}
-                      <Button type="button" className="secondary" onClick={() => archive(party)}>Archive</Button>
+                      {canEditParty && (
+                        <Button type="button" className="secondary" onClick={() => startEdit(party)}>Edit</Button>
+                      )}
+                      {canArchiveParty && (
+                        <Button type="button" className="secondary" onClick={() => archive(party)}>Archive</Button>
+                      )}
                     </TableActions>
                   )}
                 </td>

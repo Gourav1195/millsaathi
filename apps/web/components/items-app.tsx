@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -19,11 +19,21 @@ import {
   TableActions,
   TableCard,
 } from './ui';
+import { useArchiveDialog } from './archive-dialog';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
 type Item = { id: string; name: string; category?: string | null; category_code?: string | null; hsn?: string | null; unit?: string | null; base_unit?: string | null; display_unit?: string | null; typical_otr_pct?: number | null };
+
+type ItemForm = {
+  name: string;
+  category: string;
+  hsn: string;
+  display_unit: string;
+  typical_otr_pct: string;
+};
 
 const ITEM_COLUMNS = [
   { id: 'item', label: 'Item' },
@@ -35,13 +45,32 @@ const ITEM_COLUMNS = [
   { id: 'actions', label: '' },
 ];
 
+const emptyForm = (): ItemForm => ({ name: '', category: 'paddy', hsn: '', display_unit: 'QUINTAL', typical_otr_pct: '' });
+
+const formFromItem = (item: Item): ItemForm => ({
+  name: item.name,
+  category: item.category ?? 'paddy',
+  hsn: item.hsn ?? '',
+  display_unit: item.display_unit ?? item.unit ?? 'QUINTAL',
+  typical_otr_pct: item.typical_otr_pct == null ? '' : String(item.typical_otr_pct),
+});
+
 export function ItemsApp() {
   const { session, sessionError } = useSession();
+  const { requestArchive } = useArchiveDialog();
   const headerMeta = millHeaderMeta(session);
   const [items, setItems] = useState<Item[]>([]);
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: '', category: 'paddy', hsn: '', display_unit: 'QUINTAL', typical_otr_pct: '' });
+  const [form, setForm] = useState<ItemForm>(emptyForm);
+  const [editing, setEditing] = useState<Item | null>(null);
+  const [editForm, setEditForm] = useState<ItemForm>(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const editDialogRef = useRef<HTMLDialogElement>(null);
+
+  const canEdit = can(session, 'items:edit');
+  const canArchive = can(session, 'items:archive');
+  const canCreate = can(session, 'items:create');
 
   const load = async () => {
     const body = await api<{ items: Item[] }>('/api/overview');
@@ -52,27 +81,70 @@ export function ItemsApp() {
     if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load items'));
   }, [session]);
 
+  useEffect(() => {
+    const dialog = editDialogRef.current;
+    if (!dialog) return;
+    if (editing && !dialog.open) dialog.showModal();
+    if (!editing && dialog.open) dialog.close();
+  }, [editing]);
+
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!form.name.trim()) return setError('Item name is required.');
     try {
-      await api('/api/items', json('POST', { ...form, typical_otr_pct: form.typical_otr_pct === '' ? undefined : Number(form.typical_otr_pct) }));
-      setForm({ ...form, name: '', hsn: '', typical_otr_pct: '' });
+      await api('/api/items', json('POST', {
+        ...form,
+        typical_otr_pct: form.typical_otr_pct === '' ? undefined : Number(form.typical_otr_pct),
+      }));
+      setForm(emptyForm());
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create item');
     }
   }
 
-  async function edit(item: Item) {
-    const name = window.prompt('Item name', item.name);
-    if (!name?.trim()) return;
+  function startEdit(item: Item) {
+    setEditing(item);
+    setEditForm(formFromItem(item));
+  }
+
+  function closeEdit() {
+    if (saving) return;
+    setEditing(null);
+  }
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing || !editForm.name.trim()) return setError('Item name is required.');
+    setSaving(true);
+    setError(null);
     try {
-      await api(`/api/items/${item.id}`, json('PATCH', { name: name.trim() }));
+      await api(`/api/items/${editing.id}`, json('PATCH', {
+        name: editForm.name.trim(),
+        category: editForm.category,
+        hsn: editForm.hsn,
+        display_unit: editForm.display_unit,
+        typical_otr_pct: editForm.typical_otr_pct === '' ? null : Number(editForm.typical_otr_pct),
+      }));
+      setEditing(null);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not update item');
+    } finally {
+      setSaving(false);
     }
+  }
+
+  function archive(item: Item) {
+    requestArchive({
+      title: 'Archive item?',
+      name: item.name,
+      confirmLabel: 'Archive item',
+      onConfirm: async () => {
+        await api(`/api/items/${item.id}`, json('DELETE', {}));
+        await load();
+      },
+    });
   }
 
   const filtered = useMemo(
@@ -102,44 +174,109 @@ export function ItemsApp() {
           subtitle="Item quantities retain the Worker’s KG base unit."
           date={headerMeta.date}
           season={headerMeta.season}
-          actions={<AppLink href="/app"><Button className="quiet">Open Processing</Button></AppLink>}
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
 
-        <Panel title="Add New item">
-          <FormGrid onSubmit={save}>
-            <Field label="Name">
-              <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            </Field>
-            <Field label="Category">
-              <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                <option value="paddy">Paddy</option>
-                <option value="rice">Rice</option>
-                <option value="byproduct">Byproduct</option>
-                <option value="packaging">Packaging</option>
-                <option value="consumable">Consumable</option>
-                <option value="other">Other</option>
-              </Select>
-            </Field>
-            <Field label="HSN">
-              <Input value={form.hsn} onChange={(e) => setForm({ ...form, hsn: e.target.value })} />
-            </Field>
-            <Field label="Display unit">
-              <Select value={form.display_unit} onChange={(e) => setForm({ ...form, display_unit: e.target.value })}>
-                <option>KG</option>
-                <option>QUINTAL</option>
-                <option>TONNE</option>
-              </Select>
-            </Field>
-            <Field label="Typical OTR %">
-              <Input inputMode="decimal" value={form.typical_otr_pct} onChange={(e) => setForm({ ...form, typical_otr_pct: e.target.value })} />
-            </Field>
-            <FormActions>
-              <Button type="submit">Create item</Button>
-            </FormActions>
-          </FormGrid>
-        </Panel>
+        {canCreate && (
+          <Panel title="Add New item">
+            <FormGrid onSubmit={save}>
+              <Field label="Name">
+                <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              </Field>
+              <Field label="Category">
+                <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  <option value="paddy">Paddy</option>
+                  <option value="rice">Rice</option>
+                  <option value="byproduct">Byproduct</option>
+                  <option value="packaging">Packaging</option>
+                  <option value="consumable">Consumable</option>
+                  <option value="other">Other</option>
+                </Select>
+              </Field>
+              <Field label="HSN">
+                <Input value={form.hsn} onChange={(e) => setForm({ ...form, hsn: e.target.value })} />
+              </Field>
+              <Field label="Display unit">
+                <Select value={form.display_unit} onChange={(e) => setForm({ ...form, display_unit: e.target.value })}>
+                  <option>KG</option>
+                  <option>QUINTAL</option>
+                  <option>TONNE</option>
+                </Select>
+              </Field>
+              <Field label="Typical OTR %">
+                <Input inputMode="decimal" value={form.typical_otr_pct} onChange={(e) => setForm({ ...form, typical_otr_pct: e.target.value })} />
+              </Field>
+              <FormActions>
+                <Button type="submit">Create item</Button>
+              </FormActions>
+            </FormGrid>
+          </Panel>
+        )}
+
+        <dialog
+          ref={editDialogRef}
+          className="app-dialog"
+          onClose={() => {
+            if (!saving) setEditing(null);
+          }}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeEdit();
+          }}
+        >
+          {editing ? (
+            <>
+              <div className="app-dialog-head">
+                <div>
+                  <h2>Edit item</h2>
+                  <p><strong>{editing.name}</strong></p>
+                </div>
+                <button
+                  type="button"
+                  className="app-dialog-close ms-focus-ring"
+                  aria-label="Close edit item dialog"
+                  onClick={closeEdit}
+                  disabled={saving}
+                >
+                  ×
+                </button>
+              </div>
+              <FormGrid className="ui-form-grid--compact" onSubmit={saveEdit}>
+                <Field label="Name">
+                  <Input required value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
+                </Field>
+                <Field label="Category">
+                  <Select value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
+                    <option value="paddy">Paddy</option>
+                    <option value="rice">Rice</option>
+                    <option value="byproduct">Byproduct</option>
+                    <option value="packaging">Packaging</option>
+                    <option value="consumable">Consumable</option>
+                    <option value="other">Other</option>
+                  </Select>
+                </Field>
+                <Field label="HSN">
+                  <Input value={editForm.hsn} onChange={(e) => setEditForm({ ...editForm, hsn: e.target.value })} />
+                </Field>
+                <Field label="Display unit">
+                  <Select value={editForm.display_unit} onChange={(e) => setEditForm({ ...editForm, display_unit: e.target.value })}>
+                    <option>KG</option>
+                    <option>QUINTAL</option>
+                    <option>TONNE</option>
+                  </Select>
+                </Field>
+                <Field label="Typical OTR %">
+                  <Input inputMode="decimal" value={editForm.typical_otr_pct} onChange={(e) => setEditForm({ ...editForm, typical_otr_pct: e.target.value })} />
+                </Field>
+                <FormActions>
+                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+                  <Button className="secondary" type="button" onClick={closeEdit} disabled={saving}>Cancel</Button>
+                </FormActions>
+              </FormGrid>
+            </>
+          ) : null}
+        </dialog>
 
         <TableCard
           title="Items"
@@ -165,9 +302,16 @@ export function ItemsApp() {
                 <td>{item.display_unit ?? item.unit ?? '—'}</td>
                 <td>{item.typical_otr_pct == null ? '—' : `${item.typical_otr_pct}%`}</td>
                 <td>
-                  <TableActions>
-                    <Button type="button" className="secondary" onClick={() => void edit(item)}>Edit</Button>
-                  </TableActions>
+                  {(canEdit || canArchive) && (
+                    <TableActions>
+                      {canEdit && (
+                        <Button type="button" className="secondary" onClick={() => startEdit(item)}>Edit</Button>
+                      )}
+                      {canArchive && (
+                        <Button type="button" className="secondary" onClick={() => archive(item)}>Archive</Button>
+                      )}
+                    </TableActions>
+                  )}
                 </td>
               </tr>
             )) : (

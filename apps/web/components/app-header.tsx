@@ -2,21 +2,31 @@
 
 import { AppLink } from './app-link';
 import { usePathname } from 'next/navigation';
+import { canAccessNav, type NavModule } from '../lib/permissions';
 import { useOperationalCounts } from '../lib/operational-counts';
 import type { Session } from '../lib/session';
 
-type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'parties' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest' | 'settings';
-type NavigationItem = { label: string; href: string; icon: IconName } | { divider: true };
+type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'parties' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest' | 'settings' | 'access';
+type NavigationItem =
+  | { label: string; href: string; icon: IconName; module: NavModule }
+  | { divider: true };
 
 const navigation: NavigationItem[] = [
-  { label: 'Dashboard', href: '/app/dashboard', icon: 'dashboard' }, { label: 'Gate & Weighbridge', href: '/app/gate', icon: 'gate' },
-  { label: 'Purchase & Saudas', href: '/app/purchase', icon: 'purchase' }, { label: 'Stock & Lots', href: '/app/stock', icon: 'stock' },
-  { label: 'Parties', href: '/app/parties', icon: 'parties' },
-  { label: 'Items', href: '/app/items', icon: 'items' }, { label: 'Processing', href: '/app', icon: 'processing' }, { divider: true },
-  { label: 'Billing', href: '/app/billing', icon: 'billing' }, { label: 'Team', href: '/app/team', icon: 'team' },
-  { label: 'Documents', href: '/app/documents', icon: 'documents' }, { label: 'Night Digest', href: '/app/digest', icon: 'digest' },
+  { label: 'Dashboard', href: '/app/dashboard', icon: 'dashboard', module: 'dashboard' },
+  { label: 'Gate & Weighbridge', href: '/app/gate', icon: 'gate', module: 'gate' },
+  { label: 'Purchase & Saudas', href: '/app/purchase', icon: 'purchase', module: 'purchase' },
+  { label: 'Stock & Lots', href: '/app/stock', icon: 'stock', module: 'stock' },
+  { label: 'Parties', href: '/app/parties', icon: 'parties', module: 'parties' },
+  { label: 'Items', href: '/app/items', icon: 'items', module: 'items' },
+  { label: 'Processing', href: '/app', icon: 'processing', module: 'processing' },
   { divider: true },
-  { label: 'Settings', href: '/app/settings', icon: 'settings' },
+  { label: 'Billing', href: '/app/billing', icon: 'billing', module: 'billing' },
+  { label: 'Team', href: '/app/team', icon: 'team', module: 'team' },
+  { label: 'Documents', href: '/app/documents', icon: 'documents', module: 'documents' },
+  { label: 'Night Digest', href: '/app/digest', icon: 'digest', module: 'digest' },
+  { divider: true },
+  { label: 'Settings', href: '/app/settings', icon: 'settings', module: 'settings' },
+  { label: 'My access', href: '/app/access', icon: 'access', module: 'access' },
 ];
 
 function NavIcon({ name }: { name: IconName }) {
@@ -31,6 +41,7 @@ function NavIcon({ name }: { name: IconName }) {
   if (name === 'processing') return <svg {...common}><path d="M4 5h6v6H4zM14 13h6v6h-6zM10 8h4v8h-4z" {...stroke}/></svg>;
   if (name === 'team') return <svg {...common}><circle cx="9" cy="8" r="3" {...stroke}/><circle cx="17" cy="9" r="2.5" {...stroke}/><path d="M3 20a6 6 0 0 1 12 0M15 20a4 4 0 0 1 6 0" {...stroke} strokeLinecap="round"/></svg>;
   if (name === 'documents') return <svg {...common}><path d="M6 3h9l3 3v15H6z" {...stroke}/><path d="M9 11h6M9 15h6M9 7h4" {...stroke} strokeLinecap="round"/></svg>;
+  if (name === 'access') return <svg {...common}><path d="M12 3a5 5 0 0 0-5 5v2H5v11h14V10h-2V8a5 5 0 0 0-5-5Z" {...stroke} strokeLinejoin="round"/><circle cx="12" cy="15" r="2" {...stroke}/></svg>;
   if (name === 'settings') return (
     <svg {...common}>
       <path
@@ -51,6 +62,8 @@ function initials(name: string) {
 export function AppHeader({ session }: { session: Session }) {
   const pathname = usePathname();
   const { pendingStockReceipts } = useOperationalCounts();
+  const user = { role: session.role, role_code: session.role };
+  const visibleNavigation = navigation.filter((item) => ('divider' in item ? true : canAccessNav(user, item.module)));
   const active = (href: string) => {
     const path = href.split('?')[0];
     return path === '/app' ? pathname === path : pathname === path || pathname.startsWith(`${path}/`);
@@ -72,10 +85,14 @@ export function AppHeader({ session }: { session: Session }) {
       </div>
 
       <nav className="app-sidebar-nav ms-scroll" aria-label="Application navigation">
-        {navigation.map((item, index) =>
-          'divider' in item ? (
-            <div className="nav-divider" role="separator" key={`divider-${index}`} />
-          ) : (
+        {visibleNavigation.map((item, index) => {
+          if ('divider' in item) {
+            const prev = visibleNavigation[index - 1];
+            const next = visibleNavigation[index + 1];
+            if (!prev || !next || 'divider' in prev || 'divider' in next) return null;
+            return <div className="nav-divider" role="separator" key={`divider-${index}`} />;
+          }
+          return (
             <AppLink key={item.label} href={item.href} className={active(item.href) ? 'active' : ''}>
               <NavIcon name={item.icon} />
               <span className="app-sidebar-link-label">{item.label}</span>
@@ -85,15 +102,15 @@ export function AppHeader({ session }: { session: Session }) {
                 </span>
               ) : null}
             </AppLink>
-          )
-        )}
+          );
+        })}
       </nav>
 
       <div className="app-sidebar-user">
         <div className="app-sidebar-avatar" aria-hidden="true">{initials(session.name)}</div>
         <div className="app-sidebar-user-meta">
           <div className="app-sidebar-user-name">{session.name}</div>
-          <div className="app-sidebar-user-role">{session.role.replaceAll('_', ' ')}</div>
+          <div className="app-sidebar-user-role">{(session.role_label ?? session.role).replaceAll('_', ' ')}</div>
         </div>
       </div>
     </aside>

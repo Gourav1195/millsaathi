@@ -22,6 +22,7 @@ import {
   Textarea,
 } from './ui';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -142,6 +143,7 @@ export function DocumentsApp() {
     [documents, query],
   );
   const partyOptions = [...(overview?.suppliers ?? []).map((p) => ({ ...p, kind: 'supplier' })), ...(overview?.buyers ?? []).map((p) => ({ ...p, kind: 'buyer' }))];
+  const canExport = can(session, 'documents:export');
 
   if (session === undefined) return <main className="auth-page"><p className="muted">Loading documents…</p></main>;
   if (!session) {
@@ -265,6 +267,12 @@ export function DocumentsApp() {
         <TableCard
           title="Documents"
           subtitle={`${filtered.length} document${filtered.length === 1 ? '' : 's'}`}
+          actions={canExport ? (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <a className="ui-link" href="/api/documents/export.csv">Export CSV</a>
+              <a className="ui-link" href="/api/documents/export.xls">Export Excel</a>
+            </div>
+          ) : null}
           toolbar={
             <ScreenToolbar>
               <Input

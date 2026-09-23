@@ -17,6 +17,7 @@ import {
   TableActions,
   TableCard,
 } from './ui';
+import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { CatalogProcessType, ProcessCatalog } from './process-catalog';
 import { ProcessChainStudio } from './process-chain-studio';
@@ -99,7 +100,7 @@ export function ProcessingApp() {
   const [chains, setChains] = useState<ProcessingChain[]>([]);
   const [outputFormError, setOutputFormError] = useState<string | null>(null);
 
-  const canManageOrg = session != null && ['owner', 'admin'].includes(session.role);
+  const canManageOrg = can(session, 'processing:configure');
 
   const loadTypes = async () => {
     const response = await fetch('/api/process-types?include_archived=1', { credentials: 'include' });
@@ -469,10 +470,10 @@ export function ProcessingApp() {
           {showDestinationGodown ? (
             <label className="process-godown-label">
               Destination godown
-              <select value={destinationGodownId} onChange={(event) => setDestinationGodownId(event.target.value)}>
+              <Select value={destinationGodownId} onChange={(event) => setDestinationGodownId(event.target.value)} aria-label="Destination godown">
                 <option value="">Choose godown</option>
                 {workspace.godowns.map((godown) => <option key={godown.id} value={godown.id}>{godown.name}</option>)}
-              </select>
+              </Select>
             </label>
           ) : (
             <p className="muted process-godown-hint">Output stays in-process until the final chain step assigns a godown.</p>

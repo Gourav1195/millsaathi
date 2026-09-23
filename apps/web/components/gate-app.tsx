@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -10,6 +10,7 @@ import {
   DataTable,
   EmptyState,
   Field,
+  FormActions,
   FormGrid,
   Input,
   PageHeader,
@@ -22,14 +23,73 @@ import {
   TabRow,
 } from './ui';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
-type GateEntry = { id: string; vehicle_no?: string; direction?: 'in' | 'out'; status?: string; item_name?: string; supplier_name?: string; buyer_name?: string; net_kg?: number };
+type GateEntry = {
+  id: string;
+  token_no?: string;
+  vehicle_no?: string;
+  direction?: 'in' | 'out';
+  status?: string;
+  item_name?: string;
+  supplier_name?: string;
+  buyer_name?: string;
+  net_kg?: number;
+  gross_kg?: number | null;
+  tare_kg?: number | null;
+  moisture_pct?: number | null;
+  quality_json?: string | null;
+};
+
 type Reference = { id: string; name: string };
+
+type GateEditForm = {
+  gross_kg: string;
+  tare_kg: string;
+  moisture_pct: string;
+  broken_pct: string;
+  foreign_matter_pct: string;
+  damaged_pct: string;
+  grade: string;
+  status: string;
+};
+
+const GATE_STATUSES = [
+  { value: 'at_gate', label: 'At gate' },
+  { value: 'weighing', label: 'Weighing' },
+  { value: 'in_lab', label: 'In lab' },
+  { value: 'weighed', label: 'Weighed' },
+  { value: 'unloading', label: 'Unloading' },
+  { value: 'done', label: 'Done' },
+];
 
 const qtl = (kg?: number) => `${((kg ?? 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} qtl`;
 const wholeKg = (value: string) => (/^\d+$/.test(value) ? Number(value) : null);
+
+function parseQuality(qualityJson?: string | null) {
+  if (!qualityJson) return {};
+  try {
+    return JSON.parse(qualityJson) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function editFormFromEntry(entry: GateEntry): GateEditForm {
+  const quality = parseQuality(entry.quality_json);
+  return {
+    gross_kg: entry.gross_kg == null ? '' : String(entry.gross_kg),
+    tare_kg: entry.tare_kg == null ? '' : String(entry.tare_kg),
+    moisture_pct: entry.moisture_pct == null ? '' : String(entry.moisture_pct),
+    broken_pct: quality.broken_pct == null ? '' : String(quality.broken_pct),
+    foreign_matter_pct: quality.foreign_matter_pct == null ? '' : String(quality.foreign_matter_pct),
+    damaged_pct: quality.damaged_pct == null ? '' : String(quality.damaged_pct),
+    grade: quality.grade == null ? '' : String(quality.grade),
+    status: entry.status ?? 'at_gate',
+  };
+}
 
 const GATE_COLUMNS = [
   { id: 'vehicle', label: 'Vehicle' },
@@ -52,6 +112,12 @@ export function GateApp() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ direction: 'in', vehicle_no: '', party_id: '', item_id: '', gross_kg: '', tare_kg: '' });
+  const [editing, setEditing] = useState<GateEntry | null>(null);
+  const [editForm, setEditForm] = useState<GateEditForm | null>(null);
+  const editDialogRef = useRef<HTMLDialogElement>(null);
+
+  const canCreate = can(session, 'gate:create');
+  const canEdit = can(session, 'gate:edit');
 
   const load = async () => {
     const body = await api<{ gate: GateEntry[]; suppliers: Reference[]; buyers: Reference[]; items: Reference[] }>('/api/overview');
@@ -64,6 +130,13 @@ export function GateApp() {
   useEffect(() => {
     if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load gate entries'));
   }, [session]);
+
+  useEffect(() => {
+    const dialog = editDialogRef.current;
+    if (!dialog) return;
+    if (editing && editForm && !dialog.open) dialog.showModal();
+    if (!editing && dialog.open) dialog.close();
+  }, [editing, editForm]);
 
   const visible = useMemo(() => entries.filter((e) => filter === 'all' || e.direction === filter), [entries, filter]);
   const parties = form.direction === 'in' ? suppliers : buyers;
@@ -91,21 +164,47 @@ export function GateApp() {
     }
   }
 
-  async function complete(entry: GateEntry) {
-    const gross = window.prompt('Gross weight in whole kg');
-    const tare = window.prompt('Tare weight in whole kg');
-    if (gross == null || tare == null) return;
-    const g = wholeKg(gross);
-    const t = wholeKg(tare);
-    if (g == null || t == null || g < t) {
-      setError('Gross and tare must be whole kg, and gross must be at least tare.');
-      return;
+  function startEdit(entry: GateEntry) {
+    setEditing(entry);
+    setEditForm(editFormFromEntry(entry));
+  }
+
+  function closeEdit() {
+    if (saving) return;
+    setEditing(null);
+    setEditForm(null);
+  }
+
+  async function saveEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing || !editForm) return;
+    const body: Record<string, unknown> = { status: editForm.status };
+    if (editing.status !== 'done') {
+      const gross = editForm.gross_kg === '' ? null : wholeKg(editForm.gross_kg);
+      const tare = editForm.tare_kg === '' ? null : wholeKg(editForm.tare_kg);
+      if (editForm.gross_kg !== '' && gross == null) return setError('Gross weight must be a whole number of kg.');
+      if (editForm.tare_kg !== '' && tare == null) return setError('Tare weight must be a whole number of kg.');
+      if (gross != null && tare != null && gross < tare) return setError('Gross must be at least tare.');
+      if (gross != null) body.gross_kg = gross;
+      if (tare != null) body.tare_kg = tare;
     }
+    if (editForm.moisture_pct !== '') body.moisture_pct = Number(editForm.moisture_pct);
+    if (editForm.broken_pct !== '') body.broken_pct = Number(editForm.broken_pct);
+    if (editForm.foreign_matter_pct !== '') body.foreign_matter_pct = Number(editForm.foreign_matter_pct);
+    if (editForm.damaged_pct !== '') body.damaged_pct = Number(editForm.damaged_pct);
+    if (editForm.grade !== '') body.grade = editForm.grade;
+
+    setSaving(true);
+    setError(null);
     try {
-      await api(`/api/gate/${entry.id}`, json('PATCH', { gross_kg: g, tare_kg: t, status: 'done' }));
+      await api(`/api/gate/${editing.id}`, json('PATCH', body));
+      setEditing(null);
+      setEditForm(null);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not complete gate entry');
+      setError(cause instanceof Error ? cause.message : 'Could not update gate entry');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -135,40 +234,113 @@ export function GateApp() {
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
 
-        <Panel title="Add New gate entry">
-          <FormGrid onSubmit={submit}>
-            <Field label="Direction">
-              <Select value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value, party_id: '' })}>
-                <option value="in">Arriving</option>
-                <option value="out">Dispatching</option>
-              </Select>
-            </Field>
-            <Field label="Vehicle">
-              <Input required value={form.vehicle_no} onChange={(e) => setForm({ ...form, vehicle_no: e.target.value })} />
-            </Field>
-            <Field label="Party">
-              <Select required value={form.party_id} onChange={(e) => setForm({ ...form, party_id: e.target.value })}>
-                <option value="">Select</option>
-                {parties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </Select>
-            </Field>
-            <Field label="Item">
-              <Select value={form.item_id} onChange={(e) => setForm({ ...form, item_id: e.target.value })}>
-                <option value="">Not specified</option>
-                {items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </Select>
-            </Field>
-            <Field label="Gross kg">
-              <Input required inputMode="numeric" value={form.gross_kg} onChange={(e) => setForm({ ...form, gross_kg: e.target.value })} />
-            </Field>
-            <Field label="Tare kg">
-              <Input required inputMode="numeric" value={form.tare_kg} onChange={(e) => setForm({ ...form, tare_kg: e.target.value })} />
-            </Field>
-            <div className="form-actions">
-              <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save weighment'}</Button>
-            </div>
-          </FormGrid>
-        </Panel>
+        {canCreate && (
+          <Panel title="Add New gate entry">
+            <FormGrid onSubmit={submit}>
+              <Field label="Direction">
+                <Select value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value, party_id: '' })}>
+                  <option value="in">Arriving</option>
+                  <option value="out">Dispatching</option>
+                </Select>
+              </Field>
+              <Field label="Vehicle">
+                <Input required value={form.vehicle_no} onChange={(e) => setForm({ ...form, vehicle_no: e.target.value })} />
+              </Field>
+              <Field label="Party">
+                <Select required value={form.party_id} onChange={(e) => setForm({ ...form, party_id: e.target.value })}>
+                  <option value="">Select</option>
+                  {parties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </Select>
+              </Field>
+              <Field label="Item">
+                <Select value={form.item_id} onChange={(e) => setForm({ ...form, item_id: e.target.value })}>
+                  <option value="">Not specified</option>
+                  {items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                </Select>
+              </Field>
+              <Field label="Gross kg">
+                <Input required inputMode="numeric" value={form.gross_kg} onChange={(e) => setForm({ ...form, gross_kg: e.target.value })} />
+              </Field>
+              <Field label="Tare kg">
+                <Input required inputMode="numeric" value={form.tare_kg} onChange={(e) => setForm({ ...form, tare_kg: e.target.value })} />
+              </Field>
+              <div className="form-actions">
+                <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save weighment'}</Button>
+              </div>
+            </FormGrid>
+          </Panel>
+        )}
+
+        <dialog
+          ref={editDialogRef}
+          className="app-dialog"
+          onClose={() => {
+            if (!saving) closeEdit();
+          }}
+          onCancel={(event) => {
+            event.preventDefault();
+            closeEdit();
+          }}
+        >
+          {editing && editForm ? (
+            <>
+              <div className="app-dialog-head">
+                <div>
+                  <h2>Update {editing.token_no ?? editing.vehicle_no ?? 'gate entry'}</h2>
+                  <p>
+                    <strong>{editing.vehicle_no ?? 'Vehicle'}</strong>
+                    {editing.item_name ? ` · ${editing.item_name}` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="app-dialog-close ms-focus-ring"
+                  aria-label="Close update gate dialog"
+                  onClick={closeEdit}
+                  disabled={saving}
+                >
+                  ×
+                </button>
+              </div>
+              <FormGrid className="ui-form-grid--compact" onSubmit={saveEdit}>
+                {editing.status !== 'done' && (
+                  <>
+                    <Field label="Gross kg">
+                      <Input inputMode="numeric" value={editForm.gross_kg} onChange={(e) => setEditForm({ ...editForm, gross_kg: e.target.value })} />
+                    </Field>
+                    <Field label="Tare kg">
+                      <Input inputMode="numeric" value={editForm.tare_kg} onChange={(e) => setEditForm({ ...editForm, tare_kg: e.target.value })} />
+                    </Field>
+                  </>
+                )}
+                <Field label="Moisture %">
+                  <Input type="number" min="0" max="100" step="0.1" value={editForm.moisture_pct} onChange={(e) => setEditForm({ ...editForm, moisture_pct: e.target.value })} />
+                </Field>
+                <Field label="Broken %">
+                  <Input type="number" min="0" max="100" step="0.1" value={editForm.broken_pct} onChange={(e) => setEditForm({ ...editForm, broken_pct: e.target.value })} />
+                </Field>
+                <Field label="Foreign matter %">
+                  <Input type="number" min="0" max="100" step="0.1" value={editForm.foreign_matter_pct} onChange={(e) => setEditForm({ ...editForm, foreign_matter_pct: e.target.value })} />
+                </Field>
+                <Field label="Damaged %">
+                  <Input type="number" min="0" max="100" step="0.1" value={editForm.damaged_pct} onChange={(e) => setEditForm({ ...editForm, damaged_pct: e.target.value })} />
+                </Field>
+                <Field label="Grade / quality note">
+                  <Input value={editForm.grade} onChange={(e) => setEditForm({ ...editForm, grade: e.target.value })} />
+                </Field>
+                <Field label="Status">
+                  <Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                    {GATE_STATUSES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </Select>
+                </Field>
+                <FormActions>
+                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+                  <Button className="secondary" type="button" onClick={closeEdit} disabled={saving}>Cancel</Button>
+                </FormActions>
+              </FormGrid>
+            </>
+          ) : null}
+        </dialog>
 
         <TableCard
           title="Gate entries"
@@ -193,11 +365,11 @@ export function GateApp() {
                 <td><strong>{qtl(entry.net_kg)}</strong></td>
                 <td><Badge tone={entry.status === 'done' ? 'success' : 'warning'}>{entry.status ?? '—'}</Badge></td>
                 <td>
-                  <TableActions>
-                    {entry.status !== 'done' && (
-                      <Button type="button" className="secondary" onClick={() => void complete(entry)}>Complete</Button>
-                    )}
-                  </TableActions>
+                  {canEdit && entry.status !== 'done' && (
+                    <TableActions>
+                      <Button type="button" className="secondary" onClick={() => startEdit(entry)}>Update</Button>
+                    </TableActions>
+                  )}
                 </td>
               </tr>
             )) : (

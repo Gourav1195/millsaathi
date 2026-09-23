@@ -31,7 +31,8 @@
   font-weight: 600;
 }
 
-.auth-card input {
+.auth-card input,
+.auth-card .ui-dropdown-trigger {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -433,7 +434,10 @@
 .process-output-input { display: flex; gap: 7px; align-items: center; margin-top: 10px; }
 .process-output-input input { min-width: 0; flex: 1; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--input-fill); font-weight: 700; }
 .process-godown-label { display: flex; flex-direction: column; gap: 5px; margin-top: 13px; color: var(--muted2); font-size: 12px; font-weight: 700; }
-.process-godown-label select { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--ink); font: 600 13px var(--font-sans); }
+.process-godown-label .ui-dropdown,
+.process-godown-label select { width: 100%; }
+.process-godown-label .ui-dropdown-trigger,
+.process-godown-label select { min-height: 36px; padding: 7px 10px; background: var(--surface); color: var(--ink); font: 600 13px var(--font-sans); }
 .process-godown-hint { margin-top: 13px; font-size: 12px; font-weight: 600; line-height: 1.4; }
 .process-output-empty { margin: 44px 0 40px; color: var(--muted); font-weight: 700; line-height: 1.45; text-align: center; }
 .process-add-output {

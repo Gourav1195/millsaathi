@@ -24,8 +24,15 @@ import {
   TablePager,
   Textarea,
 } from './ui';
+import {
+  commitSaudaImport,
+  SpreadsheetImportButton,
+  validateSaudaImport,
+} from './spreadsheet-import-button';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { millHeaderMeta } from '../lib/app-meta';
+import { can } from '../lib/permissions';
+import { mapSaudaImportRows } from '../lib/spreadsheet';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
@@ -41,7 +48,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const blankAgreement = (): AgreementForm => ({ direction: 'in', party_id: '', item_id: '', quantity: '', unit: 'QUINTAL', rate: '', agreement_date: today(), delivery_start: '', delivery_end: '', tolerance: '5', broker: 'Direct', note: '' });
 const blankDelivery = () => ({ quantity: '', unit: 'KG', actual_date: today(), godown_id: '', notes: '' });
 
-const SAUDA_COLUMNS = [
+const SAUDA_COLUMNS_BASE = [
   { id: 'code', label: 'Code' },
   { id: 'type', label: 'Type' },
   { id: 'party', label: 'Party' },
@@ -66,6 +73,7 @@ export function PurchaseApp() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
 
   const load = async () => setOverview(await api<Overview>('/api/overview'));
   useEffect(() => {
@@ -93,7 +101,11 @@ export function PurchaseApp() {
   useEffect(() => {
     setPage(0);
   }, [query, filters]);
-  const canManage = session != null && ['owner', 'admin', 'accountant'].includes(session.role);
+  const canManage = can(session, 'saudas:edit');
+  const canCreate = can(session, 'saudas:create');
+  const canArchive = can(session, 'saudas:archive');
+  const canExport = can(session, 'finance:export');
+  const selectedIds = Object.keys(selected).filter((id) => selected[id]);
   const parties = agreement.direction === 'in' ? overview?.suppliers ?? [] : overview?.buyers ?? [];
 
   async function createAgreement(event: FormEvent) {
@@ -180,6 +192,28 @@ export function PurchaseApp() {
     }
   }
 
+  async function bulkArchive() {
+    if (!selectedIds.length) return;
+    if (!window.confirm(`Archive ${selectedIds.length} selected Sauda(s)? They will be hidden from the active list but historical records are kept.`)) {
+      return;
+    }
+    try {
+      setError(null);
+      const result = await api<{ archived: number }>('/api/saudas/bulk-archive', json('POST', { ids: selectedIds }));
+      setSelected({});
+      await load();
+      window.alert(`${result.archived} Sauda(s) archived.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not archive selected Saudās');
+    }
+  }
+
+  function toggleSelectAll(checked: boolean) {
+    const next: Record<string, boolean> = {};
+    if (checked) pageData.rows.forEach((sauda) => { next[sauda.id] = true; });
+    setSelected(next);
+  }
+
   async function voidDelivery(entry: Delivery) {
     const reason = window.prompt('Reason for voiding this manual delivery (at least 3 characters)');
     if (!reason) return;
@@ -220,7 +254,7 @@ export function PurchaseApp() {
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
 
-        {canManage && (
+        {canCreate && (
           <Panel title="Add New agreement">
             <FormGrid onSubmit={createAgreement}>
               <Field label="Type">
@@ -335,7 +369,38 @@ export function PurchaseApp() {
           </Panel>
         )}
 
-        <TableCard title="Saudās & purchases" subtitle={`${filteredSaudas.length} agreement${filteredSaudas.length === 1 ? '' : 's'}`}>
+        <TableCard
+          title="Saudās & purchases"
+          subtitle={`${filteredSaudas.length} agreement${filteredSaudas.length === 1 ? '' : 's'}`}
+          actions={
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {canExport && (
+                <a className="ui-link" href="/api/saudas/export.csv">Export CSV</a>
+              )}
+              {canCreate && (
+                <SpreadsheetImportButton
+                  templateHref="/api/saudas/import/template.csv"
+                  maxRows={200}
+                  mapRows={mapSaudaImportRows}
+                  validate={validateSaudaImport}
+                  commit={commitSaudaImport}
+                  onImported={load}
+                  onError={setError}
+                />
+              )}
+              {canArchive && (
+                <Button
+                  type="button"
+                  className="secondary"
+                  disabled={!selectedIds.length}
+                  onClick={() => void bulkArchive()}
+                >
+                  Archive selected ({selectedIds.length})
+                </Button>
+              )}
+            </div>
+          }
+        >
           <TableFilters
             title="saudas"
             onClear={() => { setQuery(''); setFilters({}); }}
@@ -364,9 +429,22 @@ export function PurchaseApp() {
             />
           </TableFilters>
 
-          <DataTable columns={SAUDA_COLUMNS}>
+          <DataTable columns={[
+            ...(canArchive ? [{ id: 'select', label: '' }] : []),
+            ...SAUDA_COLUMNS_BASE,
+          ]}>
             {pageData.rows.length ? pageData.rows.map((sauda) => (
               <tr key={sauda.id}>
+                {canArchive && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${sauda.code ?? 'Sauda'}`}
+                      checked={!!selected[sauda.id]}
+                      onChange={(event) => setSelected({ ...selected, [sauda.id]: event.target.checked })}
+                    />
+                  </td>
+                )}
                 <td><strong>{sauda.code ?? '—'}</strong></td>
                 <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
                 <td>{sauda.direction === 'out' ? sauda.buyer_name ?? '—' : sauda.supplier_name ?? '—'}</td>
@@ -393,10 +471,23 @@ export function PurchaseApp() {
               </tr>
             )) : (
               <tr>
-                <td colSpan={SAUDA_COLUMNS.length}><EmptyState>No Saudās in this view.</EmptyState></td>
+                <td colSpan={SAUDA_COLUMNS_BASE.length + (canArchive ? 1 : 0)}><EmptyState>No Saudās in this view.</EmptyState></td>
               </tr>
             )}
           </DataTable>
+
+          {canArchive && pageData.rows.length > 0 && (
+            <div className="hint" style={{ marginTop: 8 }}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={pageData.rows.length > 0 && pageData.rows.every((sauda) => selected[sauda.id])}
+                  onChange={(event) => toggleSelectAll(event.target.checked)}
+                />
+                {' '}Select all on this page
+              </label>
+            </div>
+          )}
 
           <TablePager
             total={pageData.total}
