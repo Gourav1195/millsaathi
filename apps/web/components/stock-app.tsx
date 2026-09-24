@@ -28,6 +28,7 @@ import { millHeaderMeta } from '../lib/app-meta';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { formatDate, formatQtl, formatRupee } from '../lib/format';
 import { useOperationalCounts } from '../lib/operational-counts';
+import { TableClampedText } from './table-cell-detail';
 import { TableEditCell, TableEditModeButton } from './table-edit-mode';
 import { can, canViewFinance } from '../lib/permissions';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
@@ -404,7 +405,12 @@ export function StockApp() {
             const { fill, tone } = godownFill(stockKg, capacityKg);
             const barColor = tone === 'danger' ? 'var(--red)' : tone === 'warning' ? 'var(--gold-dark)' : 'var(--green)';
             return (
-              <article key={godown.id} className="metric stock-godown-card">
+              <AppLink
+                key={godown.id}
+                href={`/app/stock/godown?id=${godown.id}`}
+                className="metric stock-godown-card stock-godown-card--link"
+                aria-label={`Open ${godown.name} details`}
+              >
                 <div className="stock-godown-head">
                   <strong>{godown.name}</strong>
                   <Badge tone={tone}>{fill}% full</Badge>
@@ -416,7 +422,7 @@ export function StockApp() {
                 <div className="gd-fill" aria-hidden="true">
                   <span style={{ width: `${fill}%`, background: barColor }} />
                 </div>
-              </article>
+              </AppLink>
             );
           })}
         </div>
@@ -457,15 +463,22 @@ export function StockApp() {
               </article>
             ))}
             {pending.length > 1 ? (
-              <div className="receipt-more">
-                <span className="hint">
-                  {receiptsExpanded
-                    ? `Showing all ${pending.length}`
-                    : `${pending.length - 1} more truck${pending.length > 2 ? 's' : ''} waiting for stock`}
-                </span>
-                <Button type="button" className="quiet" onClick={() => setReceiptsExpanded((value) => !value)}>
-                  {receiptsExpanded ? 'Show less' : `Show all ${pending.length}`}
-                </Button>
+              <div className={`receipt-more${rejected.length ? ' receipt-more--split' : ''}`}>
+                {rejected.length ? (
+                  <Button type="button" className="quiet" onClick={() => setRejectedOpen((value) => !value)}>
+                    {rejectedOpen ? 'Hide rejected trucks' : `See rejected trucks (${rejected.length})`}
+                  </Button>
+                ) : null}
+                <div className="receipt-more-right">
+                  <span className="hint">
+                    {receiptsExpanded
+                      ? `Showing all ${pending.length}`
+                      : `${pending.length - 1} more truck${pending.length > 2 ? 's' : ''} waiting for stock`}
+                  </span>
+                  <Button type="button" className="quiet" onClick={() => setReceiptsExpanded((value) => !value)}>
+                    {receiptsExpanded ? 'Show less' : `Show all ${pending.length}`}
+                  </Button>
+                </div>
               </div>
             ) : null}
           </div>
@@ -476,7 +489,7 @@ export function StockApp() {
           </article>
         )}
 
-        {rejected.length ? (
+        {rejected.length && pending.length <= 1 ? (
           <div className="receipt-controls">
             <Button type="button" className="quiet" onClick={() => setRejectedOpen((value) => !value)}>
               {rejectedOpen ? 'Hide rejected trucks' : `See rejected trucks (${rejected.length})`}
@@ -639,7 +652,7 @@ export function StockApp() {
           }
         >
           <TableFilters
-            title="lots"
+            compact
             onClear={clearFilters}
             clearDisabled={!query && !Object.keys(filters).length}
           >
@@ -684,7 +697,7 @@ export function StockApp() {
                 <td>{pct(lot.moisture_pct)}</td>
                 <td className="muted">{lot.in_date ? formatDate(lot.in_date) : '—'}</td>
                 {canMoney ? <td><strong>{formatRupee(lot.value_paise)}</strong></td> : null}
-                <td className="muted">{lot.note ?? ''}</td>
+                <td className="table-note-col"><TableClampedText text={lot.note} /></td>
               </tr>
             )) : (
               <tr>

@@ -12,11 +12,11 @@ type NavigationLink = { label: string; href: string; icon: IconName; module: Nav
 
 const navigationSections: NavigationLink[][] = [
   [
-    { label: 'Dashboard', href: '/app/dashboard', icon: 'dashboard', module: 'dashboard' },
+    { label: 'Dashboard', href: '/app', icon: 'dashboard', module: 'dashboard' },
     { label: 'Purchase & Saudas', href: '/app/purchase', icon: 'purchase', module: 'purchase' },
     { label: 'Gate & Weighbridge', href: '/app/gate', icon: 'gate', module: 'gate' },
     { label: 'Stock & Lots', href: '/app/stock', icon: 'stock', module: 'stock' },
-    { label: 'Processing', href: '/app', icon: 'processing', module: 'processing' },
+    { label: 'Processing', href: '/app/processing', icon: 'processing', module: 'processing' },
     { label: 'Mill Intelligence (Beta)', href: '/app/mill-intelligence', icon: 'processing', module: 'processing' },
   ],
   [
@@ -150,7 +150,7 @@ export function AppHeader({ session }: { session: Session }) {
             )}
           </svg>
         </button>
-        <AppLink href="/app/dashboard" className="app-topbar-brand" onClick={closeMenu}>
+        <AppLink href="/app" className="app-topbar-brand" onClick={closeMenu}>
           <div className="app-topbar-title">MillSaathi</div>
           <div className="app-topbar-mill">{session.mill.name}</div>
         </AppLink>
@@ -174,7 +174,7 @@ export function AppHeader({ session }: { session: Session }) {
       >
       <div className="app-sidebar-logo-row">
         <AppLink
-          href="/app/dashboard"
+          href="/app"
           className="app-sidebar-logo"
           onClick={(event) => {
             if (sidebarCollapsed) {

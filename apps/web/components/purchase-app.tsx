@@ -42,10 +42,34 @@ import {
 } from './table-edit-mode';
 import { mapSaudaImportRows } from '../lib/spreadsheet';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
+import { saudaDetailRows } from '../lib/row-details';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
+import { TableCellDetail, TableClampedText } from './table-cell-detail';
 
-type Sauda = { id: string; code?: string; direction?: 'in' | 'out'; status?: string; fulfilment_status?: string; supplier_name?: string; buyer_name?: string; item_name?: string; qty_kg?: number; fulfilled_qty_base?: number; rate_paise_per_qtl?: number };
+type Sauda = {
+  id: string;
+  code?: string;
+  direction?: 'in' | 'out';
+  status?: string;
+  fulfilment_status?: string;
+  supplier_name?: string;
+  buyer_name?: string;
+  item_name?: string;
+  qty_kg?: number;
+  fulfilled_qty_base?: number;
+  rate_paise_per_qtl?: number;
+  broker_name?: string | null;
+  agreement_date?: string | null;
+  delivery_start?: string | null;
+  delivery_end?: string | null;
+  delivery_tolerance_pct?: number | null;
+  advance_paise?: number | null;
+  note?: string | null;
+  commission_type?: string | null;
+  commission_value?: number | null;
+  commission_paise?: number | null;
+};
 type Reference = { id: string; name: string };
 type Overview = { saudas: Sauda[]; suppliers: Reference[]; buyers: Reference[]; items: Reference[]; godowns: Reference[] };
 type Delivery = { id: string; actual_date?: string; actual_qty_base?: number; actual_qty?: number; actual_unit?: string; status?: string; gate_entry_id?: string | null; lot_code?: string | null; notes?: string | null };
@@ -65,6 +89,7 @@ const SAUDA_COLUMNS_BASE = [
   { id: 'agreed', label: 'Agreed' },
   { id: 'fulfilled', label: 'Fulfilled' },
   { id: 'status', label: 'Status' },
+  { id: 'terms', label: 'Terms' },
   { id: 'actions', label: '' },
 ];
 
@@ -117,6 +142,7 @@ export function PurchaseApp() {
   const canCreate = can(session, 'saudas:create');
   const canArchive = can(session, 'saudas:archive');
   const canExport = can(session, 'finance:export');
+  const showSaudaMoney = canViewFinance(session ?? { role: '' });
 
   useEffect(() => {
     const dialog = statusDialogRef.current;
@@ -481,13 +507,21 @@ export function PurchaseApp() {
                 {tableEdit.editMode && canManage && (
                   <TableEditCell label={saudaCode(sauda)} onClick={() => startStatusEdit(sauda)} />
                 )}
-                <td><strong>{saudaCode(sauda)}</strong></td>
+                <td>
+                  <TableCellDetail
+                    title={`${saudaCode(sauda)} details`}
+                    rows={saudaDetailRows(sauda, showSaudaMoney)}
+                  >
+                    <strong>{saudaCode(sauda)}</strong>
+                  </TableCellDetail>
+                </td>
                 <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
                 <td>{sauda.direction === 'out' ? sauda.buyer_name ?? '—' : sauda.supplier_name ?? '—'}</td>
                 <td>{sauda.item_name ?? '—'}</td>
                 <td>{qtl(sauda.qty_kg)}</td>
                 <td>{qtl(sauda.fulfilled_qty_base)}</td>
                 <td><Badge tone="gold">{sauda.fulfilment_status ?? sauda.status ?? '—'}</Badge></td>
+                <td className="table-note-col"><TableClampedText text={sauda.note} /></td>
                 <td>
                   <TableActions>
                     <Button type="button" className="secondary" onClick={() => void openHistory(sauda)}>History</Button>

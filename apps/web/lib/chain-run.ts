@@ -196,12 +196,19 @@ export function validateStepActuals(params: {
     return { ok: false, message: 'Enter a valid main output quantity (0 or more).' };
   }
 
-  for (const line of step.lines.filter((entry) => entry.kind === 'byproduct')) {
+  for (const line of step.lines.filter((entry) => entry.kind !== 'loss')) {
     const qty = parseDisplayQty(actualDraft[line.id]?.qty);
     if (qty == null) {
-      return { ok: false, message: `Enter a valid quantity for ${line.item_name ?? 'by-product'} (0 or more).` };
+      const label = line.kind === 'main' ? 'main output' : (line.item_name ?? 'by-product');
+      return { ok: false, message: `Enter a valid quantity for ${label} (0 or more).` };
     }
-    if (qty > 0 && !actualDraft[line.id]?.godownId) {
+    if (qty > 0 && !line.item_id) {
+      return {
+        ok: false,
+        message: `"${line.item_name ?? line.kind}" is not linked to an inventory item. Open All processes, edit "${step.process_type_name ?? 'this process'}", and assign an item to each output line.`,
+      };
+    }
+    if (line.kind === 'byproduct' && qty > 0 && !actualDraft[line.id]?.godownId) {
       return { ok: false, message: `Choose a godown for ${line.item_name ?? 'by-product'}.` };
     }
   }

@@ -484,12 +484,24 @@ function ClassicChainMap({
   const loadRecentRuns = useCallback(async () => {
     try {
       const body = await loadChainRunHistory(chain.id);
-      const finished = body.chain_runs.filter((entry) => entry.status === 'COMPLETED' || entry.status === 'VOID');
-      setRecentRuns(finished.slice(0, 8));
+      const visible = body.chain_runs.filter((entry) => entry.status !== 'DRAFT');
+      setRecentRuns(visible.slice(0, 8));
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not load recent chain runs');
     }
   }, [chain.id, onError]);
+
+  function returnToChainTemplate() {
+    setRunDetail(null);
+    setHistoryOpen(false);
+    setEditMode(false);
+    setSelectedStepId('');
+    setSelectedInputLotId('');
+    setActualDraft({});
+    setMaterials(null);
+    setWorkspaceLots([]);
+    onError(null);
+  }
 
   useEffect(() => {
     setRunDetail(null);
@@ -895,12 +907,22 @@ function ClassicChainMap({
             {fullscreen ? 'Exit full screen' : 'Full screen'}
           </Button>
           <Button type="button" className="secondary" onClick={() => void openHistory()}>History</Button>
+          {run && (
+            <Button type="button" className="secondary" onClick={returnToChainTemplate}>
+              {isReadOnly ? 'Back to chain' : 'Close run'}
+            </Button>
+          )}
           {canStartRun && isDraft && (
             <Button type="button" disabled={busy || !steps.length} onClick={() => void handleStartRun()}>
               {busy ? 'Starting…' : 'Start run'}
             </Button>
           )}
-          {!run && canStartRun && (
+          {canStartRun && !run && (
+            <Button type="button" disabled={busy} onClick={() => void ensureDraft()}>
+              {busy ? 'Creating…' : 'New draft run'}
+            </Button>
+          )}
+          {canStartRun && run && (isReadOnly || isRunning) && (
             <Button type="button" disabled={busy} onClick={() => void ensureDraft()}>
               {busy ? 'Creating…' : 'New draft run'}
             </Button>
@@ -1175,7 +1197,7 @@ function ClassicChainMap({
             )) : (
               <tr>
                 <td colSpan={withEditModeColumns(CHAIN_RUN_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoidRun }).length}>
-                  <EmptyState>No completed chain runs yet.</EmptyState>
+                  <EmptyState>No started chain runs yet. Create a draft, start the run, and post a step to see it here.</EmptyState>
                 </td>
               </tr>
             )}

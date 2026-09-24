@@ -6,27 +6,29 @@ import { canAccessNav, type NavModule } from '../lib/permissions';
 import { useSession } from '../lib/session';
 
 const ROUTE_MODULES: Array<{ prefix: string; module: NavModule; label: string; fallback: string }> = [
-  { prefix: '/app/dashboard', module: 'dashboard', label: 'Dashboard', fallback: '/app/gate' },
-  { prefix: '/app/gate', module: 'gate', label: 'Gate & Weighbridge', fallback: '/app/dashboard' },
-  { prefix: '/app/purchase', module: 'purchase', label: 'Purchase & Saudas', fallback: '/app/dashboard' },
-  { prefix: '/app/stock', module: 'stock', label: 'Stock & Lots', fallback: '/app/dashboard' },
-  { prefix: '/app/parties', module: 'parties', label: 'Parties', fallback: '/app/dashboard' },
-  { prefix: '/app/items', module: 'items', label: 'Items', fallback: '/app/dashboard' },
-  { prefix: '/app/processing', module: 'processing', label: 'Processing', fallback: '/app/dashboard' },
-  { prefix: '/app/mill-intelligence', module: 'processing', label: 'Mill Intelligence (Beta)', fallback: '/app/dashboard' },
-  { prefix: '/app/billing', module: 'billing', label: 'Billing', fallback: '/app/dashboard' },
-  { prefix: '/app/team', module: 'team', label: 'Team', fallback: '/app/dashboard' },
-  { prefix: '/app/documents', module: 'documents', label: 'Documents', fallback: '/app/dashboard' },
-  { prefix: '/app/digest', module: 'digest', label: 'Night Digest', fallback: '/app/dashboard' },
-  { prefix: '/app/settings', module: 'settings', label: 'Settings', fallback: '/app/dashboard' },
-  { prefix: '/app/access', module: 'access', label: 'My access', fallback: '/app/dashboard' },
+  { prefix: '/app', module: 'dashboard', label: 'Dashboard', fallback: '/app/gate' },
+  { prefix: '/app/gate', module: 'gate', label: 'Gate & Weighbridge', fallback: '/app' },
+  { prefix: '/app/purchase', module: 'purchase', label: 'Purchase & Saudas', fallback: '/app' },
+  { prefix: '/app/stock', module: 'stock', label: 'Stock & Lots', fallback: '/app' },
+  { prefix: '/app/parties', module: 'parties', label: 'Parties', fallback: '/app' },
+  { prefix: '/app/items', module: 'items', label: 'Items', fallback: '/app' },
+  { prefix: '/app/processing', module: 'processing', label: 'Processing', fallback: '/app' },
+  { prefix: '/app/mill-intelligence', module: 'processing', label: 'Mill Intelligence (Beta)', fallback: '/app' },
+  { prefix: '/app/billing', module: 'billing', label: 'Billing', fallback: '/app' },
+  { prefix: '/app/team', module: 'team', label: 'Team', fallback: '/app' },
+  { prefix: '/app/documents', module: 'documents', label: 'Documents', fallback: '/app' },
+  { prefix: '/app/digest', module: 'digest', label: 'Night Digest', fallback: '/app' },
+  { prefix: '/app/settings', module: 'settings', label: 'Settings', fallback: '/app' },
+  { prefix: '/app/access', module: 'access', label: 'My access', fallback: '/app' },
 ];
 
 function routeAccess(pathname: string) {
   if (pathname === '/app') {
-    return ROUTE_MODULES.find((entry) => entry.prefix === '/app/processing')!;
+    return ROUTE_MODULES.find((entry) => entry.prefix === '/app')!;
   }
-  return ROUTE_MODULES.find((entry) => pathname === entry.prefix || pathname.startsWith(`${entry.prefix}/`));
+  return ROUTE_MODULES.find(
+    (entry) => entry.prefix !== '/app' && (pathname === entry.prefix || pathname.startsWith(`${entry.prefix}/`)),
+  );
 }
 
 function sessionUser(session: { role: string }) {
@@ -36,7 +38,7 @@ function sessionUser(session: { role: string }) {
 function firstAllowedRoute(session: { role: string; capabilities?: string[] }) {
   const user = sessionUser(session);
   for (const entry of ROUTE_MODULES) {
-    if (canAccessNav(user, entry.module)) return entry.prefix === '/app/processing' ? '/app' : entry.prefix;
+    if (canAccessNav(user, entry.module)) return entry.prefix;
   }
   return '/app/access';
 }

@@ -1559,6 +1559,59 @@ api.get('/stock-summary', async (c) => {
   return c.json({ stock: result.results });
 });
 
+api.get('/godowns/:id', async (c) => {
+  const denied = denyUnlessCapability(c, 'stock:view'); if (denied) return denied;
+  const { user, mill } = c.get('session');
+  const godownId = c.req.param('id');
+  const godown = await c.env.DB.prepare(
+    `SELECT gd.*,
+            CASE UPPER(COALESCE(gd.capacity_unit, 'QUINTAL'))
+              WHEN 'KG' THEN COALESCE(gd.capacity_qty, gd.capacity_qtl * 100)
+              WHEN 'QUINTAL' THEN COALESCE(gd.capacity_qty, gd.capacity_qtl) * 100
+              WHEN 'TONNE' THEN COALESCE(gd.capacity_qty, gd.capacity_qtl / 10) * 1000
+              ELSE NULL
+            END AS capacity_kg,
+            COALESCE((SELECT SUM(CASE WHEN sm.direction = 'IN' THEN sm.quantity_base WHEN sm.direction = 'OUT' THEN -sm.quantity_base ELSE sm.quantity_base END)
+                      FROM stock_movements sm WHERE sm.godown_id = gd.id AND sm.mill_id = gd.mill_id AND sm.status = 'POSTED'), 0) AS stock_kg
+     FROM godowns gd WHERE gd.id = ? AND gd.mill_id = ? AND gd.active = 1`,
+  ).bind(godownId, mill.id).first<Record<string, unknown>>();
+  if (!godown) return c.json({ error: 'godown not found' }, 404);
+
+  const [stockByItemRes, receiptsRes] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      `SELECT i.id AS item_id, i.name AS item_name,
+              COALESCE(SUM(CASE WHEN sm.direction = 'IN' THEN sm.quantity_base WHEN sm.direction = 'OUT' THEN -sm.quantity_base ELSE sm.quantity_base END), 0) AS quantity_base
+       FROM stock_movements sm
+       JOIN items i ON i.id = sm.item_id
+       WHERE sm.mill_id = ? AND sm.godown_id = ? AND sm.status = 'POSTED'
+       GROUP BY i.id
+       HAVING quantity_base > 0
+       ORDER BY quantity_base DESC`,
+    ).bind(mill.id, godownId),
+    c.env.DB.prepare(
+      `SELECT l.id AS lot_id, l.code AS lot_code, l.qty_kg, l.value_paise, l.in_date,
+              i.name AS item_name, g.token_no,
+              sa.id AS sauda_id, sa.code AS sauda_code, sa.direction, sa.rate_paise_per_qtl,
+              s.name AS supplier_name, b.name AS buyer_name,
+              CASE WHEN sa.id IS NOT NULL THEN 'sauda' WHEN g.id IS NOT NULL THEN 'gate' ELSE 'manual' END AS source_type
+       FROM lots l
+       LEFT JOIN items i ON i.id = l.item_id
+       LEFT JOIN gate_entries g ON g.id = l.gate_entry_id AND g.mill_id = l.mill_id
+       LEFT JOIN saudas sa ON sa.id = g.sauda_id AND sa.mill_id = l.mill_id AND sa.deleted_at IS NULL
+       LEFT JOIN suppliers s ON s.id = sa.supplier_id
+       LEFT JOIN buyers b ON b.id = sa.buyer_id
+       WHERE l.mill_id = ? AND l.godown_id = ? AND l.qty_kg > 0
+       ORDER BY l.in_date DESC, l.code DESC`,
+    ).bind(mill.id, godownId),
+  ]);
+
+  return c.json(applyFinancePolicy(user, {
+    godown,
+    stock_by_item: stockByItemRes.results,
+    receipts: receiptsRes.results,
+  }));
+});
+
 api.post('/stock-movements', async (c) => {
   const denied = denyUnlessCapability(c, 'stock:create'); if (denied) return denied;
   const { user, mill } = c.get('session');
@@ -2074,7 +2127,13 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
     if (!Number.isFinite(qtyBase) || qtyBase < 0) {
       return c.json({ error: `Enter a valid quantity for ${String(stepLine.item_name ?? stepLine.kind)}.` }, 400);
     }
-    if (stepLine.kind === 'byproduct' && qtyBase > 0 && !String(actual?.godown_id ?? b.destination_godown_id ?? '')) {
+    if (qtyBase <= 0) continue;
+    if (!String(stepLine.item_id ?? '')) {
+      return c.json({
+        error: `"${String(stepLine.item_name ?? stepLine.kind)}" is not linked to an inventory item. Open All processes, edit "${String(runStep.process_type_name ?? 'this process')}", and assign an item to each output line.`,
+      }, 400);
+    }
+    if (stepLine.kind === 'byproduct' && !String(actual?.godown_id ?? b.destination_godown_id ?? '')) {
       return c.json({ error: `Choose a godown for ${String(stepLine.item_name ?? 'by-product')}.` }, 400);
     }
     processLines.push({

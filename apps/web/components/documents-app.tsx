@@ -178,7 +178,7 @@ export function DocumentsApp() {
                 editMode={tableEdit.editMode}
                 onToggle={tableEdit.toggleEditMode}
               />
-              <AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>
+              <AppLink href="/app"><Button className="quiet">Dashboard</Button></AppLink>
             </div>
           }
         />

@@ -1,5 +1,5 @@
-import { ProcessingApp } from '../../components/processing-app';
+import { DashboardApp } from '../../components/dashboard-app';
 
 export default function AppPage() {
-  return <ProcessingApp />;
+  return <DashboardApp />;
 }

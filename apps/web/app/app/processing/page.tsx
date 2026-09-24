@@ -1,3 +1,5 @@
-import { redirect } from 'next/navigation';
+import { ProcessingApp } from '../../../components/processing-app';
 
-export default function ProcessingPage() { redirect('/app'); }
+export default function ProcessingPage() {
+  return <ProcessingApp />;
+}

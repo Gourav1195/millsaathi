@@ -42,8 +42,10 @@ import { mapPartyImportRows } from '../lib/spreadsheet';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
 import { balanceColumnLabel, brokerCommissionDuePaise, brokerSaudaCount, partyBalanceMeta, type SaudaBrokerRef } from '../lib/party-balance';
+import { hasPartyDetails, partyDetailRows } from '../lib/row-details';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
+import { TableCellDetail } from './table-cell-detail';
 
 type PartyTab = 'all' | 'buyers' | 'sellers' | 'brokers';
 type PartyRole = 'buyer' | 'seller' | 'broker';
@@ -55,7 +57,9 @@ type RawSupplier = {
   type?: string;
   phone?: string | null;
   place?: string | null;
+  email?: string | null;
   gstin?: string | null;
+  address?: string | null;
   outstanding_paise?: number;
   supplied_kg?: number;
   last_at?: string | null;
@@ -67,7 +71,9 @@ type RawBuyer = {
   type?: string;
   phone?: string | null;
   location?: string | null;
+  email?: string | null;
   gstin?: string | null;
+  address?: string | null;
   receivable_paise?: number;
   bought_kg?: number;
   last_at?: string | null;
@@ -81,7 +87,9 @@ type UnifiedParty = {
   subtype: string;
   phone?: string | null;
   city?: string | null;
+  email?: string | null;
   gstin?: string | null;
+  address?: string | null;
   balance_paise?: number;
   volume_kg?: number;
   broker_deals?: number;
@@ -124,7 +132,9 @@ function normalizeParties(suppliers: RawSupplier[], buyers: RawBuyer[], saudas: 
       subtype: party.type ?? (isBroker ? 'broker' : 'farmer'),
       phone: party.phone,
       city: party.place,
+      email: party.email,
       gstin: party.gstin,
+      address: party.address,
       balance_paise: isBroker ? brokerCommissionDuePaise(party.name, saudas) : party.outstanding_paise,
       volume_kg: isBroker ? undefined : party.supplied_kg,
       broker_deals: isBroker ? brokerSaudaCount(party.name, saudas) : undefined,
@@ -139,7 +149,9 @@ function normalizeParties(suppliers: RawSupplier[], buyers: RawBuyer[], saudas: 
     subtype: party.type ?? 'Wholesaler',
     phone: party.phone,
     city: party.location,
+    email: party.email,
     gstin: party.gstin,
+    address: party.address,
     balance_paise: party.receivable_paise,
     volume_kg: party.bought_kg,
     last_at: party.last_at,
@@ -576,10 +588,21 @@ export function PartiesApp() {
                   <TableEditCell label={party.name} onClick={() => startEdit(party)} />
                 )}
                 <td>
-                  <div className="party-name-cell">
-                    <span className={`party-avatar party-avatar--${party.role}`} aria-hidden="true">{initials(party.name)}</span>
-                    <strong>{party.name}</strong>
-                  </div>
+                  {hasPartyDetails(party) ? (
+                    <TableCellDetail
+                      title={`${party.name} details`}
+                      rows={partyDetailRows(party)}
+                      className="party-name-cell"
+                    >
+                      <span className={`party-avatar party-avatar--${party.role}`} aria-hidden="true">{initials(party.name)}</span>
+                      <strong>{party.name}</strong>
+                    </TableCellDetail>
+                  ) : (
+                    <div className="party-name-cell">
+                      <span className={`party-avatar party-avatar--${party.role}`} aria-hidden="true">{initials(party.name)}</span>
+                      <strong>{party.name}</strong>
+                    </div>
+                  )}
                 </td>
                 <td>
                   <Badge tone={party.role === 'buyer' ? 'success' : party.role === 'broker' ? 'gold' : 'neutral'}>

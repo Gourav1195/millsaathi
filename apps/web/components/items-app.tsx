@@ -84,13 +84,29 @@ const CATEGORY_FILTER_OPTIONS = [
   { value: 'OTHER', label: 'Other' },
 ];
 
+const CATEGORY_CODE_TO_FORM: Record<string, string> = {
+  RAW_MATERIAL: 'paddy',
+  FINISHED_GOOD: 'rice',
+  BYPRODUCT: 'byproduct',
+  PACKAGING: 'packaging',
+  CONSUMABLE: 'consumable',
+  OTHER: 'other',
+};
+
 const DISPLAY_UNITS = ['KG', 'QUINTAL', 'TONNE'];
 
 const emptyForm = (): ItemForm => ({ name: '', category: 'paddy', hsn: '', display_unit: 'QUINTAL', typical_otr_pct: '' });
 
+function formCategoryFromItem(item: Item): string {
+  if (item.category_code && CATEGORY_CODE_TO_FORM[item.category_code]) {
+    return CATEGORY_CODE_TO_FORM[item.category_code];
+  }
+  return item.category ?? 'paddy';
+}
+
 const formFromItem = (item: Item): ItemForm => ({
   name: item.name,
-  category: item.category ?? 'paddy',
+  category: formCategoryFromItem(item),
   hsn: item.hsn ?? '',
   display_unit: item.display_unit ?? item.unit ?? 'QUINTAL',
   typical_otr_pct: item.typical_otr_pct == null ? '' : String(item.typical_otr_pct),

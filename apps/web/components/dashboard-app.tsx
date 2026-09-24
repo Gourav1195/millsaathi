@@ -3,6 +3,7 @@
 import { AppLink } from './app-link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './app-header';
+import { AuthApp } from './auth-app';
 import { millHeaderMeta } from '../lib/app-meta';
 import { canViewFinance } from '../lib/permissions';
 import { useSession } from '../lib/session';
@@ -332,7 +333,7 @@ function OnboardingCard({ overview, millKey }: { overview: Overview; millKey: st
 }
 
 export function DashboardApp() {
-  const { session, sessionError } = useSession();
+  const { session, setSession, sessionError } = useSession();
   const headerMeta = millHeaderMeta(session);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [range, setRange] = useState<TrendRange>('daily');
@@ -435,14 +436,10 @@ export function DashboardApp() {
   }
   if (!session) {
     return (
-      <main className="auth-page">
-        <div className="auth-card">
-          <h1>Sign in required</h1>
-          <p className="muted">Log in before opening your dashboard.</p>
-          {error || sessionError ? <p className="error">{error ?? sessionError}</p> : null}
-          <AppLink className="primary" href="/app">Go to login</AppLink>
-        </div>
-      </main>
+      <>
+        <AuthApp onSuccess={setSession} />
+        {sessionError ? <p className="error">{sessionError}</p> : null}
+      </>
     );
   }
 

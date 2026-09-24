@@ -50,7 +50,7 @@ export function DigestApp() {
           subtitle="A shareable end-of-day operational summary."
           date={headerMeta.date}
           season={headerMeta.season}
-          actions={<AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>}
+          actions={<AppLink href="/app"><Button className="quiet">Dashboard</Button></AppLink>}
         />
 
         {error && <Alert title="Could not load digest" level="red">{error}</Alert>}

@@ -463,6 +463,89 @@ table.dashboard-table tr:has(.ui-dropdown.open) {
   gap: 11px;
 }
 
+.table-note-col {
+  max-width: 240px;
+  width: 22%;
+}
+
+.table-clamped-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.table-clamped-text--empty {
+  color: var(--muted2);
+}
+
+.table-cell-detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+  border-radius: 4px;
+}
+
+.table-cell-detail--clamp {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  cursor: default;
+}
+
+.table-cell-detail:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.table-cell-detail-popover {
+  position: fixed;
+  z-index: var(--z-dropdown, 1200);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 28px rgba(16, 20, 27, 0.18);
+  font: 500 12px/1.35 'IBM Plex Sans', system-ui, sans-serif;
+  pointer-events: auto;
+}
+
+.table-cell-detail-popover--text {
+  padding: 10px 12px;
+  font: 500 13px/1.45 var(--font-sans);
+  overflow-wrap: anywhere;
+}
+
+.table-cell-detail-popover > strong {
+  display: block;
+  margin-bottom: 8px;
+  font: 800 13px 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+.table-cell-detail-popover > span {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.table-cell-detail-popover b {
+  color: var(--muted2);
+  font-weight: 700;
+}
+
+.table-cell-detail-popover em {
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
 .party-balance-cell {
   display: flex;
   flex-direction: column;

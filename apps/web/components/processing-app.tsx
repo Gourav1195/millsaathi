@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { AppLink } from './app-link';
 import { AppHeader } from './app-header';
-import { AuthApp } from './auth-app';
 import { Alert, Button } from './ui';
 import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
@@ -14,7 +14,7 @@ type ChainViewMode = 'classic' | 'studio';
 type ProcessingChain = { id: string; name: string; description?: string | null; steps: { id: string; process_type_id: string; step_number: number; process_type_name?: string; process_type_description?: string | null; notes?: string | null }[] };
 
 export function ProcessingApp() {
-  const { session, setSession, sessionError } = useSession();
+  const { session, sessionError } = useSession();
   const [chainMode, setChainMode] = useState<ChainViewMode>('classic');
   const [error, setError] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -51,7 +51,18 @@ export function ProcessingApp() {
   }, [session, loadChains]);
 
   if (session === undefined) return <main className="auth-page"><p className="muted">Checking your MillSaathi session…</p></main>;
-  if (!session) return <><AuthApp onSuccess={setSession} />{sessionError && <p className="error">{sessionError}</p>}</>;
+  if (!session) {
+    return (
+      <main className="auth-page">
+        <div className="auth-card">
+          <h1>Sign in required</h1>
+          <p className="muted">Log in before opening Processing.</p>
+          {sessionError ? <p className="error">{sessionError}</p> : null}
+          <AppLink className="primary" href="/app">Go to login</AppLink>
+        </div>
+      </main>
+    );
+  }
 
   const today = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date());
 

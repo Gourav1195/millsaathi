@@ -19,7 +19,7 @@ const copy: Record<
     summary:
       'That screen doesn\u2019t exist in your mill yet. Use the sidebar, or return to the dashboard and pick a module that is.',
     hindi: '\u092f\u0939 \u092e\u0949\u0921\u094d\u092f\u0942\u0932 \u0905\u092d\u0940 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964',
-    primary: { href: '/app/dashboard', label: 'Go to dashboard' },
+    primary: { href: '/app', label: 'Go to dashboard' },
     secondary: { href: '/', label: 'Marketing site' },
   },
 };

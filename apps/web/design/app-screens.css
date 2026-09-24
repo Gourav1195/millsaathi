@@ -475,6 +475,126 @@
   padding: 18px 20px;
 }
 
+.stock-godown-card--link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal) var(--ease-out), transform var(--duration-normal) var(--ease-out);
+}
+
+.stock-godown-card--link:hover {
+  border-color: var(--gold-dark);
+  box-shadow: var(--active-shadow);
+  transform: translateY(-1px);
+}
+
+.stock-godown-card--link:focus-visible {
+  outline: 2px solid var(--gold-dark);
+  outline-offset: 2px;
+}
+
+.godown-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.godown-back-link:hover {
+  color: var(--ink);
+}
+
+.godown-detail-header {
+  margin-top: 2px;
+}
+
+.godown-chart {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) 1fr;
+  gap: 24px;
+  align-items: center;
+  padding: 8px 4px 4px;
+}
+
+.godown-chart-visual {
+  width: 200px;
+  height: 200px;
+  margin: 0 auto;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+
+.godown-chart-hole {
+  width: 118px;
+  height: 118px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.godown-chart-hole strong {
+  font: 800 18px/1.1 var(--font-display);
+  color: var(--ink);
+}
+
+.godown-chart-hole span {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.godown-chart-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.godown-chart-legend li {
+  display: grid;
+  grid-template-columns: 12px 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 13.5px;
+}
+
+.godown-chart-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.godown-chart-label {
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.godown-chart-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .godown-chart {
+    grid-template-columns: 1fr;
+  }
+}
+
 .stock-godown-head {
   display: flex;
   justify-content: space-between;
@@ -641,6 +761,17 @@
   align-items: center;
   gap: 10px;
   padding: 2px 2px 0;
+}
+
+.receipt-more--split {
+  justify-content: space-between;
+}
+
+.receipt-more-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .receipt-controls {
