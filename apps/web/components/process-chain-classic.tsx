@@ -27,6 +27,7 @@ import {
   loadChainRun,
   loadChainRunHistory,
   massBalanceForStep,
+  parseDisplayQty,
   patchChainRun,
   patchChainRunSteps,
   postStepActuals,
@@ -42,6 +43,8 @@ import {
   type ChainRunListItem,
   type ChainRunStep,
   type ChainRunStepLine,
+  type InputAllocationDraft,
+  type StockInputGroup,
   type StepMassBalance,
   varianceTone,
 } from '../lib/chain-run';
@@ -55,6 +58,7 @@ const CHAIN_RUN_COLUMNS_BASE = [
   { id: 'status', label: 'Status' },
 ];
 const ITEM_DRAG_TYPE = 'application/millsaathi-classic-item';
+const STOCK_DRAG_TYPE = 'application/millsaathi-stock-lots';
 
 type StepInputAssignment = {
   itemId: string;
@@ -151,8 +155,89 @@ function MaterialCard({
         <b>{selected ? 'Added' : readOnly ? '' : 'Use'}</b>
       </span>
       <span className="process-material-qty">{(lot.qty_kg / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} quintal available</span>
-      <small>{lot.godown_name ?? 'No godown'}{lot.for_reuse ? ' · For reuse' : ''}</small>
+      <small>{lot.godown_name ?? 'No godown'}{lot.sauda_code ? ` · ${lot.sauda_code}` : ''}{lot.for_reuse ? ' · For reuse' : ''}</small>
     </button>
+  );
+}
+
+function GroupedStockCard({
+  group,
+  unit,
+  expanded,
+  selectedAllocations,
+  readOnly,
+  onToggleExpand,
+  onToggleAllocation,
+}: {
+  group: StockInputGroup;
+  unit: string;
+  expanded: boolean;
+  selectedAllocations: InputAllocationDraft[];
+  readOnly?: boolean;
+  onToggleExpand: () => void;
+  onToggleAllocation: (lotId: string, maxDisplay: number, enabled: boolean, quantityDisplay?: string) => void;
+}) {
+  const totalDisplay = baseToDisplay(group.total_available_kg, unit);
+  const selectedIds = new Set(selectedAllocations.map((entry) => entry.lot_id));
+  const hasSelection = group.allocations.some((allocation) => selectedIds.has(allocation.lot_id));
+
+  return (
+    <div className={`process-material process-material--group${hasSelection ? ' used' : ''}`}>
+      <button type="button" className="process-material-group-head" onClick={onToggleExpand}
+        draggable={!readOnly}
+        onDragStart={(event) => {
+          event.dataTransfer.setData(STOCK_DRAG_TYPE, JSON.stringify(group.allocations.map((entry) => entry.lot_id)));
+          event.dataTransfer.effectAllowed = 'copy';
+        }}>
+        <span className="process-material-head">
+          <span>
+            <strong>{group.item_name}</strong>
+            <small>{group.sauda_code ?? 'Unlinked stock'}</small>
+          </span>
+          <b>{expanded ? 'Hide' : 'Show'} godowns</b>
+        </span>
+        <span className="process-material-qty">{totalDisplay.toLocaleString('en-IN', { maximumFractionDigits: 2 })} {unit.toLowerCase()} available</span>
+        <small>{group.allocations.length} godown allocation{group.allocations.length === 1 ? '' : 's'}</small>
+      </button>
+      {expanded ? (
+        <div className="process-material-allocations">
+          {group.allocations.map((allocation) => {
+            const maxDisplay = baseToDisplay(allocation.available_kg, unit);
+            const selected = selectedIds.has(allocation.lot_id);
+            const draft = selectedAllocations.find((entry) => entry.lot_id === allocation.lot_id);
+            return (
+              <label key={allocation.lot_id} className="process-material-allocation">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  disabled={readOnly}
+                  onChange={(event) => onToggleAllocation(allocation.lot_id, maxDisplay, event.target.checked)}
+                />
+                <span>
+                  <strong draggable={!readOnly} onDragStart={(event) => {
+                    event.stopPropagation();
+                    event.dataTransfer.setData(STOCK_DRAG_TYPE, JSON.stringify([allocation.lot_id]));
+                    event.dataTransfer.effectAllowed = 'copy';
+                  }}>{allocation.godown_name ?? 'No godown'}</strong>
+                  <small>{allocation.lot_code} · {maxDisplay.toLocaleString('en-IN', { maximumFractionDigits: 2 })} {unit.toLowerCase()} available</small>
+                </span>
+                {selected && !readOnly ? (
+                  <input
+                    type="number"
+                    min="0"
+                    max={maxDisplay}
+                    step="0.001"
+                    value={draft?.quantity_display ?? ''}
+                    onChange={(event) => onToggleAllocation(allocation.lot_id, maxDisplay, true, event.target.value)}
+                    aria-label={`Quantity from ${allocation.godown_name ?? allocation.lot_code}`}
+                  />
+                ) : null}
+              </label>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -216,7 +301,7 @@ function StepNode({
   const displayMain = blankPlanning
     ? (lineQtys[mainLine?.id ?? ''] ?? '')
     : (mainOverride ?? mainActual ?? mainForecast);
-  const inputDisplay = baseToDisplay(step.forecast_input_base, unit);
+  const inputDisplay = baseToDisplay(step.actual_input_base ?? step.forecast_input_base, unit);
   const tone = mainLine && !blankPlanning ? varianceTone(Number(displayMain), mainLine.expected_min_pct, mainLine.expected_max_pct) : 'neutral';
   const statusLabel = planningMode && !inputSatisfied
     ? 'Needs input'
@@ -395,7 +480,7 @@ function ClassicChainMap({
   const cardRef = useRef<HTMLDivElement>(null);
   const unitOptions = useMemo(() => classicUnits(preferredUnit), [preferredUnit]);
   const [unit, setUnit] = useState(unitOptions[0] ?? 'Quintal');
-  const [plannedInput, setPlannedInput] = useState(100);
+  const [plannedInput, setPlannedInput] = useState(0);
   const [runDetail, setRunDetail] = useState<ChainRunDetail | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState('');
@@ -404,7 +489,18 @@ function ClassicChainMap({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<ChainRunListItem[]>([]);
   const [recentRuns, setRecentRuns] = useState<ChainRunListItem[]>([]);
-  const [materials, setMaterials] = useState<{ eligible: AvailableLot[]; for_reuse: AvailableLot[]; ineligible: { lot: AvailableLot; reason: string }[] } | null>(null);
+  const [materials, setMaterials] = useState<{
+    groups: StockInputGroup[];
+    reuse_groups: StockInputGroup[];
+    eligible: AvailableLot[];
+    for_reuse: AvailableLot[];
+    ineligible: { lot: AvailableLot; reason: string }[];
+  } | null>(null);
+  const [materialItemFilter, setMaterialItemFilter] = useState('');
+  const [materialGodownFilter, setMaterialGodownFilter] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [inputAllocations, setInputAllocations] = useState<InputAllocationDraft[]>([]);
+  const [processingInputQty, setProcessingInputQty] = useState('');
   const [selectedInputLotId, setSelectedInputLotId] = useState('');
   const [actualDraft, setActualDraft] = useState<Record<string, { qty: string; godownId: string }>>({});
   const [godowns, setGodowns] = useState<{ id: string; name: string }[]>([]);
@@ -456,6 +552,7 @@ function ClassicChainMap({
   const isDraft = run?.status === 'DRAFT';
   const isRunning = run?.status === 'IN_PROGRESS';
   const isReadOnly = run?.status === 'COMPLETED' || run?.status === 'VOID';
+  const canSelectStock = canStartRun && !busy && !isReadOnly && (!isRunning || steps[0]?.status === 'ACTIVE');
 
   const refreshRun = useCallback(async (runId: string) => {
     const detail = await loadChainRun(runId);
@@ -469,9 +566,15 @@ function ClassicChainMap({
     setBusy(true);
     onError(null);
     try {
-      const detail = await createChainRun(chain.id, plannedInput, unit);
+      let detail = await createChainRun(chain.id, plannedInput, unit);
+      if (inputAllocations.length) {
+        detail = await patchChainRun(detail.chain_run.id, { planned_input: plannedInput, unit,
+          input_allocations: inputAllocations.map((entry) => ({ lot_id: entry.lot_id, quantity_base: displayToBase(Number(entry.quantity_display), unit) })) });
+      }
       setRunDetail(detail);
       setSelectedStepId(detail.run_steps[0]?.id ?? '');
+      const history = await loadChainRunHistory(chain.id);
+      setRecentRuns(history.chain_runs.slice(0, 8));
       return detail.chain_run.id;
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not create draft run');
@@ -479,12 +582,12 @@ function ClassicChainMap({
     } finally {
       setBusy(false);
     }
-  }, [chain.id, onError, plannedInput, run?.status, run?.id, unit]);
+  }, [chain.id, onError, plannedInput, run?.status, run?.id, unit, inputAllocations]);
 
   const loadRecentRuns = useCallback(async () => {
     try {
       const body = await loadChainRunHistory(chain.id);
-      const visible = body.chain_runs.filter((entry) => entry.status !== 'DRAFT');
+      const visible = body.chain_runs;
       setRecentRuns(visible.slice(0, 8));
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not load recent chain runs');
@@ -492,6 +595,9 @@ function ClassicChainMap({
   }, [chain.id, onError]);
 
   function returnToChainTemplate() {
+    setInputAllocations([]);
+    setPlannedInput(0);
+    setProcessingInputQty('');
     setRunDetail(null);
     setHistoryOpen(false);
     setEditMode(false);
@@ -504,6 +610,9 @@ function ClassicChainMap({
   }
 
   useEffect(() => {
+    setInputAllocations([]);
+    setPlannedInput(0);
+    setProcessingInputQty('');
     setRunDetail(null);
     setEditMode(false);
     setSelectedStepId('');
@@ -515,8 +624,8 @@ function ClassicChainMap({
   }, [chain.id, loadRecentRuns]);
 
   const selectedProcessType = useMemo(
-    () => types.find((type) => type.id === selectedStep?.process_type_id),
-    [types, selectedStep?.process_type_id],
+    () => types.find((type) => type.id === (isRunning ? selectedStep : steps[0])?.process_type_id),
+    [types, selectedStep?.process_type_id, steps[0]?.process_type_id, isRunning],
   );
 
   const assignedItemIds = useMemo(
@@ -529,7 +638,82 @@ function ClassicChainMap({
     [selectedProcessType, catalogItems],
   );
 
+  const availableLots = useMemo(
+    () => [...(materials?.eligible ?? []), ...(materials?.for_reuse ?? [])],
+    [materials],
+  );
+
+  function toggleInputAllocation(lotId: string, maxDisplay: number, enabled: boolean, quantityDisplay?: string) {
+    if (!canSelectStock) return;
+    const lot = availableLots.find((entry) => entry.id === lotId);
+    if (enabled && inputAllocations.some((entry) => availableLots.find((candidate) => candidate.id === entry.lot_id)?.item_id !== lot?.item_id)) {
+      onError('Choose stock lots of the same material. Remove the current selection to change material.');
+      return;
+    }
+    onError(null);
+    setInputAllocations((current) => {
+      const existing = current.filter((entry) => entry.lot_id !== lotId);
+      if (!enabled) return existing;
+      const nextQty = quantityDisplay ?? String(maxDisplay);
+      return [...existing, { lot_id: lotId, quantity_display: nextQty }];
+    });
+    if (enabled && quantityDisplay == null) {
+      setSelectedInputLotId(lotId);
+    }
+  }
+
+  function toggleExpandedGroup(groupKey: string) {
+    setExpandedGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
+  }
+
+  const allocatedInputDisplay = useMemo(() => {
+    return roundClassicQty(inputAllocations.reduce((sum, entry) => sum + (parseDisplayQty(entry.quantity_display) ?? 0), 0));
+  }, [inputAllocations]);
+
+  useEffect(() => {
+    if (isReadOnly || (isRunning && steps[0]?.status !== 'ACTIVE')) return;
+    setPlannedInput(allocatedInputDisplay);
+    setProcessingInputQty(allocatedInputDisplay ? String(allocatedInputDisplay) : '');
+  }, [allocatedInputDisplay, isRunning, isReadOnly, steps[0]?.status]);
+
+  function dropStock(event: React.DragEvent) {
+    const raw = event.dataTransfer.getData(STOCK_DRAG_TYPE);
+    if (!raw || !canSelectStock) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.classList.remove('drag-over');
+    try {
+      const ids: unknown = JSON.parse(raw);
+      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return;
+      const lots = ids.map((id) => availableLots.find((lot) => lot.id === id));
+      if (lots.some((lot) => !lot) || new Set([...lots.map((lot) => lot!.item_id), ...inputAllocations.map((entry) => availableLots.find((lot) => lot.id === entry.lot_id)?.item_id)]).size > 1) {
+        onError('Choose available stock of the same material.');
+        return;
+      }
+      setInputAllocations((current) => [...current, ...lots.filter((lot) => !current.some((entry) => entry.lot_id === lot!.id)).map((lot) => ({ lot_id: lot!.id, quantity_display: String(baseToDisplay(lot!.qty_kg, unit)) }))]);
+      onError(null);
+    } catch { onError('Drag a stock card from Available materials.'); }
+  }
+
   const planningMode = editMode && !isRunning && !isReadOnly;
+
+  const stockGroups = materials?.groups ?? [];
+  const reuseStockGroups = materials?.reuse_groups ?? [];
+  const materialItemOptions = useMemo(
+    () => [...new Set(stockGroups.map((group) => group.item_name))].sort(),
+    [stockGroups],
+  );
+  const materialGodownOptions = useMemo(
+    () => [...new Set(stockGroups.flatMap((group) => group.allocations.map((allocation) => allocation.godown_name).filter(Boolean) as string[]))].sort(),
+    [stockGroups],
+  );
+  const filteredStockGroups = useMemo(() => {
+    return stockGroups.filter((group) => {
+      if (materialItemFilter && group.item_name !== materialItemFilter) return false;
+      if (materialGodownFilter && !group.allocations.some((allocation) => allocation.godown_name === materialGodownFilter)) return false;
+      return true;
+    });
+  }, [stockGroups, materialItemFilter, materialGodownFilter]);
 
   function lineQtyForStep(step: ChainRunStep, line: ChainRunStepLine) {
     if (planningMode && stepAssignments[step.id]) {
@@ -570,7 +754,9 @@ function ClassicChainMap({
   }, []);
 
   useEffect(() => {
-    if (!selectedStep?.id) {
+    let cancelled = false;
+    const materialStep = isRunning ? selectedStep : steps[0];
+    if (!materialStep?.id) {
       setMaterials(null);
       setWorkspaceLots([]);
       return;
@@ -583,31 +769,38 @@ function ClassicChainMap({
     }
 
     if (run?.id) {
-      void loadAvailableInputs(run.id, selectedStep.id)
-        .then(setMaterials)
+      void loadAvailableInputs(run.id, materialStep.id)
+        .then((body) => { if (!cancelled) setMaterials(body); })
         .catch((cause: unknown) => onError(cause instanceof Error ? cause.message : 'Could not load materials'));
       setWorkspaceLots([]);
-      return;
+      return () => { cancelled = true; };
     }
 
-    if (!selectedStep.process_type_id) {
+    if (!materialStep.process_type_id) {
       setMaterials(null);
       return;
     }
 
-    void fetch(`/api/process-workspace?process_type_id=${encodeURIComponent(selectedStep.process_type_id)}`, { credentials: 'include' })
+    void fetch(`/api/process-workspace?process_type_id=${encodeURIComponent(materialStep.process_type_id)}`, { credentials: 'include' })
       .then((response) => response.json())
-      .then((body: { lots?: AvailableLot[]; error?: string }) => {
+      .then((body: { lots?: AvailableLot[]; stock_groups?: StockInputGroup[]; error?: string }) => {
+        if (cancelled) return;
         if (body.error) throw new Error(body.error);
         const lots = (body.lots ?? []).map((lot) => ({
           ...lot,
           disposition: lot.disposition ?? 'STOCK',
         }));
         setWorkspaceLots(lots);
-        setMaterials(classifyLotsForProcess(selectedProcessType, lots));
+        const classified = classifyLotsForProcess(selectedProcessType, lots);
+        setMaterials({
+          groups: (body.stock_groups ?? []).filter((group) => classified.eligible.some((lot) => lot.item_id === group.item_id)),
+          reuse_groups: [],
+          ...classified,
+        });
       })
       .catch((cause: unknown) => onError(cause instanceof Error ? cause.message : 'Could not load materials'));
-  }, [run?.id, selectedStep?.id, selectedStep?.process_type_id, isReadOnly, editMode, selectedProcessType, onError]);
+    return () => { cancelled = true; };
+  }, [run?.id, selectedStep?.id, steps[0]?.id, selectedStep?.process_type_id, isReadOnly, isRunning, editMode, selectedProcessType, onError]);
 
   useEffect(() => {
     if (!selectedStep) return;
@@ -693,6 +886,8 @@ function ClassicChainMap({
     setBusy(true);
     onError(null);
     try {
+      await patchChainRun(run.id, { planned_input: allocatedInputDisplay, unit,
+        input_allocations: inputAllocations.map((entry) => ({ lot_id: entry.lot_id, quantity_base: displayToBase(Number(entry.quantity_display), unit) })) });
       const detail = await startChainRun(run.id);
       setRunDetail(detail);
       setEditMode(false);
@@ -701,6 +896,19 @@ function ClassicChainMap({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveInputDraft() {
+    if (!run) { await ensureDraft(); return; }
+    setBusy(true);
+    try {
+      const detail = await patchChainRun(run.id, { planned_input: allocatedInputDisplay, unit,
+        input_allocations: inputAllocations.map((entry) => ({ lot_id: entry.lot_id, quantity_base: displayToBase(Number(entry.quantity_display), unit) })) });
+      setRunDetail(detail);
+      onError(null);
+      await loadRecentRuns();
+    } catch (cause) { onError(cause instanceof Error ? cause.message : 'Could not save input'); }
+    finally { setBusy(false); }
   }
 
   async function handleDropProcess(event: React.DragEvent) {
@@ -730,12 +938,20 @@ function ClassicChainMap({
 
   async function handlePostActuals() {
     if (!run?.id || !selectedStep || selectedStep.status !== 'ACTIVE') return;
+    const inputQty = selectedStep.step_number === 1
+      ? parseDisplayQty(processingInputQty)
+      : baseToDisplay(selectedStep.forecast_input_base, unit);
     const validation = validateStepActuals({
       step: selectedStep,
       unit,
-      actualDraft,
-      selectedInputLotId,
+      actualDraft: {
+        ...actualDraft,
+        __input__: { qty: String(inputQty ?? ''), godownId: '' },
+      },
+      inputAllocations: selectedStep.step_number === 1 ? inputAllocations : [],
+      selectedInputLotId: selectedStep.step_number === 1 ? '' : selectedInputLotId,
       godowns,
+      availableLots,
     });
     if (!validation.ok) {
       onError(validation.message);
@@ -754,14 +970,26 @@ function ClassicChainMap({
           unit,
           godown_id: actualDraft[line.id]?.godownId || undefined,
         }));
+      const inputAllocationsPayload = selectedStep.step_number === 1
+        ? inputAllocations.map((entry) => ({
+          lot_id: entry.lot_id,
+          quantity: Number(entry.quantity_display),
+          unit,
+        }))
+        : undefined;
       const detail = await postStepActuals(run.id, selectedStep.id, {
-        input_lot_id: selectedInputLotId || undefined,
-        input_quantity: selectedStep.step_number === 1 ? plannedInput : baseToDisplay(selectedStep.forecast_input_base, unit),
+        input_allocations: inputAllocationsPayload,
+        input_lot_id: selectedStep.step_number === 1 ? undefined : selectedInputLotId || undefined,
+        input_quantity: inputQty ?? undefined,
         lines,
         destination_godown_id: godowns[0]?.id,
+        idempotency_key: `${run.id}:${selectedStep.id}`,
       });
       setRunDetail(detail);
       setSelectedInputLotId('');
+      setSelectedStepId(detail.run_steps.find((step) => step.status === 'ACTIVE')?.id ?? selectedStep.id);
+      setInputAllocations([]);
+      setProcessingInputQty('');
       if (detail.chain_run.status === 'COMPLETED') await loadRecentRuns();
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not post actuals');
@@ -815,6 +1043,11 @@ function ClassicChainMap({
   async function loadHistoricalRun(runId: string) {
     try {
       const detail = await refreshRun(runId);
+      const savedUnit = detail.chain_run.unit ?? 'QUINTAL';
+      setUnit(savedUnit);
+      setPlannedInput(baseToDisplay(detail.run_steps[0]?.actual_input_base ?? detail.chain_run.planned_input_base, savedUnit));
+      setInputAllocations((detail.input_allocations ?? []).map((entry) => ({ lot_id: entry.lot_id, quantity_display: String(baseToDisplay(entry.quantity_base, savedUnit)) })));
+      setSelectedStepId(detail.run_steps.find((step) => step.status === 'ACTIVE')?.id ?? detail.run_steps[0]?.id ?? '');
       setRunDetail(detail);
       setHistoryOpen(false);
       setEditMode(false);
@@ -847,8 +1080,11 @@ function ClassicChainMap({
   const activeMassBalance = useMemo(() => {
     if (!selectedStep) return null;
     const qtyByLineId = Object.fromEntries(Object.entries(actualDraft).map(([id, entry]) => [id, entry.qty]));
-    return massBalanceForStep(selectedStep, unit, qtyByLineId, mainOverrides[selectedStep.id]);
-  }, [selectedStep, unit, actualDraft, mainOverrides]);
+    const inputStep = selectedStep.step_number === 1 && isRunning
+      ? { ...selectedStep, forecast_input_base: displayToBase(allocatedInputDisplay, unit) }
+      : selectedStep;
+    return massBalanceForStep(inputStep, unit, qtyByLineId, mainOverrides[selectedStep.id]);
+  }, [selectedStep, unit, actualDraft, mainOverrides, allocatedInputDisplay, isRunning]);
 
   const varianceSummary = useMemo(() => {
     if (!runDetail?.run_steps.length) return null;
@@ -869,10 +1105,10 @@ function ClassicChainMap({
           <h3 className="chain-map-title">{chain.name}{run?.code ? ` · ${run.code}` : ''}</h3>
           <p className="muted">
             {planningMode && 'Edit mode — assign items to each step, drag processes from the library, then enter expected outputs.'}
-            {!editMode && isDraft && !isRunning && 'Draft — review the chain forecast, then use Edit chain to assign materials.'}
+            {!editMode && isDraft && !isRunning && 'Draft — select stock, adjust each lot quantity, then save or start the run.'}
             {isRunning && 'Running — enter actuals for the active step.'}
             {isReadOnly && 'Completed run — read-only audit trail.'}
-            {!editMode && !run && !isRunning && 'Chain template preview. Use Edit chain to assign materials and adjust processes.'}
+            {!editMode && !run && !isRunning && 'Drag stock before the first step, or expand a stock card and select its godown lots.'}
           </p>
         </div>
         <div className="chain-map-controls">
@@ -882,15 +1118,20 @@ function ClassicChainMap({
               type="number"
               min="0"
               step="0.001"
-              value={plannedInput}
-              disabled={isRunning || isReadOnly}
+              value={plannedInput || ''}
+              placeholder="Select stock"
+              disabled
               onChange={(event) => void handlePlannedInputChange(event.target.value)}
               aria-label="First input quantity"
             />
           </label>
           <label>
             Unit
-            <Select value={unit} disabled={isRunning || isReadOnly} onChange={(event) => setUnit(event.target.value)} aria-label="Forecast unit">
+            <Select value={unit} disabled={isRunning || isReadOnly} onChange={(event) => {
+              const nextUnit = event.target.value;
+              setInputAllocations((current) => current.map((entry) => ({ ...entry, quantity_display: String(baseToDisplay(displayToBase(Number(entry.quantity_display), unit), nextUnit)) })));
+              setUnit(nextUnit);
+            }} aria-label="Forecast unit">
               {unitOptions.map((u) => <option key={u} value={u}>{u}</option>)}
             </Select>
           </label>
@@ -913,12 +1154,12 @@ function ClassicChainMap({
             </Button>
           )}
           {canStartRun && isDraft && (
-            <Button type="button" disabled={busy || !steps.length} onClick={() => void handleStartRun()}>
+            <Button type="button" disabled={busy || !steps.length || !inputAllocations.length || allocatedInputDisplay <= 0} onClick={() => void handleStartRun()}>
               {busy ? 'Starting…' : 'Start run'}
             </Button>
           )}
           {canStartRun && !run && (
-            <Button type="button" disabled={busy} onClick={() => void ensureDraft()}>
+            <Button type="button" disabled={busy} onClick={() => void saveInputDraft()}>
               {busy ? 'Creating…' : 'New draft run'}
             </Button>
           )}
@@ -927,75 +1168,97 @@ function ClassicChainMap({
               {busy ? 'Creating…' : 'New draft run'}
             </Button>
           )}
+          {canStartRun && isDraft && <Button type="button" disabled={busy} onClick={() => void saveInputDraft()}>Save input draft</Button>}
         </div>
       </div>
 
       <div className="chain-map-layout">
         <aside className={`chain-library${editMode ? ' chain-library--edit' : ''}`}>
-          {editMode ? (
+          {editMode && (
             <>
               <ChainLibraryPanel title="Process library" hint="Drag a process to add it to this run.">
                 {libraryTypes.map((type) => <ClassicLibraryItem key={type.id} type={type} />)}
               </ChainLibraryPanel>
               <div className="chain-library-divider" />
-              <ChainLibraryPanel
-                title="Items"
-                hint={`Drag or click an item for ${selectedStep?.process_type_name ?? 'the selected step'}. Only accepted items can be assigned.`}
-              >
-                <div className="chain-materials-section">
-                  {classifiedItems.eligible.length ? classifiedItems.eligible.map((item) => (
-                    <ItemCard
-                      key={item.id}
-                      item={item}
-                      selected={assignedItemIds.has(item.id)}
-                      onSelect={() => selectedStep && assignItemToStep(selectedStep.id, item.id)}
-                    />
-                  )) : <p className="muted">No eligible items for this step.</p>}
-                </div>
-                {classifiedItems.ineligible.length ? (
-                  <details className="chain-materials-ineligible">
-                    <summary>Not eligible here ({classifiedItems.ineligible.length})</summary>
-                    {classifiedItems.ineligible.map(({ item, reason }) => (
-                      <p key={item.id} className="muted"><strong>{item.name}</strong> · {reason}</p>
-                    ))}
-                  </details>
-                ) : null}
-              </ChainLibraryPanel>
             </>
-          ) : (
+          )}
+          {(
             <ChainLibraryPanel
               title="Available materials"
               hint={
-                isRunning
-                  ? `Lots eligible for ${selectedStep?.process_type_name ?? 'selected step'}.`
-                  : `Lots for ${selectedStep?.process_type_name ?? 'the selected step'}. Use Edit chain to assign them to steps.`
+                selectedStep?.step_number === 1
+                  ? `Select stock from Stocks & Lots for ${selectedStep?.process_type_name ?? 'the first step'}.`
+                  : isRunning
+                    ? `Output lots from the previous step for ${selectedStep?.process_type_name ?? 'selected step'}.`
+                    : `Stock available for ${selectedStep?.process_type_name ?? 'the selected step'}.`
               }
             >
-              {materials?.for_reuse.length ? (
+              {!isRunning || selectedStep?.step_number === 1 ? (
+                <>
+                  <div className="chain-materials-filters">
+                    <Select value={materialItemFilter} onChange={(event) => setMaterialItemFilter(event.target.value)} aria-label="Filter by material">
+                      <option value="">All materials</option>
+                      {materialItemOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </Select>
+                    <Select value={materialGodownFilter} onChange={(event) => setMaterialGodownFilter(event.target.value)} aria-label="Filter by godown">
+                      <option value="">All godowns</option>
+                      {materialGodownOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                    </Select>
+                  </div>
+                  {reuseStockGroups.length ? (
+                    <div className="chain-materials-section">
+                      <small>For reuse</small>
+                      {reuseStockGroups.map((group) => (
+                        <GroupedStockCard
+                          key={group.group_key}
+                          group={group}
+                          unit={unit}
+                          expanded={Boolean(expandedGroups[group.group_key])}
+                          selectedAllocations={inputAllocations}
+                          readOnly={!canSelectStock}
+                          onToggleExpand={() => toggleExpandedGroup(group.group_key)}
+                          onToggleAllocation={toggleInputAllocation}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="chain-materials-section">
+                    {filteredStockGroups.length ? filteredStockGroups.map((group) => (
+                      <GroupedStockCard
+                        key={group.group_key}
+                        group={group}
+                        unit={unit}
+                        expanded={Boolean(expandedGroups[group.group_key])}
+                        selectedAllocations={inputAllocations}
+                        readOnly={!canSelectStock}
+                        onToggleExpand={() => toggleExpandedGroup(group.group_key)}
+                        onToggleAllocation={toggleInputAllocation}
+                      />
+                    )) : <p className="muted">No eligible stock groups.</p>}
+                  </div>
+                </>
+              ) : (
                 <div className="chain-materials-section">
-                  <small>For reuse</small>
-                  {materials.for_reuse.map((lot) => (
+                  {materials?.for_reuse.length ? materials.for_reuse.map((lot) => (
                     <MaterialCard
                       key={lot.id}
                       lot={lot}
                       readOnly={!isRunning}
-                      selected={isRunning ? selectedInputLotId === lot.id : assignedItemIds.has(lot.item_id)}
+                      selected={selectedInputLotId === lot.id}
                       onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
                     />
-                  ))}
+                  )) : null}
+                  {materials?.eligible.length ? materials.eligible.map((lot) => (
+                    <MaterialCard
+                      key={lot.id}
+                      lot={lot}
+                      readOnly={!isRunning}
+                      selected={selectedInputLotId === lot.id}
+                      onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
+                    />
+                  )) : <p className="muted">{isRunning ? 'No eligible lots.' : 'No eligible lots for this step.'}</p>}
                 </div>
-              ) : null}
-              <div className="chain-materials-section">
-                {materials?.eligible.length ? materials.eligible.map((lot) => (
-                  <MaterialCard
-                    key={lot.id}
-                    lot={lot}
-                    readOnly={!isRunning}
-                    selected={isRunning ? selectedInputLotId === lot.id : assignedItemIds.has(lot.item_id)}
-                    onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
-                  />
-                )) : <p className="muted">{isRunning ? 'No eligible lots.' : 'No eligible lots for this step.'}</p>}
-              </div>
+              )}
               {materials?.ineligible.length ? (
                 <details className="chain-materials-ineligible">
                   <summary>Not eligible here ({materials.ineligible.length})</summary>
@@ -1015,14 +1278,29 @@ function ClassicChainMap({
           onDrop={(e) => void handleDropProcess(e)}
         >
           <div className="chain-map-main">
-            <div className="chain-map-input">
+            <div className="chain-map-input" onDrop={dropStock} onDragOver={(event) => {
+              if (canSelectStock && event.dataTransfer.types.includes(STOCK_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; }
+            }}>
               {chainInputLabel(chain)}
-              <b>{plannedInput} {unit}</b>
+              <b>{plannedInput > 0 ? `${plannedInput} ${unit}` : 'Drop stock here before the first step'}</b>
+              {inputAllocations.map((entry) => {
+                const lot = availableLots.find((candidate) => candidate.id === entry.lot_id);
+                return <label key={entry.lot_id} className="chain-stock-selection">
+                  <span>{lot?.item_name ?? 'Selected stock'} · {lot?.godown_name ?? lot?.code ?? entry.lot_id}</span>
+                  <input type="number" min="0" step="0.01" max={lot ? baseToDisplay(lot.qty_kg, unit) : undefined}
+                    disabled={!canSelectStock} value={entry.quantity_display}
+                    aria-label={`Input quantity from ${lot?.code ?? entry.lot_id}`}
+                    onChange={(event) => toggleInputAllocation(entry.lot_id, lot ? baseToDisplay(lot.qty_kg, unit) : 0, true, event.target.value)} />
+                  <small>{unit} · Remaining after posting: {lot ? baseToDisplay(lot.qty_kg - displayToBase(Number(entry.quantity_display), unit), unit) : '—'}</small>
+                  {canSelectStock && <button type="button" onClick={() => toggleInputAllocation(entry.lot_id, 0, false)}>Remove</button>}
+                </label>;
+              })}
+              <small>Save draft to keep selections. Stock is deducted when you post the step.</small>
             </div>
             {steps.map((step) => {
               const lineQtys: Record<string, string> = {};
               for (const line of step.lines) lineQtys[line.id] = lineQtyForStep(step, line);
-              const inputSatisfied = Boolean(stepAssignments[step.id]);
+              const inputSatisfied = inputAllocations.length > 0;
               const linesEditable = planningMode
                 ? inputSatisfied
                 : (!run || (isDraft && !isReadOnly) || step.status === 'ACTIVE');
@@ -1094,10 +1372,37 @@ function ClassicChainMap({
             <p className="muted chain-actuals-hint">
               Enter main output and by-products only. Waste is calculated as input minus what you accounted for.
             </p>
-            {selectedInputLotId ? (
+            {selectedStep.step_number === 1 ? (
+              <label className="chain-actual-line">
+                <span><strong>Processing input</strong> from selected stock lots</span>
+                <div className="chain-actual-line-inputs">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={processingInputQty}
+                    readOnly
+                    aria-label="Processing input quantity"
+                  />
+                  <span>{unit.toLowerCase()}</span>
+                </div>
+              </label>
+            ) : null}
+            {inputAllocations.length ? (
+              <div className="chain-actuals-allocations">
+                {inputAllocations.map((entry) => {
+                  const lot = availableLots.find((candidate) => candidate.id === entry.lot_id);
+                  return (
+                    <p key={entry.lot_id} className="muted">
+                      {lot?.godown_name ?? lot?.code ?? entry.lot_id}: {entry.quantity_display} {unit.toLowerCase()} available max {lot ? baseToDisplay(lot.qty_kg, unit) : '—'} {unit.toLowerCase()}
+                    </p>
+                  );
+                })}
+              </div>
+            ) : selectedInputLotId ? (
               <p className="chain-actuals-lot muted">Input lot selected from materials.</p>
             ) : (
-              <p className="chain-actuals-lot chain-input-over">Select an input lot from Available materials.</p>
+              <p className="chain-actuals-lot chain-input-over">Select stock lots from Available materials.</p>
             )}
             {activeMassBalance?.overInput ? (
               <p className="chain-actuals-warning">
@@ -1162,7 +1467,7 @@ function ClassicChainMap({
       <div className="chain-recent-runs">
         <TableCard
           title="Recent chain runs"
-          subtitle="Inputs, outputs and by-products remain linked to the stock ledger."
+          subtitle="Reopen a draft to restore saved input selections. Posted inputs and outputs remain linked to the stock ledger."
           actions={
             <TableEditModeButton
               enabled={canVoidRun}

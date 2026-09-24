@@ -159,7 +159,7 @@
 
 .chain-map-layout {
   display: grid;
-  grid-template-columns: minmax(152px, 180px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
   min-height: 360px;
@@ -211,7 +211,7 @@
 
 .chain-library:not(.chain-library--edit) .chain-library-scroll {
   height: auto;
-  max-height: min(58vh, 495px);
+  max-height: min(68vh, 585px);
 }
 
 .chain-library-item {
@@ -900,7 +900,7 @@ button.chain-map-node,
 }
 
 @media (max-width: 1050px) {
-  .chain-map-layout { grid-template-columns: 135px minmax(0, 1fr); }
+  .chain-map-layout { grid-template-columns: 260px minmax(0, 1fr); }
 }
 
 @media (max-width: 700px) {
@@ -916,7 +916,7 @@ button.chain-map-node,
     box-shadow: none;
   }
   .chain-library > div { flex-direction: row; overflow-x: auto; }
-  .chain-library-scroll { height: 140px; }
+  .chain-library-scroll { height: 168px; }
   .chain-library-item { flex: 0 0 auto; }
 }
 

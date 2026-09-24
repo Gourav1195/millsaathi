@@ -34,6 +34,8 @@ import { can, canViewFinance } from '../lib/permissions';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
+import { groupLotsForDisplay } from '../lib/stock-groups';
+import { StockLedger } from './stock-ledger';
 
 type Lot = {
   id: string;
@@ -49,6 +51,9 @@ type Lot = {
   moisture_pct?: number | null;
   value_paise?: number;
   note?: string | null;
+  sauda_id?: string | null;
+  sauda_code?: string | null;
+  gate_token_no?: string | null;
 };
 
 type Godown = { id: string; name: string; stock_kg?: number; capacity_kg?: number };
@@ -94,10 +99,8 @@ const pct = (value: number | null | undefined) =>
   value == null ? '—' : `${value.toLocaleString('en-IN', { maximumFractionDigits: 1 })}%`;
 
 const initialEditForm = (lot: Lot): LotForm => ({
-  quantity: lot.entered_quantity != null
-    ? String(lot.entered_quantity)
-    : String((lot.qty_kg ?? 0) / 100),
-  unit: lot.entered_unit ?? 'QUINTAL',
+  quantity: String((lot.qty_kg ?? 0) / 100),
+  unit: 'QUINTAL',
   godown_id: lot.godown_id ?? '',
   moisture: lot.moisture_pct == null ? '' : String(lot.moisture_pct),
   value: lot.value_paise == null ? '' : String(lot.value_paise / 100),
@@ -189,6 +192,20 @@ export function StockApp() {
   }, [overview, query, filters]);
 
   const pageData = useMemo(() => paginate(filtered, page), [filtered, page]);
+  const stockGroups = useMemo(
+    () => groupLotsForDisplay(filtered.map((lot) => ({
+      id: lot.id,
+      code: lot.code,
+      item_id: lot.item_id,
+      item_name: lot.item_name,
+      qty_kg: lot.qty_kg,
+      godown_name: lot.godown_name,
+      sauda_id: lot.sauda_id,
+      sauda_code: lot.sauda_code,
+      gate_token_no: lot.gate_token_no,
+    }))),
+    [filtered],
+  );
   const godownOptions = useMemo(() => uniqueValues(overview?.lots ?? [], (lot) => lot.godown_name), [overview]);
   const itemOptions = useMemo(() => uniqueValues(overview?.lots ?? [], (lot) => lot.item_name), [overview]);
 
@@ -640,6 +657,31 @@ export function StockApp() {
           ) : null}
         </dialog>
 
+        <Panel title="Inventory by purchase & material" className="stock-group-panel">
+          <p className="muted">Grouped stock for processing selection. Expand a group to see godown-wise lots.</p>
+          {stockGroups.length ? stockGroups.map((group) => (
+            <details key={group.group_key} className="stock-group-card">
+              <summary>
+                {group.item_name}
+                {group.sauda_code ? ` · ${group.sauda_code}` : ' · Unlinked stock'}
+                {' · '}{formatQtl(group.total_qty_kg)} total
+              </summary>
+              <div className="stock-group-lots">
+                {group.lots.map((lot) => (
+                  <div key={lot.id} className="line">
+                    <span>
+                      <strong>{lot.code}</strong>
+                      {' · '}{lot.godown_name ?? 'No godown'}
+                      {' · '}{formatQtl(lot.qty_kg)}
+                      {lot.gate_token_no ? ` · truck ${lot.gate_token_no}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )) : <EmptyState>No grouped stock in this view.</EmptyState>}
+        </Panel>
+
         <TableCard
           title="Lots on hand"
           subtitle={`${filtered.length} lot${filtered.length === 1 ? '' : 's'}`}
@@ -714,6 +756,7 @@ export function StockApp() {
             onNext={() => setPage((value) => value + 1)}
           />
         </TableCard>
+        {overview && <StockLedger items={overview.items} />}
       </section>
     </main>
   );

@@ -364,7 +364,7 @@
 
 .process-materials, .process-outputs {
   display: flex;
-  max-height: min(58vh, 495px);
+  max-height: min(68vh, 585px);
   flex-direction: column;
   gap: 9px;
   overflow-y: auto;
@@ -398,6 +398,20 @@
 .process-material-head small, .process-material > small { margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .process-material-head b { padding: 5px 10px; border-radius: var(--radius-sm); background: var(--muted-bg); color: var(--muted2); font-size: 12px; }
 .process-material-qty { display: block; margin-top: var(--space-3); font: 800 18px var(--font-display); }
+.process-material--group { display: grid; gap: var(--space-2); padding: var(--space-3); }
+.process-material-group-head { width: 100%; border: 0; background: transparent; text-align: left; padding: 0; cursor: pointer; }
+.process-material-allocations { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.process-material-allocation { display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-2); align-items: center; font-size: 13px; }
+.process-material-allocation input[type='number'] { width: 88px; }
+.chain-materials-filters { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-bottom: var(--space-3); }
+.chain-actuals-allocations { display: grid; gap: 4px; margin: var(--space-2) 0; }
+.sauda-truck-row td { background: var(--muted-bg); font-size: 13px; }
+.sauda-truck-row small { color: var(--muted); }
+.stock-group-panel { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
+.stock-group-card { border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-3); background: #fff; }
+.stock-group-card summary { cursor: pointer; font-weight: 700; list-style: none; }
+.stock-group-card summary::-webkit-details-marker { display: none; }
+.stock-group-lots { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
 
 .process-dropzone {
   display: flex;
@@ -1112,3 +1126,8 @@
   .document-row span:nth-of-type(2), .document-row span:nth-of-type(3), .document-row span:nth-of-type(4) { display: none; }
   .dashboard-kpis, .dashboard-grid { grid-template-columns: 1fr; }
 }
+/* Source allocations stay editable immediately before the first process. */
+.chain-map-input { min-width: 230px; max-width: 310px; gap: 10px; }
+.chain-stock-selection { display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px dotted var(--border, #cbd5e1); border-radius: 8px; text-align: left; }
+.chain-stock-selection input { width: 100%; min-width: 0; }
+.process-material-group-head[draggable="true"] { cursor: grab; }

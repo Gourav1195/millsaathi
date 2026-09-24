@@ -61,6 +61,7 @@ export type ChainRunListItem = ChainRunRecord & {
 };
 
 export type ChainRunDetail = {
+  input_allocations?: { lot_id: string; quantity_base: number }[];
   chain_run: ChainRunRecord;
   run_steps: ChainRunStep[];
   chain_mass_balance?: {
@@ -81,9 +82,39 @@ export type AvailableLot = {
   qty_kg: number;
   godown_id?: string | null;
   godown_name?: string | null;
+  sauda_id?: string | null;
+  sauda_code?: string | null;
+  gate_entry_id?: string | null;
+  received_qty_kg?: number | null;
+  consumed_qty_kg?: number | null;
   disposition?: string;
   eligible?: boolean;
   for_reuse?: boolean;
+};
+
+export type StockGroupAllocation = {
+  lot_id: string;
+  lot_code: string;
+  godown_id: string | null;
+  godown_name: string | null;
+  available_kg: number;
+  received_kg: number;
+  consumed_kg: number;
+};
+
+export type StockInputGroup = {
+  group_key: string;
+  item_id: string;
+  item_name: string;
+  sauda_id: string | null;
+  sauda_code: string | null;
+  total_available_kg: number;
+  allocations: StockGroupAllocation[];
+};
+
+export type InputAllocationDraft = {
+  lot_id: string;
+  quantity_display: string;
 };
 
 export type Godown = { id: string; name: string };
@@ -178,16 +209,64 @@ export function validateStepActuals(params: {
   step: ChainRunStep;
   unit: string;
   actualDraft: Record<string, { qty: string; godownId: string }>;
+  inputAllocations?: InputAllocationDraft[];
   selectedInputLotId?: string;
   godowns: Godown[];
   requireInputLot?: boolean;
+  availableLots?: AvailableLot[];
 }): ActualsValidation {
-  const { step, unit, actualDraft, selectedInputLotId, godowns, requireInputLot = true } = params;
+  const {
+    step,
+    unit,
+    actualDraft,
+    inputAllocations = [],
+    selectedInputLotId,
+    godowns,
+    requireInputLot = true,
+    availableLots = [],
+  } = params;
   const qtyByLineId = Object.fromEntries(Object.entries(actualDraft).map(([id, entry]) => [id, entry.qty]));
   const balance = massBalanceForStep(step, unit, qtyByLineId);
 
-  if (requireInputLot && !selectedInputLotId) {
-    return { ok: false, message: 'Select an input lot from Available materials on the left.' };
+  const inputDisplay = parseDisplayQty(actualDraft.__input__?.qty) ?? baseToDisplay(step.forecast_input_base, unit);
+  const inputBase = displayToBase(inputDisplay, unit);
+
+  if (requireInputLot) {
+    const hasAllocations = inputAllocations.some((entry) => parseDisplayQty(entry.quantity_display) != null);
+    if (!hasAllocations && !selectedInputLotId) {
+      return { ok: false, message: 'Select stock lots from Available materials on the left.' };
+    }
+    const lotsById = new Map(availableLots.map((lot) => [lot.id, lot]));
+    let allocatedBase = 0;
+    const drafts = inputAllocations.length
+      ? inputAllocations
+      : selectedInputLotId
+        ? [{ lot_id: selectedInputLotId, quantity_display: String(inputDisplay) }]
+        : [];
+    let itemId = '';
+    for (const entry of drafts) {
+      const qty = parseDisplayQty(entry.quantity_display);
+      if (qty == null || qty <= 0) {
+        return { ok: false, message: 'Each selected godown allocation must have a quantity greater than zero.' };
+      }
+      const lot = lotsById.get(entry.lot_id);
+      if (!lot) return { ok: false, message: 'One of the selected stock lots is no longer available.' };
+      const qtyBase = displayToBase(qty, unit);
+      if (qtyBase > lot.qty_kg) {
+        return { ok: false, message: `${lot.code} in ${lot.godown_name ?? 'storage'} only has ${baseToDisplay(lot.qty_kg, unit)} ${unit.toLowerCase()} available.` };
+      }
+      if (itemId && itemId !== lot.item_id) {
+        return { ok: false, message: 'All input allocations must use the same material.' };
+      }
+      itemId = lot.item_id;
+      allocatedBase += qtyBase;
+    }
+    if (Math.abs(allocatedBase - inputBase) > 0.000001) {
+      return {
+        ok: false,
+        message: `Allocated total (${baseToDisplay(allocatedBase, unit)} ${unit.toLowerCase()}) must equal processing input (${inputDisplay} ${unit.toLowerCase()}).`,
+      };
+    }
   }
 
   const mainLine = step.lines.find((line) => line.kind === 'main');
@@ -246,7 +325,7 @@ export async function loadChainRun(runId: string) {
   return apiJson<ChainRunDetail>(`/api/chain-runs/${encodeURIComponent(runId)}`);
 }
 
-export async function patchChainRun(runId: string, patch: { planned_input?: number; unit?: string; notes?: string }) {
+export async function patchChainRun(runId: string, patch: { planned_input?: number; unit?: string; notes?: string; input_allocations?: { lot_id: string; quantity_base: number }[] }) {
   return apiJson<ChainRunDetail>(`/api/chain-runs/${encodeURIComponent(runId)}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
@@ -271,8 +350,10 @@ export async function postStepActuals(
   stepId: string,
   payload: {
     input_lot_id?: string;
+    input_allocations?: { lot_id: string; quantity: number; unit?: string; quantity_base?: number }[];
     input_quantity?: number;
     destination_godown_id?: string;
+    idempotency_key?: string;
     lines: { line_id?: string; kind?: string; item_name?: string; actual_base?: number; quantity?: number; unit?: string; godown_id?: string }[];
   },
 ) {
@@ -287,10 +368,17 @@ export async function skipRunStep(runId: string, stepId: string) {
   return apiJson<ChainRunDetail>(`/api/chain-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/skip`, { method: 'POST' });
 }
 
-export async function loadAvailableInputs(runId: string, stepId: string) {
-  return apiJson<{ eligible: AvailableLot[]; for_reuse: AvailableLot[]; ineligible: { lot: AvailableLot; reason: string }[] }>(
-    `/api/chain-runs/${encodeURIComponent(runId)}/available-inputs?step_id=${encodeURIComponent(stepId)}`,
-  );
+export async function loadAvailableInputs(runId: string, stepId: string, filters?: { item_id?: string; godown_id?: string }) {
+  const params = new URLSearchParams({ step_id: stepId });
+  if (filters?.item_id) params.set('item_id', filters.item_id);
+  if (filters?.godown_id) params.set('godown_id', filters.godown_id);
+  return apiJson<{
+    groups: StockInputGroup[];
+    reuse_groups: StockInputGroup[];
+    eligible: AvailableLot[];
+    for_reuse: AvailableLot[];
+    ineligible: { lot: AvailableLot; reason: string }[];
+  }>(`/api/chain-runs/${encodeURIComponent(runId)}/available-inputs?${params}`);
 }
 
 export async function loadChainRunHistory(chainId: string, from?: string, to?: string) {
@@ -319,7 +407,7 @@ export function chainRunStatusLabel(status: ChainRunStatus) {
 
 export function formatChainRunLinesSummary(run: ChainRunListItem) {
   const unit = (run.unit ?? 'QUINTAL').toLowerCase();
-  const inputBase = run.total_input_base ?? run.planned_input_base ?? 0;
+  const inputBase = run.status === 'DRAFT' || !run.total_input_base ? run.planned_input_base ?? 0 : run.total_input_base;
   const input = baseToDisplay(inputBase, run.unit ?? 'QUINTAL');
   const output = baseToDisplay(run.total_output_base ?? 0, run.unit ?? 'QUINTAL');
   const byproduct = baseToDisplay(run.total_byproduct_base ?? 0, run.unit ?? 'QUINTAL');

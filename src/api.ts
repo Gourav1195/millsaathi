@@ -37,6 +37,13 @@ import {
   recomputeDraftForecasts,
   roundClassicQty,
 } from './chainRunExecution';
+import {
+  groupStockLots,
+  loadProcessingStockLots,
+  syncGateStockStatus,
+  validateInputAllocations,
+  type StockLotRow,
+} from './stockLotProcessing';
 
 const printStyles = `<style>
   :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#182230;font:14px/1.5 'IBM Plex Sans',Arial,sans-serif}.sheet{max-width:820px;margin:32px auto;padding:40px;background:#fff;box-shadow:0 12px 36px rgba(20,30,40,.12);border-top:7px solid #e8b93b}.brand{display:flex;justify-content:space-between;gap:24px;border-bottom:1px solid #e4e7ec;padding-bottom:22px}.brand h1{font:800 27px/1.1 Archivo,Arial,sans-serif;margin:0 0 6px}.muted{color:#667085}.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#667085;font-weight:700}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:24px 0}.meta>div{background:#f7f8fa;border:1px solid #e4e7ec;border-radius:8px;padding:12px}.title{font:800 20px Archivo,Arial,sans-serif;margin:24px 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th{background:#182230;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left}th,td{padding:11px 12px;border-bottom:1px solid #e4e7ec}td:last-child,th:last-child{text-align:right}.total{margin:20px 0 0 auto;max-width:270px;background:#fff8e1;border:1px solid #efd98d;border-radius:8px;padding:16px;display:flex;justify-content:space-between;font-weight:800;font-size:17px}.notes{margin-top:24px;padding-top:16px;border-top:1px solid #e4e7ec;white-space:pre-line}.actions{text-align:right;margin-bottom:14px}.actions button{border:0;border-radius:7px;padding:9px 14px;background:#c0451c;color:#fff;font-weight:700;cursor:pointer}@media(max-width:700px){body{background:#fff}.sheet{margin:0;padding:24px;box-shadow:none}.brand{display:block}.meta{grid-template-columns:1fr 1fr}}@media print{body{background:#fff}.sheet{margin:0;max-width:none;padding:0;box-shadow:none;border-top:0}.actions{display:none}}
@@ -325,10 +332,13 @@ api.get('/overview', async (c) => {
          WHERE sa.mill_id = ?1 AND sa.deleted_at IS NULL ORDER BY sa.created_at DESC LIMIT 1000`,
       ).bind(mill.id),
       db.prepare(
-        `SELECT l.*, gd.name AS godown_name, i.name AS item_name
+        `SELECT l.*, gd.name AS godown_name, i.name AS item_name, sa.code AS sauda_code,
+                g.token_no AS gate_token_no, g.vehicle_no AS gate_vehicle_no
          FROM lots l
          LEFT JOIN godowns gd ON gd.id = l.godown_id
          LEFT JOIN items i ON i.id = l.item_id
+         LEFT JOIN saudas sa ON sa.id = l.sauda_id
+         LEFT JOIN gate_entries g ON g.id = l.gate_entry_id AND g.mill_id = l.mill_id
          WHERE l.mill_id = ?1 ORDER BY l.in_date DESC, l.code DESC LIMIT 1000`,
       ).bind(mill.id),
       db.prepare(
@@ -789,6 +799,22 @@ api.post('/lots', async (c) => {
     columns.splice(3, 0, 'gate_entry_id');
     values.splice(3, 0, gateEntryId);
   }
+  if (lotColumns.has('sauda_id')) {
+    columns.push('sauda_id');
+    values.push(null);
+  }
+  if (lotColumns.has('received_qty_kg')) {
+    columns.push('received_qty_kg');
+    values.push(Math.round(lotQuantity));
+  }
+  if (lotColumns.has('consumed_qty_kg')) {
+    columns.push('consumed_qty_kg');
+    values.push(0);
+  }
+  if (lotColumns.has('allocation_status')) {
+    columns.push('allocation_status');
+    values.push('partially_available');
+  }
   if (lotColumns.has('note')) {
     columns.push('note');
     values.push((b.note as string) || null);
@@ -799,18 +825,29 @@ api.post('/lots', async (c) => {
   const stockInsert = b.item_id ? c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, movement_date, created_by) VALUES (?, ?, 'IN', ?, ?, ?, ?, ?, ?, ?, 'LOT', ?, ?, ?)`).bind(uuid(), mill.id, b.item_id, b.godown_id || null, id, lotEntry.quantity, lotEntry.unit, lotEntry.base, lotEntry.baseUnit, id, b.in_date || istToday(), c.get('session').user.id) : null;
   if (gateEntryId) {
     const gate = await c.env.DB.prepare(
-      `SELECT id, quality_json FROM gate_entries
-       WHERE id = ?1 AND mill_id = ?2 AND direction = 'in' AND status = 'done' AND stock_status = 'pending'`,
-    ).bind(gateEntryId, mill.id).first<{ id: string; quality_json: string | null }>();
-    if (!gate) return c.json({ error: 'incoming truck is not pending for stock' }, 400);
+      `SELECT id, quality_json, sauda_id, COALESCE(gross_kg,0)-COALESCE(tare_kg,0) AS net_kg, stock_status
+       FROM gate_entries
+       WHERE id = ?1 AND mill_id = ?2 AND direction = 'in' AND status = 'done'
+         AND stock_status IN ('pending','partial')`,
+    ).bind(gateEntryId, mill.id).first<{ id: string; quality_json: string | null; sauda_id: string | null; net_kg: number; stock_status: string }>();
+    if (!gate) return c.json({ error: 'incoming truck is not pending for stock allocation' }, 400);
+    const allocated = await c.env.DB.prepare(
+      `SELECT COALESCE(SUM(received_qty_kg), 0) AS allocated FROM lots WHERE mill_id = ? AND gate_entry_id = ?`,
+    ).bind(mill.id, gateEntryId).first<{ allocated: number }>();
+    const nextAllocated = (allocated?.allocated ?? 0) + Math.round(lotQuantity);
+    if (nextAllocated > Math.max(0, Math.round(gate.net_kg))) {
+      return c.json({ error: 'godown allocation exceeds truck received quantity' }, 400);
+    }
+    if (lotColumns.has('sauda_id')) {
+      values[columns.indexOf('sauda_id')] = gate.sauda_id;
+    }
     if (!lotQuality.json && gate.quality_json) values[columns.indexOf('quality_json')] = gate.quality_json;
     await c.env.DB.batch([
       inserts, ...(stockInsert ? [stockInsert] : []),
-      c.env.DB.prepare(`UPDATE gate_entries SET stock_status = 'added', stock_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND mill_id = ?`)
-        .bind((b.note as string) || null, gateEntryId, mill.id),
-      c.env.DB.prepare(`UPDATE sauda_deliveries SET lot_id = ?, godown_id = ? WHERE mill_id = ? AND gate_entry_id = ? AND lot_id IS NULL`)
+      c.env.DB.prepare(`UPDATE sauda_deliveries SET lot_id = COALESCE(lot_id, ?), godown_id = COALESCE(godown_id, ?) WHERE mill_id = ? AND gate_entry_id = ? AND lot_id IS NULL`)
         .bind(id, (b.godown_id as string) || null, mill.id, gateEntryId),
     ]);
+    await syncGateStockStatus(c.env.DB, mill.id, gateEntryId);
   } else {
     if (stockInsert) await c.env.DB.batch([inserts, stockInsert]); else await inserts.run();
   }
@@ -958,6 +995,7 @@ api.post('/saudas/import/commit', async (c) => {
   const valid = checked.filter((entry): entry is { row_number: number; error: null; row: SaudaImportRow } => !entry.error && !!entry.row).map((entry) => entry.row);
   if (checked.some((entry) => entry.error)) return c.json({ error: 'import contains invalid rows', rows: checked }, 400);
   for (const row of valid) {
+    if (row.direction !== 'in' && row.direction !== 'out') return c.json({ error: 'invalid sauda direction' }, 400);
     const quantity = await normalizeItemQuantity(c.env.DB, mill.id, row.item_id, row.quantity, row.unit);
     if (!quantity || quantity.base <= 0) return c.json({ error: 'one or more quantities cannot be converted for its item' }, 400);
     const code = await nextSaudaCode(c.env.DB, mill.id, row.direction);
@@ -1510,13 +1548,21 @@ api.get('/process-workspace', async (c) => {
   const processTypeId = String(c.req.query('process_type_id') ?? '');
   const processType = await c.env.DB.prepare(`SELECT * FROM process_types WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(processTypeId, mill.id).first<Record<string, unknown>>();
   if (!processType) return c.json({ error: 'process type not found' }, 404);
-  const [lines, lots, godowns, items] = await c.env.DB.batch([
+  const [lines, stockLots, godowns, items] = await c.env.DB.batch([
     c.env.DB.prepare(`SELECT ptl.*, i.name AS item_name, i.base_unit, i.display_unit, i.package_unit, i.package_quantity_base, gd.name AS default_godown_name FROM process_type_lines ptl LEFT JOIN items i ON i.id = ptl.item_id LEFT JOIN godowns gd ON gd.id = ptl.default_godown_id WHERE ptl.process_type_id = ? AND ptl.mill_id = ? AND ptl.active = 1 ORDER BY ptl.sort_order, ptl.created_at`).bind(processTypeId, mill.id),
-    c.env.DB.prepare(`SELECT l.*, i.name AS item_name, i.base_unit, i.display_unit, gd.name AS godown_name FROM lots l LEFT JOIN items i ON i.id = l.item_id LEFT JOIN godowns gd ON gd.id = l.godown_id WHERE l.mill_id = ? AND l.qty_kg > 0 AND l.item_id IS NOT NULL ORDER BY l.in_date DESC, l.code DESC LIMIT 1000`).bind(mill.id),
+    c.env.DB.prepare(`SELECT l.*, i.name AS item_name, i.base_unit, i.display_unit, gd.name AS godown_name, sa.code AS sauda_code FROM lots l LEFT JOIN items i ON i.id = l.item_id LEFT JOIN godowns gd ON gd.id = l.godown_id LEFT JOIN saudas sa ON sa.id = l.sauda_id WHERE l.mill_id = ? AND l.qty_kg > 0 AND l.item_id IS NOT NULL AND COALESCE(l.disposition,'STOCK') = 'STOCK' ORDER BY l.in_date DESC, l.code DESC LIMIT 1000`).bind(mill.id),
     c.env.DB.prepare(`SELECT * FROM godowns WHERE mill_id = ? AND active = 1 ORDER BY name`).bind(mill.id),
     c.env.DB.prepare(`SELECT id, name, base_unit, display_unit, package_unit, package_quantity_base FROM items WHERE mill_id = ? AND deleted_at IS NULL ORDER BY category, name`).bind(mill.id),
   ]);
-  return c.json(applyFinancePolicy(user, { process_type: processType, template_lines: lines.results, lots: lots.results, godowns: godowns.results, items: items.results }));
+  const lots = stockLots.results as StockLotRow[];
+  return c.json(applyFinancePolicy(user, {
+    process_type: processType,
+    template_lines: lines.results,
+    lots,
+    stock_groups: groupStockLots(lots),
+    godowns: godowns.results,
+    items: items.results,
+  }));
 });
 
 api.delete('/process-types/:id', async (c) => {
@@ -1610,6 +1656,37 @@ api.get('/godowns/:id', async (c) => {
     stock_by_item: stockByItemRes.results,
     receipts: receiptsRes.results,
   }));
+});
+
+api.get('/stock-ledger', async (c) => {
+  const denied = denyUnlessCapability(c, 'stock:view'); if (denied) return denied;
+  const { mill } = c.get('session');
+  const offset = Math.max(0, Math.floor(Number(c.req.query('offset')) || 0));
+  const itemId = c.req.query('item_id') || '';
+  const rows = await c.env.DB.prepare(`
+    WITH ledger AS (
+      SELECT sm.*,
+        SUM(CASE WHEN sm.status != 'POSTED' THEN 0 WHEN sm.direction = 'OUT' THEN -sm.quantity_base ELSE sm.quantity_base END)
+          OVER (PARTITION BY sm.item_id, sm.base_unit ORDER BY sm.movement_date, sm.created_at, sm.id) AS balance_base
+      FROM stock_movements sm WHERE sm.mill_id = ?
+    )
+    SELECT sm.id, sm.movement_date, sm.direction, sm.quantity_base, sm.base_unit, sm.status,
+           sm.source_type, sm.source_id, sm.balance_base, i.name AS item_name, gd.name AS godown_name,
+           l.code AS lot_code, sa.code AS sauda_code, ge.token_no,
+           COALESCE(cr.code, pt.name, sm.source_type) AS source_label
+    FROM ledger sm
+    LEFT JOIN items i ON i.id = sm.item_id AND i.mill_id = sm.mill_id
+    LEFT JOIN godowns gd ON gd.id = sm.godown_id AND gd.mill_id = sm.mill_id
+    LEFT JOIN lots l ON l.id = sm.lot_id AND l.mill_id = sm.mill_id
+    LEFT JOIN gate_entries ge ON ge.id = COALESCE(l.gate_entry_id, CASE WHEN sm.source_type = 'GATE' THEN sm.source_id END) AND ge.mill_id = sm.mill_id
+    LEFT JOIN saudas sa ON sa.id = COALESCE(l.sauda_id, ge.sauda_id) AND sa.mill_id = sm.mill_id
+    LEFT JOIN process_runs pr ON sm.source_type = 'PROCESS_RUN' AND pr.id = sm.source_id AND pr.mill_id = sm.mill_id
+    LEFT JOIN processing_chain_runs cr ON cr.id = pr.chain_run_id AND cr.mill_id = sm.mill_id
+    LEFT JOIN process_types pt ON pt.id = pr.process_type_id AND pt.mill_id = sm.mill_id
+    WHERE (? = '' OR sm.item_id = ?)
+    ORDER BY sm.movement_date DESC, sm.created_at DESC, sm.id DESC LIMIT 51 OFFSET ?
+  `).bind(mill.id, itemId, itemId, offset).all();
+  return c.json({ movements: rows.results.slice(0, 50), has_more: rows.results.length > 50 });
 });
 
 api.post('/stock-movements', async (c) => {
@@ -1764,7 +1841,7 @@ api.post('/process-runs/:id/void', async (c) => {
   ];
   for (const line of lines.results) {
     if (!line.lot_id) continue;
-    if (line.line_type === 'INPUT') statements.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg + ? WHERE id = ? AND mill_id = ?`).bind(Math.round(line.quantity_base), line.lot_id, mill.id));
+    if (line.line_type === 'INPUT') statements.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg + ?, consumed_qty_kg = MAX(0, consumed_qty_kg - ?), allocation_status = CASE WHEN consumed_qty_kg - ? > 0 THEN 'partially_available' ELSE 'available' END WHERE id = ? AND mill_id = ?`).bind(Math.round(line.quantity_base), Math.round(line.quantity_base), Math.round(line.quantity_base), line.lot_id, mill.id));
     if (line.line_type === 'OUTPUT') statements.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = 0 WHERE id = ? AND mill_id = ?`).bind(line.lot_id, mill.id));
   }
   await c.env.DB.batch(statements);
@@ -1907,7 +1984,7 @@ api.post('/chain-runs', async (c) => {
   const steps = await c.env.DB.prepare(`SELECT id FROM processing_chain_steps WHERE chain_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(chainId, mill.id).first<{ id: string }>();
   if (!steps) return c.json({ error: 'chain has no steps defined' }, 400);
   const unit = String(b.unit ?? 'QUINTAL').trim().toUpperCase();
-  const plannedQty = Number(b.planned_input ?? b.planned_input_qty ?? 100);
+  const plannedQty = Number(b.planned_input ?? b.planned_input_qty ?? 0);
   const plannedInputBase = roundClassicQty(plannedQty * (UNIT_TO_KG[unit] ?? 100));
   const id = uuid();
   const code = await nextCode(c.env.DB, mill.id, 'chain_run', 'CHN');
@@ -1987,9 +2064,23 @@ api.patch('/chain-runs/:id', async (c) => {
     const plannedQty = Number(b.planned_input ?? b.planned_input_qty);
     plannedInputBase = roundClassicQty(plannedQty * (UNIT_TO_KG[unit] ?? 100));
   }
+  if (!Number.isSafeInteger(plannedInputBase) || plannedInputBase < 0) return c.json({ error: 'Input must be a non-negative whole kilogram quantity.' }, 400);
+  let allocationsJson = String(run.input_allocations_json ?? '[]');
+  if (b.input_allocations !== undefined) {
+    if (!Array.isArray(b.input_allocations)) return c.json({ error: 'Invalid input allocations.' }, 400);
+    const allocations = b.input_allocations.map((entry: Record<string, unknown>) => ({ lot_id: String(entry.lot_id ?? ''), quantity_base: Number(entry.quantity_base) }));
+    if (allocations.length || plannedInputBase > 0) {
+      const first = await c.env.DB.prepare(`SELECT process_type_id FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(id, mill.id).first<{ process_type_id: string }>();
+      const inputs = await c.env.DB.prepare(`SELECT item_id FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND line_type = 'INPUT' AND active = 1`).bind(first?.process_type_id ?? '', mill.id).all<{ item_id: string }>();
+      const lots = await loadProcessingStockLots(c.env.DB, mill.id);
+      const check = validateInputAllocations({ allocations, requiredTotalBase: plannedInputBase, lotsById: new Map(lots.map((lot) => [lot.id, lot])), allowedItemIds: new Set(inputs.results.map((line) => line.item_id).filter(Boolean)) });
+      if (!check.ok) return c.json({ error: check.error }, 400);
+    }
+    allocationsJson = JSON.stringify(allocations);
+  }
   await c.env.DB.prepare(
-    `UPDATE processing_chain_runs SET unit = ?, planned_input_base = ?, notes = COALESCE(?, notes) WHERE id = ? AND mill_id = ?`,
-  ).bind(unit, plannedInputBase, b.notes != null ? String(b.notes).trim() || null : null, id, mill.id).run();
+    `UPDATE processing_chain_runs SET unit = ?, planned_input_base = ?, notes = COALESCE(?, notes), input_allocations_json = ? WHERE id = ? AND mill_id = ? AND status = 'DRAFT'`,
+  ).bind(unit, plannedInputBase, b.notes != null ? String(b.notes).trim() || null : null, allocationsJson, id, mill.id).run();
   if (b.planned_input != null || b.planned_input_qty != null) {
     await recomputeDraftForecasts(c.env.DB, mill.id, id, plannedInputBase, uuid);
   }
@@ -2040,6 +2131,10 @@ api.post('/chain-runs/:id/start', async (c) => {
   const run = await c.env.DB.prepare(`SELECT * FROM processing_chain_runs WHERE id = ? AND mill_id = ?`).bind(id, mill.id).first<Record<string, unknown>>();
   if (!run) return c.json({ error: 'chain run not found' }, 404);
   if (run.status !== 'DRAFT') return c.json({ error: 'only draft runs can be started' }, 409);
+  const savedAllocations = JSON.parse(String(run.input_allocations_json ?? '[]')) as { lot_id: string; quantity_base: number }[];
+  const sourceLots = await loadProcessingStockLots(c.env.DB, mill.id);
+  const inputCheck = validateInputAllocations({ allocations: savedAllocations, requiredTotalBase: Number(run.planned_input_base), lotsById: new Map(sourceLots.map((lot) => [lot.id, lot])) });
+  if (!inputCheck.ok) return c.json({ error: inputCheck.error }, 400);
   const firstStep = await c.env.DB.prepare(`SELECT id FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(id, mill.id).first<{ id: string }>();
   if (!firstStep) return c.json({ error: 'run has no steps' }, 400);
   const now = new Date().toISOString();
@@ -2057,6 +2152,8 @@ api.get('/chain-runs/:id/available-inputs', async (c) => {
   const { mill } = c.get('session');
   const chainRunId = c.req.param('id');
   const stepId = c.req.query('step_id');
+  const itemFilter = c.req.query('item_id');
+  const godownFilter = c.req.query('godown_id');
   if (!stepId) return c.json({ error: 'step_id is required' }, 400);
   const runStep = await c.env.DB.prepare(`SELECT * FROM processing_chain_run_steps WHERE id = ? AND chain_run_id = ? AND mill_id = ?`).bind(stepId, chainRunId, mill.id).first<Record<string, unknown>>();
   if (!runStep) return c.json({ error: 'run step not found' }, 404);
@@ -2065,24 +2162,39 @@ api.get('/chain-runs/:id/available-inputs', async (c) => {
   ).bind(runStep.process_type_id, mill.id).all<{ item_id: string | null }>();
   const allowedItemIds = new Set(inputLines.results.map((l) => l.item_id).filter(Boolean) as string[]);
   const permissive = allowedItemIds.size === 0;
-  const lots = await c.env.DB.prepare(
-    `SELECT l.id, l.code, l.item_id, l.qty_kg, l.godown_id, l.disposition, i.name AS item_name, g.name AS godown_name
-     FROM lots l LEFT JOIN items i ON i.id = l.item_id LEFT JOIN godowns g ON g.id = l.godown_id
-     WHERE l.mill_id = ? AND l.qty_kg > 0 ORDER BY l.in_date DESC LIMIT 1000`,
-  ).bind(mill.id).all<Record<string, unknown>>();
-  const eligible: Record<string, unknown>[] = [];
-  const forReuse: Record<string, unknown>[] = [];
-  const ineligible: { lot: Record<string, unknown>; reason: string }[] = [];
-  for (const lot of lots.results) {
-    const itemId = String(lot.item_id ?? '');
-    const disposition = String(lot.disposition ?? 'STOCK');
-    const isAllowed = permissive || allowedItemIds.has(itemId);
-    const entry = { ...lot, eligible: isAllowed, for_reuse: disposition === 'FOR_REUSE' };
-    if (!isAllowed) ineligible.push({ lot: entry, reason: 'This item is not accepted by this process' });
-    else if (disposition === 'FOR_REUSE') forReuse.push(entry);
-    else eligible.push(entry);
+  const stockLots = await loadProcessingStockLots(c.env.DB, mill.id, {
+    itemId: itemFilter || undefined,
+    godownId: godownFilter || undefined,
+  });
+  const eligibleLots: StockLotRow[] = [];
+  const forReuseLots: StockLotRow[] = [];
+  const ineligible: { lot: StockLotRow; reason: string }[] = [];
+  let previousLotIds: Set<string> | null = null;
+  if (Number(runStep.step_number) > 1) {
+    const previous = await c.env.DB.prepare(`SELECT pl.lot_id FROM process_run_lines pl
+      JOIN processing_chain_run_steps previous ON previous.process_run_id = pl.run_id AND previous.mill_id = pl.mill_id
+      WHERE previous.chain_run_id = ? AND previous.mill_id = ? AND previous.step_number = ? AND pl.line_type = 'OUTPUT' AND pl.lot_id IS NOT NULL`)
+      .bind(chainRunId, mill.id, Number(runStep.step_number) - 1).all<{ lot_id: string }>();
+    previousLotIds = new Set(previous.results.map((line) => line.lot_id));
   }
-  return c.json({ eligible, for_reuse: forReuse, ineligible, permissive });
+  for (const lot of stockLots) {
+    if (previousLotIds && !previousLotIds.has(lot.id)) continue;
+    const disposition = String(lot.disposition ?? 'STOCK');
+    const isAllowed = permissive || allowedItemIds.has(lot.item_id);
+    if (!isAllowed) ineligible.push({ lot, reason: 'This item is not accepted by this process' });
+    else if (disposition === 'FOR_REUSE') forReuseLots.push(lot);
+    else eligibleLots.push(lot);
+  }
+  const groups = groupStockLots(eligibleLots);
+  const reuseGroups = groupStockLots(forReuseLots);
+  return c.json({
+    groups,
+    reuse_groups: reuseGroups,
+    eligible: eligibleLots,
+    for_reuse: forReuseLots,
+    ineligible,
+    permissive,
+  });
 });
 
 api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
@@ -2098,22 +2210,58 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
   if (runStep.status !== 'ACTIVE') return c.json({ error: 'only the active step accepts actuals' }, 409);
   const stepLines = await c.env.DB.prepare(`SELECT * FROM processing_chain_run_step_lines WHERE run_step_id = ? AND mill_id = ?`).bind(runStepId, mill.id).all<Record<string, unknown>>();
   const actualLines = Array.isArray(b.lines) ? b.lines as Record<string, unknown>[] : [];
-  const inputLotId = String(b.input_lot_id ?? '');
   const unit = String(run.unit ?? 'QUINTAL');
   const unitFactor = UNIT_TO_KG[unit] ?? 100;
-  if (!inputLotId) return c.json({ error: 'Select an input lot from Available materials before posting this step.' }, 400);
-  const inputLot = await c.env.DB.prepare(`SELECT item_id FROM lots WHERE id = ? AND mill_id = ?`).bind(inputLotId, mill.id).first<{ item_id: string }>();
-  if (!inputLot) return c.json({ error: 'The selected input lot was not found. Pick another lot from Available materials.' }, 404);
+  const idempotencyKey = String(b.idempotency_key ?? `${chainRunId}:${runStepId}`).trim();
+  const inputAllocationsRaw = Array.isArray(b.input_allocations) ? b.input_allocations as Record<string, unknown>[] : [];
   const inputQtyDisplay = b.input_quantity != null
     ? Number(b.input_quantity)
     : Number(runStep.forecast_input_base) / unitFactor;
   if (!Number.isFinite(inputQtyDisplay) || inputQtyDisplay <= 0) {
     return c.json({ error: 'Input quantity must be greater than zero.' }, 400);
   }
-  const inputBase = inputQtyDisplay * unitFactor;
-  const processLines: Record<string, unknown>[] = [
-    { line_type: 'INPUT', semantic_type: 'input', item_id: inputLot.item_id, lot_id: inputLotId, quantity: inputQtyDisplay, unit },
-  ];
+  const inputBase = roundClassicQty(inputQtyDisplay * unitFactor);
+  if (!Number.isSafeInteger(inputBase)) return c.json({ error: 'Processing input must convert to whole kilograms.' }, 400);
+
+  const inputLines = await c.env.DB.prepare(
+    `SELECT item_id FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND line_type = 'INPUT' AND active = 1`,
+  ).bind(runStep.process_type_id, mill.id).all<{ item_id: string | null }>();
+  const allowedItemIds = new Set(inputLines.results.map((l) => l.item_id).filter(Boolean) as string[]);
+  const permissiveItems = allowedItemIds.size === 0;
+
+  const stockLots = await loadProcessingStockLots(c.env.DB, mill.id);
+  const lotsById = new Map(stockLots.map((lot) => [lot.id, lot]));
+
+  let inputAllocations = inputAllocationsRaw.map((entry) => ({
+    lot_id: String(entry.lot_id ?? ''),
+    quantity_base: Number(entry.quantity_base ?? entry.quantity ?? 0) * (entry.quantity_base != null ? 1 : (UNIT_TO_KG[String(entry.unit ?? unit)] ?? unitFactor)),
+  }));
+  if (!inputAllocations.length) {
+    const inputLotId = String(b.input_lot_id ?? '');
+    if (!inputLotId) return c.json({ error: 'Select stock lots from Stocks & Lots before posting this step.' }, 400);
+    inputAllocations = [{ lot_id: inputLotId, quantity_base: inputBase }];
+  }
+
+  const allocationCheck = validateInputAllocations({
+    allocations: inputAllocations,
+    requiredTotalBase: inputBase,
+    lotsById,
+    allowedItemIds,
+    permissiveItems,
+  });
+  if (!allocationCheck.ok) return c.json({ error: allocationCheck.error }, 400);
+
+  const processLines: Record<string, unknown>[] = inputAllocations.map((entry) => {
+    const lot = lotsById.get(entry.lot_id)!;
+    return {
+      line_type: 'INPUT',
+      semantic_type: 'input',
+      item_id: lot.item_id,
+      lot_id: entry.lot_id,
+      quantity: entry.quantity_base / unitFactor,
+      unit,
+    };
+  });
   let mainBase = 0;
   let byproductBase = 0;
   for (const stepLine of stepLines.results) {
@@ -2176,12 +2324,13 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
     runDate: String(b.run_date ?? istToday()),
     shift: String(b.shift ?? '') || null,
     operatorId: String(b.operator_id ?? user.id),
-    sourceLotId: inputLotId || null,
+    sourceLotId: inputAllocations.length === 1 ? inputAllocations[0].lot_id : null,
     destinationGodownId: String(b.destination_godown_id ?? '') || null,
     notes: String(b.notes ?? '') || null,
     chainRunId,
     chainStepId: runStep.source_chain_step_id ? String(runStep.source_chain_step_id) : null,
     chainRunStepId: runStepId,
+    idempotencyKey,
     lines: processLines,
     lotNote: `Created by chain run ${run.code} step ${stepNumber}`,
   }, {
@@ -2225,6 +2374,7 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
     ).bind(lossBase, lossLine.id, mill.id));
   }
   const isFirstStep = stepNumber === 1;
+  if (isFirstStep) updateStatements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET input_allocations_json = ? WHERE id = ? AND mill_id = ?`).bind(JSON.stringify(inputAllocations), chainRunId, mill.id));
   if (isFirstStep) {
     updateStatements.push(c.env.DB.prepare(
       `UPDATE processing_chain_runs SET total_input_base = total_input_base + ?, total_output_base = ?, total_loss_base = total_loss_base + ?, total_byproduct_base = total_byproduct_base + ? WHERE id = ? AND mill_id = ?`,
@@ -2238,6 +2388,11 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
     `SELECT id FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? AND step_number = ?`,
   ).bind(chainRunId, mill.id, stepNumber + 1).first<{ id: string }>();
   if (nextStep) {
+    // Actual output, including a partial first input, becomes the next step's input.
+    updateStatements.push(c.env.DB.prepare(`UPDATE processing_chain_run_steps SET forecast_input_base = ?,
+      forecast_main_base = ROUND(? * COALESCE((SELECT expected_pct FROM processing_chain_run_step_lines WHERE run_step_id = ? AND mill_id = ? AND kind = 'main' LIMIT 1), 100) / 100)
+      WHERE id = ? AND mill_id = ?`).bind(result.stepOutputTotal, result.stepOutputTotal, nextStep.id, mill.id, nextStep.id, mill.id));
+    updateStatements.push(c.env.DB.prepare(`UPDATE processing_chain_run_step_lines SET forecast_base = ROUND(? * COALESCE(expected_pct, 0) / 100) WHERE run_step_id = ? AND mill_id = ?`).bind(result.stepOutputTotal, nextStep.id, mill.id));
     updateStatements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET current_run_step_id = ? WHERE id = ? AND mill_id = ?`).bind(nextStep.id, chainRunId, mill.id));
     updateStatements.push(c.env.DB.prepare(`UPDATE processing_chain_run_steps SET status = 'ACTIVE' WHERE id = ? AND mill_id = ?`).bind(nextStep.id, mill.id));
   } else {
@@ -2522,7 +2677,7 @@ api.post('/chain-runs/:id/void', async (c) => {
     ];
     for (const line of lines.results) {
       if (!line.lot_id) continue;
-      if (line.line_type === 'INPUT') stmts.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg + ? WHERE id = ? AND mill_id = ?`).bind(Math.round(line.quantity_base), line.lot_id, mill.id));
+      if (line.line_type === 'INPUT') stmts.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg + ?, consumed_qty_kg = MAX(0, consumed_qty_kg - ?), allocation_status = CASE WHEN consumed_qty_kg - ? > 0 THEN 'partially_available' ELSE 'available' END WHERE id = ? AND mill_id = ?`).bind(Math.round(line.quantity_base), Math.round(line.quantity_base), Math.round(line.quantity_base), line.lot_id, mill.id));
       if (line.line_type === 'OUTPUT') stmts.push(c.env.DB.prepare(`UPDATE lots SET qty_kg = 0 WHERE id = ? AND mill_id = ?`).bind(line.lot_id, mill.id));
     }
     await c.env.DB.batch(stmts);

@@ -187,6 +187,7 @@ export type PostProcessRunInput = {
   chainRunId?: string | null;
   chainStepId?: string | null;
   chainRunStepId?: string | null;
+  idempotencyKey?: string | null;
   lines: Record<string, unknown>[];
   lotNote?: string;
 };
@@ -237,6 +238,12 @@ export async function postProcessRunLines(
   const inputLines = lines.filter((entry) => entry.line_type === 'INPUT');
   if (sourceLotId && inputLines.length !== 1) return { ok: false, status: 400, error: 'source_lot_id requires exactly one input line' };
   if (sourceLotId && !inputLines[0].lot_id) inputLines[0].lot_id = sourceLotId;
+  if (input.idempotencyKey && input.chainRunStepId) {
+    const duplicate = await db.prepare(
+      `SELECT id FROM process_runs WHERE mill_id = ? AND chain_run_step_id = ? AND status = 'POSTED' LIMIT 1`,
+    ).bind(millId, input.chainRunStepId).first();
+    if (duplicate) return { ok: false, status: 409, error: 'this processing step was already posted' };
+  }
   if (deps.validatePreviousStepLots) {
     const inputLotIds = inputLines.map((line) => String(line.lot_id ?? '')).filter(Boolean);
     const chainError = await deps.validatePreviousStepLots(inputLotIds);
@@ -270,7 +277,9 @@ export async function postProcessRunLines(
     const available = await db.prepare(`SELECT COALESCE(SUM(CASE WHEN direction = 'IN' THEN quantity_base WHEN direction = 'OUT' THEN -quantity_base ELSE quantity_base END),0) AS quantity FROM stock_movements WHERE mill_id = ? AND item_id = ? AND status = 'POSTED'`).bind(millId, line.item_id).first<{ quantity: number }>();
     if ((available?.quantity || 0) < q.base) return { ok: false, status: 400, error: `insufficient posted stock for item ${line.item_id}` };
     if (line.lot_id) {
-      const lot = await db.prepare(`SELECT id, item_id, qty_kg, godown_id FROM lots WHERE id = ? AND mill_id = ?`).bind(line.lot_id, millId).first<{ id: string; item_id: string | null; qty_kg: number; godown_id: string | null }>();
+      const lot = await db.prepare(
+        `SELECT id, item_id, qty_kg, godown_id, sauda_id, gate_entry_id FROM lots WHERE id = ? AND mill_id = ?`,
+      ).bind(line.lot_id, millId).first<{ id: string; item_id: string | null; qty_kg: number; godown_id: string | null; sauda_id: string | null; gate_entry_id: string | null }>();
       if (!lot || lot.item_id !== line.item_id || lot.qty_kg < q.base) return { ok: false, status: 400, error: `insufficient quantity in source lot ${line.lot_id}` };
       inputLotGodowns.set(String(line.lot_id), lot.godown_id);
     }
@@ -302,17 +311,36 @@ export async function postProcessRunLines(
     const line = prepared.line;
     const q = prepared.q;
     if (prepared.lotCode) {
-      statements.push(db.prepare(`INSERT INTO lots (id, mill_id, code, godown_id, item_id, qty_kg, in_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(prepared.lotId, millId, prepared.lotCode, prepared.godownId, line.item_id, Math.round(q.base), input.runDate, lotNote));
+      statements.push(db.prepare(`INSERT INTO lots (id, mill_id, code, godown_id, item_id, qty_kg, received_qty_kg, in_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(prepared.lotId, millId, prepared.lotCode, prepared.godownId, line.item_id, Math.round(q.base), Math.round(q.base), input.runDate, lotNote));
     }
     if (line.line_type === 'INPUT' && prepared.lotId) {
-      statements.push(db.prepare(`UPDATE lots SET qty_kg = qty_kg - ? WHERE id = ? AND mill_id = ? AND qty_kg >= ?`).bind(Math.round(q.base), prepared.lotId, millId, Math.round(q.base)));
+      const roundedBase = Math.round(q.base);
+      statements.push(db.prepare(
+        `UPDATE lots SET qty_kg = qty_kg - ?, consumed_qty_kg = COALESCE(consumed_qty_kg, 0) + ?,
+         allocation_status = CASE WHEN qty_kg - ? <= 0 THEN 'consumed' ELSE 'partially_available' END
+         WHERE id = ? AND mill_id = ?`,
+      ).bind(roundedBase, roundedBase, roundedBase, prepared.lotId, millId));
+      if (input.chainRunStepId) {
+        const lotMeta = await db.prepare(
+          `SELECT sauda_id, gate_entry_id, godown_id FROM lots WHERE id = ? AND mill_id = ?`,
+        ).bind(prepared.lotId, millId).first<{ sauda_id: string | null; gate_entry_id: string | null; godown_id: string | null }>();
+        statements.push(db.prepare(
+          `INSERT INTO processing_input_consumptions
+           (id, mill_id, chain_run_id, chain_run_step_id, process_run_id, lot_id, sauda_id, gate_entry_id, item_id, godown_id, quantity_base, idempotency_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(
+          deps.uuid(), millId, input.chainRunId ?? null, input.chainRunStepId, runId, prepared.lotId,
+          lotMeta?.sauda_id ?? null, lotMeta?.gate_entry_id ?? null, line.item_id, lotMeta?.godown_id ?? prepared.godownId,
+          roundedBase, input.idempotencyKey ? `${input.idempotencyKey}:${prepared.lotId}` : null,
+        ));
+      }
     }
     statements.push(db.prepare(`INSERT INTO process_run_lines (id, mill_id, run_id, line_type, item_id, lot_id, quantity, unit, quantity_base, base_unit, godown_id, semantic_type, template_line_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(deps.uuid(), millId, runId, line.line_type, line.item_id, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, prepared.godownId, String(line.semantic_type ?? (line.line_type === 'INPUT' ? 'input' : line.line_type === 'LOSS' ? 'waste' : 'main')), String(line.template_line_id ?? '') || null));
     if (line.line_type !== 'LOSS') {
-      statements.push(db.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESS_RUN', ?, ?)`)
-        .bind(deps.uuid(), millId, line.line_type === 'OUTPUT' ? 'IN' : 'OUT', line.item_id, prepared.godownId, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, runId, userId));
+      statements.push(db.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by, movement_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESS_RUN', ?, ?, ?)`)
+        .bind(deps.uuid(), millId, line.line_type === 'OUTPUT' ? 'IN' : 'OUT', line.item_id, prepared.godownId, prepared.lotId, q.quantity, q.unit, q.base, q.baseUnit, runId, userId, input.runDate));
     }
     if (line.line_type === 'INPUT') stepInputTotal += q.base;
     else if (line.line_type === 'OUTPUT') {
@@ -320,7 +348,15 @@ export async function postProcessRunLines(
       else stepOutputTotal += q.base;
     } else if (line.line_type === 'LOSS') stepLossTotal += q.base;
   }
-  await db.batch(statements);
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/insufficient quantity|UNIQUE constraint failed/i.test(message)) {
+      return { ok: false, status: 409, error: 'Stock changed or this step was already posted. Refresh the run before trying again.' };
+    }
+    throw error;
+  }
   return { ok: true, runId, preparedLines, stepInputTotal, stepOutputTotal, stepLossTotal, stepByproductTotal };
 }
 
@@ -420,6 +456,7 @@ export async function loadChainRunDetail(db: D1Database, millId: string, chainRu
 
   return {
     chain_run: run,
+    input_allocations: JSON.parse(String(run.input_allocations_json ?? '[]')),
     run_steps: runSteps.results.map((step) => ({
       ...step,
       lines: linesByStep.get(String(step.id)) || [],

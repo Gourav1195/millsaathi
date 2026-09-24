@@ -71,7 +71,24 @@ type Sauda = {
   commission_paise?: number | null;
 };
 type Reference = { id: string; name: string };
-type Overview = { saudas: Sauda[]; suppliers: Reference[]; buyers: Reference[]; items: Reference[]; godowns: Reference[] };
+type Overview = {
+  saudas: Sauda[];
+  suppliers: Reference[];
+  buyers: Reference[];
+  items: Reference[];
+  godowns: Reference[];
+  gate?: GateEntry[];
+};
+type GateEntry = {
+  id: string;
+  sauda_id?: string | null;
+  token_no?: string;
+  vehicle_no?: string;
+  net_kg?: number;
+  status?: string;
+  stock_status?: string;
+  entry_date?: string;
+};
 type Delivery = { id: string; actual_date?: string; actual_qty_base?: number; actual_qty?: number; actual_unit?: string; status?: string; gate_entry_id?: string | null; lot_code?: string | null; notes?: string | null };
 type AgreementForm = { direction: 'in' | 'out'; party_id: string; item_id: string; quantity: string; unit: string; rate: string; agreement_date: string; delivery_start: string; delivery_end: string; tolerance: string; broker: string; note: string };
 
@@ -109,6 +126,7 @@ export function PurchaseApp() {
   const [saving, setSaving] = useState(false);
   const [statusEdit, setStatusEdit] = useState<Sauda | null>(null);
   const [statusValue, setStatusValue] = useState('open');
+  const [expandedSaudaId, setExpandedSaudaId] = useState<string | null>(null);
   const statusDialogRef = useRef<HTMLDialogElement>(null);
   const tableEdit = useTableEditMode();
 
@@ -118,6 +136,16 @@ export function PurchaseApp() {
   }, [session]);
 
   const saudas = overview?.saudas ?? [];
+  const gateEntries = overview?.gate ?? [];
+
+  const trucksBySauda = useMemo(() => {
+    const map = new Map<string, GateEntry[]>();
+    for (const entry of gateEntries) {
+      if (!entry.sauda_id) continue;
+      map.set(entry.sauda_id, [...(map.get(entry.sauda_id) ?? []), entry]);
+    }
+    return map;
+  }, [gateEntries]);
 
   const filteredSaudas = useMemo(
     () => filterRows(saudas, query, filters, {
@@ -495,43 +523,65 @@ export function PurchaseApp() {
           />
 
           <DataTable columns={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive })}>
-            {pageData.rows.length ? pageData.rows.map((sauda) => (
-              <tr key={sauda.id} className={sauda.direction === 'out' ? 'sauda-row--sale' : 'sauda-row--purchase'}>
-                {tableEdit.editMode && canArchive && (
-                  <TableArchiveCell
-                    label={saudaCode(sauda)}
-                    checked={!!tableEdit.selected[sauda.id]}
-                    onChange={(checked) => tableEdit.toggleSelected(sauda.id, checked)}
-                  />
-                )}
-                {tableEdit.editMode && canManage && (
-                  <TableEditCell label={saudaCode(sauda)} onClick={() => startStatusEdit(sauda)} />
-                )}
-                <td>
-                  <TableCellDetail
-                    title={`${saudaCode(sauda)} details`}
-                    rows={saudaDetailRows(sauda, showSaudaMoney)}
-                  >
-                    <strong>{saudaCode(sauda)}</strong>
-                  </TableCellDetail>
-                </td>
-                <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
-                <td>{sauda.direction === 'out' ? sauda.buyer_name ?? '—' : sauda.supplier_name ?? '—'}</td>
-                <td>{sauda.item_name ?? '—'}</td>
-                <td>{qtl(sauda.qty_kg)}</td>
-                <td>{qtl(sauda.fulfilled_qty_base)}</td>
-                <td><Badge tone="gold">{sauda.fulfilment_status ?? sauda.status ?? '—'}</Badge></td>
-                <td className="table-note-col"><TableClampedText text={sauda.note} /></td>
-                <td>
-                  <TableActions>
-                    <Button type="button" className="secondary" onClick={() => void openHistory(sauda)}>History</Button>
-                    {canCreate && (
-                      <Button type="button" className="secondary" onClick={() => setDeliveryFor(sauda)}>Delivery</Button>
-                    )}
-                  </TableActions>
-                </td>
-              </tr>
-            )) : (
+            {pageData.rows.length ? pageData.rows.flatMap((sauda) => {
+              const trucks = trucksBySauda.get(sauda.id) ?? [];
+              const expanded = expandedSaudaId === sauda.id;
+              const colSpan = withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive }).length;
+              return [
+                <tr key={sauda.id} className={sauda.direction === 'out' ? 'sauda-row--sale' : 'sauda-row--purchase'}>
+                  {tableEdit.editMode && canArchive && (
+                    <TableArchiveCell
+                      label={saudaCode(sauda)}
+                      checked={!!tableEdit.selected[sauda.id]}
+                      onChange={(checked) => tableEdit.toggleSelected(sauda.id, checked)}
+                    />
+                  )}
+                  {tableEdit.editMode && canManage && (
+                    <TableEditCell label={saudaCode(sauda)} onClick={() => startStatusEdit(sauda)} />
+                  )}
+                  <td>
+                    <TableCellDetail
+                      title={`${saudaCode(sauda)} details`}
+                      rows={saudaDetailRows(sauda, showSaudaMoney)}
+                    >
+                      <strong>{saudaCode(sauda)}</strong>
+                    </TableCellDetail>
+                  </td>
+                  <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
+                  <td>{sauda.direction === 'out' ? sauda.buyer_name ?? '—' : sauda.supplier_name ?? '—'}</td>
+                  <td>{sauda.item_name ?? '—'}</td>
+                  <td>{qtl(sauda.qty_kg)}</td>
+                  <td>{qtl(sauda.fulfilled_qty_base)}</td>
+                  <td><Badge tone="gold">{sauda.fulfilment_status ?? sauda.status ?? '—'}</Badge></td>
+                  <td className="table-note-col"><TableClampedText text={sauda.note} /></td>
+                  <td>
+                    <TableActions>
+                      {trucks.length ? (
+                        <Button type="button" className="secondary" onClick={() => setExpandedSaudaId(expanded ? null : sauda.id)}>
+                          {expanded ? 'Hide' : 'Show'} trucks ({trucks.length})
+                        </Button>
+                      ) : null}
+                      <Button type="button" className="secondary" onClick={() => void openHistory(sauda)}>History</Button>
+                      {canCreate && (
+                        <Button type="button" className="secondary" onClick={() => setDeliveryFor(sauda)}>Delivery</Button>
+                      )}
+                    </TableActions>
+                  </td>
+                </tr>,
+                ...(expanded ? trucks.map((truck) => (
+                  <tr key={`${sauda.id}-${truck.id}`} className="sauda-truck-row">
+                    <td colSpan={colSpan}>
+                      <strong>{truck.token_no ?? 'Truck'}</strong>
+                      {' · '}{truck.vehicle_no ?? '—'}
+                      {' · '}{qtl(truck.net_kg)}
+                      {' · '}{truck.status ?? '—'}
+                      {truck.stock_status ? <> · stock {truck.stock_status}</> : null}
+                      {truck.entry_date ? <small> · {truck.entry_date}</small> : null}
+                    </td>
+                  </tr>
+                )) : []),
+              ];
+            }) : (
               <tr>
                 <td colSpan={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive }).length}><EmptyState>No Saudās in this view.</EmptyState></td>
               </tr>
