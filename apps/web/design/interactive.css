@@ -178,26 +178,13 @@
   overflow: hidden;
 }
 
-.chain-library-panel {
+.chain-library > div {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
   min-height: 0;
-}
-
-.chain-library-scroll {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  height: 160px;
-  min-height: 0;
-  overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 2px;
-}
-
-.chain-library-scroll--tall {
-  height: 340px;
 }
 
 .chain-library-item {
@@ -427,8 +414,7 @@ button.chain-map-node,
 }
 
 .chain-library-divider {
-  flex-shrink: 0;
-  margin: 2px 0;
+  margin: 12px 0;
   border-top: 1px solid var(--line);
 }
 
@@ -674,7 +660,7 @@ button.chain-map-node,
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 0;
+  margin-top: 8px;
 }
 
 .chain-materials-ineligible {
@@ -798,13 +784,7 @@ button.chain-map-node,
   .chain-map-head { flex-direction: column; }
   .chain-map-controls { justify-content: flex-start; }
   .chain-map-layout { grid-template-columns: 1fr; }
-  .chain-library-scroll {
-    height: 140px;
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .chain-library-scroll--tall { height: 280px; }
+  .chain-library > div { flex-direction: row; overflow-x: auto; }
   .chain-library-item { flex: 0 0 auto; }
 }
 

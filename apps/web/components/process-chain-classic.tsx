@@ -58,28 +58,6 @@ function ClassicLibraryItem({ type }: { type: CatalogProcessType }) {
   );
 }
 
-function ChainLibraryPanel({
-  title,
-  hint,
-  tall,
-  children,
-}: {
-  title: string;
-  hint: string;
-  tall?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="chain-library-panel">
-      <strong>{title}</strong>
-      <span className="hint">{hint}</span>
-      <div className={`chain-library-scroll${tall ? ' chain-library-scroll--tall' : ''}`}>
-        {children}
-      </div>
-    </section>
-  );
-}
-
 function MaterialCard({
   lot,
   selected,
@@ -458,7 +436,7 @@ function ClassicChainMap({
     [stepAssignments],
   );
 
-  const planningMode = !editMode && !isRunning && !isReadOnly;
+  const planningMode = editMode && !isRunning && !isReadOnly;
 
   function lineQtyForStep(step: ChainRunStep, line: ChainRunStepLine) {
     if (planningMode && stepAssignments[step.id]) {
@@ -783,11 +761,11 @@ function ClassicChainMap({
         <div>
           <h3 className="chain-map-title">{chain.name}{run?.code ? ` · ${run.code}` : ''}</h3>
           <p className="muted">
-            {editMode && !isRunning && 'Edit mode — drag processes from the library to build or adjust the chain.'}
-            {planningMode && isDraft && 'Draft — assign materials to each step, then start the run.'}
+            {planningMode && 'Edit mode — assign materials to each step, drag processes from the library, then enter expected outputs.'}
+            {!editMode && isDraft && !isRunning && 'Draft — review the chain forecast, then use Edit chain to assign materials.'}
             {isRunning && 'Running — enter actuals for the active step.'}
             {isReadOnly && 'Completed run — read-only audit trail.'}
-            {planningMode && !run && 'Chain template preview. Assign materials to each step, then use Edit chain to adjust processes.'}
+            {!editMode && !run && !isRunning && 'Chain template preview. Use Edit chain to assign materials and adjust processes.'}
           </p>
         </div>
         <div className="chain-map-controls">
@@ -838,27 +816,39 @@ function ClassicChainMap({
       <div className="chain-map-layout">
         <aside className="chain-library">
           {editMode ? (
-            <ChainLibraryPanel title="Process library" hint="Drag a process to add it to this run." tall>
-              {libraryTypes.map((type) => <ClassicLibraryItem key={type.id} type={type} />)}
-            </ChainLibraryPanel>
-          ) : isRunning ? (
-            <ChainLibraryPanel
-              title="Available materials"
-              hint={`Lots eligible for ${selectedStep?.process_type_name ?? 'selected step'}.`}
-              tall
-            >
+            <>
+              <strong>Process library</strong>
+              <span className="hint">Drag a process to add it to this run.</span>
+              <div>{libraryTypes.map((type) => <ClassicLibraryItem key={type.id} type={type} />)}</div>
+              <div className="chain-library-divider" />
+              <strong>Available materials</strong>
+              <span className="hint">
+                Drag or click a lot for {selectedStep?.process_type_name ?? 'the selected step'}. Only accepted items can be assigned.
+              </span>
               {materials?.for_reuse.length ? (
                 <div className="chain-materials-section">
                   <small>For reuse</small>
                   {materials.for_reuse.map((lot) => (
-                    <MaterialCard key={lot.id} lot={lot} selected={selectedInputLotId === lot.id} onSelect={() => setSelectedInputLotId(lot.id)} />
+                    <MaterialCard
+                      key={lot.id}
+                      lot={lot}
+                      draggable
+                      selected={assignedLotIds.has(lot.id)}
+                      onSelect={() => selectedStep && assignMaterialToStep(selectedStep.id, lot.id)}
+                    />
                   ))}
                 </div>
               ) : null}
               <div className="chain-materials-section">
                 {materials?.eligible.length ? materials.eligible.map((lot) => (
-                  <MaterialCard key={lot.id} lot={lot} selected={selectedInputLotId === lot.id} onSelect={() => setSelectedInputLotId(lot.id)} />
-                )) : <p className="muted">No eligible lots.</p>}
+                  <MaterialCard
+                    key={lot.id}
+                    lot={lot}
+                    draggable
+                    selected={assignedLotIds.has(lot.id)}
+                    onSelect={() => selectedStep && assignMaterialToStep(selectedStep.id, lot.id)}
+                  />
+                )) : <p className="muted">No eligible lots for this step.</p>}
               </div>
               {materials?.ineligible.length ? (
                 <details className="chain-materials-ineligible">
@@ -868,51 +858,48 @@ function ClassicChainMap({
                   ))}
                 </details>
               ) : null}
-            </ChainLibraryPanel>
+            </>
           ) : (
             <>
-              <ChainLibraryPanel
-                title="Available materials"
-                hint={`Drag or click a lot for ${selectedStep?.process_type_name ?? 'the selected step'}. Only accepted items can be assigned.`}
-              >
-                {materials?.for_reuse.length ? (
-                  <div className="chain-materials-section">
-                    <small>For reuse</small>
-                    {materials.for_reuse.map((lot) => (
-                      <MaterialCard
-                        key={lot.id}
-                        lot={lot}
-                        draggable
-                        selected={assignedLotIds.has(lot.id)}
-                        onSelect={() => selectedStep && assignMaterialToStep(selectedStep.id, lot.id)}
-                      />
-                    ))}
-                  </div>
-                ) : null}
+              <strong>Available materials</strong>
+              <span className="hint">
+                {isRunning
+                  ? `Lots eligible for ${selectedStep?.process_type_name ?? 'selected step'}.`
+                  : `Lots for ${selectedStep?.process_type_name ?? 'the selected step'}. Use Edit chain to assign them to steps.`}
+              </span>
+              {materials?.for_reuse.length ? (
                 <div className="chain-materials-section">
-                  {materials?.eligible.length ? materials.eligible.map((lot) => (
+                  <small>For reuse</small>
+                  {materials.for_reuse.map((lot) => (
                     <MaterialCard
                       key={lot.id}
                       lot={lot}
-                      draggable
-                      selected={assignedLotIds.has(lot.id)}
-                      onSelect={() => selectedStep && assignMaterialToStep(selectedStep.id, lot.id)}
+                      readOnly={!isRunning}
+                      selected={isRunning ? selectedInputLotId === lot.id : assignedLotIds.has(lot.id)}
+                      onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
                     />
-                  )) : <p className="muted">No eligible lots for this step.</p>}
+                  ))}
                 </div>
-                {materials?.ineligible.length ? (
-                  <details className="chain-materials-ineligible">
-                    <summary>Not eligible here ({materials.ineligible.length})</summary>
-                    {materials.ineligible.map(({ lot, reason }) => (
-                      <p key={lot.id} className="muted"><strong>{lot.item_name}</strong> · {reason}</p>
-                    ))}
-                  </details>
-                ) : null}
-              </ChainLibraryPanel>
-              <div className="chain-library-divider" />
-              <ChainLibraryPanel title="Process library" hint="Use Edit chain to drag processes onto the run.">
-                {libraryTypes.map((type) => <ClassicLibraryItem key={type.id} type={type} />)}
-              </ChainLibraryPanel>
+              ) : null}
+              <div className="chain-materials-section">
+                {materials?.eligible.length ? materials.eligible.map((lot) => (
+                  <MaterialCard
+                    key={lot.id}
+                    lot={lot}
+                    readOnly={!isRunning}
+                    selected={isRunning ? selectedInputLotId === lot.id : assignedLotIds.has(lot.id)}
+                    onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
+                  />
+                )) : <p className="muted">{isRunning ? 'No eligible lots.' : 'No eligible lots for this step.'}</p>}
+              </div>
+              {materials?.ineligible.length ? (
+                <details className="chain-materials-ineligible">
+                  <summary>Not eligible here ({materials.ineligible.length})</summary>
+                  {materials.ineligible.map(({ lot, reason }) => (
+                    <p key={lot.id} className="muted"><strong>{lot.item_name}</strong> · {reason}</p>
+                  ))}
+                </details>
+              ) : null}
             </>
           )}
         </aside>
