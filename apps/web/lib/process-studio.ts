@@ -39,6 +39,7 @@ export type ProcessingChainRecord = {
   id: string;
   name: string;
   description?: string | null;
+  input_category?: string | null;
   steps: ProcessingChainStep[];
 };
 
@@ -123,6 +124,32 @@ export function cloneLayout(layout: StudioLayout): StudioLayout {
   };
 }
 
+const VALID_STUDIO_HANDLES = new Set(['left', 'right', 'top', 'bottom']);
+
+/** Older studio builds used split source/target handle ids per side. */
+const LEGACY_STUDIO_HANDLE_MAP: Record<string, string> = {
+  'top-target': 'top',
+  'top-source': 'top',
+  'bottom-target': 'bottom',
+  'bottom-source': 'bottom',
+};
+
+function sanitizeStudioHandleId(handleId?: string | null) {
+  if (!handleId) return undefined;
+  const mapped = LEGACY_STUDIO_HANDLE_MAP[handleId] ?? handleId;
+  return VALID_STUDIO_HANDLES.has(mapped) ? mapped : undefined;
+}
+
+export function sanitizeStudioEdge(edge: Edge): Edge {
+  const type = !edge.type || edge.type === 'smoothstep' ? 'studio' : edge.type;
+  return {
+    ...edge,
+    type,
+    sourceHandle: sanitizeStudioHandleId(edge.sourceHandle),
+    targetHandle: sanitizeStudioHandleId(edge.targetHandle),
+  };
+}
+
 /** Ensures every node sits on a unique grid cell when loading saved layouts. */
 export function normalizeLayout(layout: StudioLayout): StudioLayout {
   const nodes: Node<StudioNodeData>[] = [];
@@ -132,7 +159,12 @@ export function normalizeLayout(layout: StudioLayout): StudioLayout {
     nodes.push({ ...node, position });
   }
 
-  return { nodes, edges: layout.edges };
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = layout.edges
+    .map(sanitizeStudioEdge)
+    .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+
+  return { nodes, edges };
 }
 
 export function layoutStorageKey(chainId: string) {
@@ -146,7 +178,7 @@ export function readStoredLayout(chainId: string): StudioLayout | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StudioLayout;
     if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
-    return parsed;
+    return normalizeLayout(parsed);
   } catch {
     return null;
   }

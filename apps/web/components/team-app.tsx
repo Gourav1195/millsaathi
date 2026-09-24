@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -20,26 +20,48 @@ import {
   Tab,
   TabRow,
 } from './ui';
-import { TableEditCell, TableEditModeButton } from './table-edit-mode';
+import { TableEditModeButton } from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
-import { can } from '../lib/permissions';
-import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
+import { can, ROLE_LABELS, type Role } from '../lib/permissions';
+import { useTableEditMode } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
 type Member = { id: string; name: string; email: string; role?: string; role_code?: string; active?: number | boolean; preferred_unit?: string };
 type AccountForm = { name: string; email: string; role: string; password: string };
 
-const roles = ['admin', 'manager', 'accountant', 'gate_operator', 'production_operator', 'viewer'];
+const roles = ['admin', 'manager', 'accountant', 'gate_operator', 'production_operator', 'viewer'] as const;
 const emptyAccount = (): AccountForm => ({ name: '', email: '', role: 'viewer', password: '' });
 
-const TEAM_COLUMNS_BASE = [
+function roleLabel(role: string): string {
+  return ROLE_LABELS[role as Role] ?? role.replaceAll('_', ' ');
+}
+
+const TABLE_SELECT_PROPS = {
+  className: 'table-inline-field',
+  menuClassName: 'ui-dropdown-menu--table',
+  menuPlacement: 'inline',
+} as const;
+
+const TEAM_COLUMNS = [
   { id: 'member', label: 'Member' },
   { id: 'email', label: 'Email' },
   { id: 'role', label: 'Role' },
   { id: 'status', label: 'Status' },
   { id: 'unit', label: 'Preferred unit' },
 ];
+
+function memberRole(member: Member): string {
+  return member.role_code ?? member.role ?? 'viewer';
+}
+
+function memberActive(member: Member): boolean {
+  return !(member.active === false || member.active === 0);
+}
+
+function memberManageable(member: Member, sessionId: string, canManage: boolean): boolean {
+  return canManage && member.id !== sessionId && memberRole(member) !== 'owner';
+}
 
 export function TeamApp() {
   const { session, sessionError } = useSession();
@@ -50,9 +72,7 @@ export function TeamApp() {
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [managing, setManaging] = useState<Member | null>(null);
-  const [manageForm, setManageForm] = useState({ role: 'viewer', active: '1' });
-  const manageDialogRef = useRef<HTMLDialogElement>(null);
+  const [savingMemberId, setSavingMemberId] = useState<string | null>(null);
   const tableEdit = useTableEditMode();
 
   const load = async () => setMembers((await api<{ members: Member[] }>('/api/team')).members);
@@ -61,13 +81,6 @@ export function TeamApp() {
   }, [session]);
 
   const canManage = can(session, 'team:manage');
-
-  useEffect(() => {
-    const dialog = manageDialogRef.current;
-    if (!dialog) return;
-    if (managing && !dialog.open) dialog.showModal();
-    if (!managing && dialog.open) dialog.close();
-  }, [managing]);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -94,26 +107,17 @@ export function TeamApp() {
     }
   }
 
-  function startManage(member: Member) {
-    const role = member.role_code ?? member.role ?? 'viewer';
-    const active = !(member.active === false || member.active === 0);
-    setManaging(member);
-    setManageForm({ role, active: active ? '1' : '0' });
-  }
-
-  async function saveManage(event: FormEvent) {
-    event.preventDefault();
-    if (!managing) return;
-    setSaving(true);
+  async function updateMember(memberId: string, patch: { role?: string; active?: number }) {
+    setSavingMemberId(memberId);
     setError(null);
     try {
-      await api(`/api/team/${managing.id}`, json('PATCH', { role: manageForm.role, active: Number(manageForm.active) }));
-      setManaging(null);
+      await api(`/api/team/${memberId}`, json('PATCH', patch));
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not update team member');
+      await load();
     } finally {
-      setSaving(false);
+      setSavingMemberId(null);
     }
   }
 
@@ -148,16 +152,7 @@ export function TeamApp() {
           subtitle="Accounts, roles, and shareable invitations are enforced by the Worker."
           date={headerMeta.date}
           season={headerMeta.season}
-          actions={
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <TableEditModeButton
-                enabled={canManage}
-                editMode={tableEdit.editMode}
-                onToggle={tableEdit.toggleEditMode}
-              />
-              <AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>
-            </div>
-          }
+          actions={<AppLink href="/app/dashboard"><Button className="quiet">Dashboard</Button></AppLink>}
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
@@ -181,7 +176,7 @@ export function TeamApp() {
               </Field>
               <Field label="Role">
                 <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                  {roles.map((role) => <option key={role} value={role}>{role.replaceAll('_', ' ')}</option>)}
+                  {roles.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
                 </Select>
               </Field>
               {mode === 'account' && (
@@ -208,81 +203,74 @@ export function TeamApp() {
           </Panel>
         )}
 
-        <dialog
-          ref={manageDialogRef}
-          className="app-dialog"
-          onClose={() => {
-            if (!saving) setManaging(null);
-          }}
-          onCancel={(event) => {
-            event.preventDefault();
-            if (!saving) setManaging(null);
-          }}
+        <TableCard
+          className={tableEdit.editMode && canManage ? 'team-table-editing' : ''}
+          title="Team members"
+          subtitle={
+            tableEdit.editMode && canManage
+              ? 'Update role or access inline. Your account and the owner stay locked.'
+              : `${members.length} member${members.length === 1 ? '' : 's'}`
+          }
+          actions={canManage ? (
+            <TableEditModeButton
+              enabled={canManage}
+              editMode={tableEdit.editMode}
+              onToggle={tableEdit.toggleEditMode}
+            />
+          ) : undefined}
         >
-          {managing ? (
-            <>
-              <div className="app-dialog-head">
-                <div>
-                  <h2>Manage {managing.name}</h2>
-                  <p><strong>{managing.email}</strong></p>
-                </div>
-                <button
-                  type="button"
-                  className="app-dialog-close ms-focus-ring"
-                  aria-label="Close manage member dialog"
-                  onClick={() => setManaging(null)}
-                  disabled={saving}
-                >
-                  ×
-                </button>
-              </div>
-              <FormGrid className="ui-form-grid--compact" onSubmit={saveManage}>
-                <Field label="Role">
-                  <Select value={manageForm.role} onChange={(e) => setManageForm({ ...manageForm, role: e.target.value })}>
-                    {roles.map((item) => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}
-                  </Select>
-                </Field>
-                <Field label="Access">
-                  <Select value={manageForm.active} onChange={(e) => setManageForm({ ...manageForm, active: e.target.value })}>
-                    <option value="1">Active</option>
-                    <option value="0">Deactivate access</option>
-                  </Select>
-                </Field>
-                <FormActions>
-                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save access'}</Button>
-                  <Button className="secondary" type="button" onClick={() => setManaging(null)} disabled={saving}>Cancel</Button>
-                </FormActions>
-              </FormGrid>
-            </>
-          ) : null}
-        </dialog>
-
-        <TableCard title="Team members" subtitle={`${members.length} member${members.length === 1 ? '' : 's'}`}>
-          <DataTable columns={withEditModeColumns(TEAM_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage })}>
+          <DataTable columns={TEAM_COLUMNS}>
             {members.length ? members.map((member) => {
-              const active = !(member.active === false || member.active === 0);
-              const role = member.role_code ?? member.role ?? 'viewer';
-              const self = member.id === session.id;
-              const manageable = canManage && !self && role !== 'owner';
+              const active = memberActive(member);
+              const role = memberRole(member);
+              const manageable = memberManageable(member, session.id, canManage);
+              const editing = tableEdit.editMode && manageable;
+              const rowSaving = savingMemberId === member.id;
               return (
-                <tr key={member.id}>
-                  {tableEdit.editMode && canManage && (
-                    manageable
-                      ? <TableEditCell label={member.name} onClick={() => startManage(member)} />
-                      : <td className="table-edit-col" />
-                  )}
+                <tr key={member.id} className={rowSaving ? 'table-row-saving' : undefined}>
                   <td><strong>{member.name}</strong></td>
                   <td>{member.email}</td>
-                  <td>{role.replaceAll('_', ' ')}</td>
-                  <td>
-                    <Badge tone={active ? 'success' : 'danger'}>{active ? 'Active' : 'Inactive'}</Badge>
+                  <td className="table-inline-cell">
+                    {editing ? (
+                      <Select
+                        {...TABLE_SELECT_PROPS}
+                        aria-label={`Role for ${member.name}`}
+                        value={role}
+                        disabled={rowSaving}
+                        onChange={(event) => void updateMember(member.id, { role: event.target.value })}
+                      >
+                        {roles.map((item) => (
+                          <option key={item} value={item}>{roleLabel(item)}</option>
+                        ))}
+                      </Select>
+                    ) : (
+                      roleLabel(role)
+                    )}
+                  </td>
+                  <td className="table-inline-cell">
+                    {editing ? (
+                      <Select
+                        {...TABLE_SELECT_PROPS}
+                        aria-label={`Access for ${member.name}`}
+                        value={active ? '1' : '0'}
+                        disabled={rowSaving}
+                        onChange={(event) => void updateMember(member.id, { active: Number(event.target.value) })}
+                      >
+                        <option value="1">Active</option>
+                        <option value="0">Inactive</option>
+                      </Select>
+                    ) : (
+                      <Badge tone={active ? 'success' : 'danger'}>{active ? 'Active' : 'Inactive'}</Badge>
+                    )}
                   </td>
                   <td>{member.preferred_unit ?? '—'}</td>
                 </tr>
               );
             }) : (
               <tr>
-                <td colSpan={withEditModeColumns(TEAM_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage }).length}><EmptyState>No team members found.</EmptyState></td>
+                <td colSpan={TEAM_COLUMNS.length}>
+                  <EmptyState>No team members found.</EmptyState>
+                </td>
               </tr>
             )}
           </DataTable>

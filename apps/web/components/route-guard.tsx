@@ -13,6 +13,7 @@ const ROUTE_MODULES: Array<{ prefix: string; module: NavModule; label: string; f
   { prefix: '/app/parties', module: 'parties', label: 'Parties', fallback: '/app/dashboard' },
   { prefix: '/app/items', module: 'items', label: 'Items', fallback: '/app/dashboard' },
   { prefix: '/app/processing', module: 'processing', label: 'Processing', fallback: '/app/dashboard' },
+  { prefix: '/app/mill-intelligence', module: 'processing', label: 'Mill Intelligence (Beta)', fallback: '/app/dashboard' },
   { prefix: '/app/billing', module: 'billing', label: 'Billing', fallback: '/app/dashboard' },
   { prefix: '/app/team', module: 'team', label: 'Team', fallback: '/app/dashboard' },
   { prefix: '/app/documents', module: 'documents', label: 'Documents', fallback: '/app/dashboard' },

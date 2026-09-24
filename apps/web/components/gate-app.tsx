@@ -27,6 +27,16 @@ import { can } from '../lib/permissions';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
+import { fetchGunnyOverview, type GunnyOverview } from '../lib/mill-intelligence';
+import { GunnyBagsPanel } from './gunny-bags-panel';
+import {
+  formatVehicleNumber,
+  normalizeVehicleNumber,
+  sanitizeVehicleNumber,
+  VEHICLE_NUMBER_ERROR,
+  VEHICLE_NUMBER_MAX_LENGTH,
+  VEHICLE_NUMBER_PLACEHOLDER,
+} from '../../../shared/vehicle-number';
 
 type GateEntry = {
   id: string;
@@ -104,7 +114,9 @@ const GATE_COLUMNS_BASE = [
 export function GateApp() {
   const { session, sessionError } = useSession();
   const headerMeta = millHeaderMeta(session);
+  const [screen, setScreen] = useState<'weighbridge' | 'gunny'>('weighbridge');
   const [entries, setEntries] = useState<GateEntry[]>([]);
+  const [gunny, setGunny] = useState<GunnyOverview | null>(null);
   const [suppliers, setSuppliers] = useState<Reference[]>([]);
   const [buyers, setBuyers] = useState<Reference[]>([]);
   const [items, setItems] = useState<Reference[]>([]);
@@ -119,6 +131,7 @@ export function GateApp() {
 
   const canCreate = can(session, 'gate:create');
   const canEdit = can(session, 'gate:edit');
+  const canViewGunny = can(session, 'gate:view');
 
   const load = async () => {
     const body = await api<{ gate: GateEntry[]; suppliers: Reference[]; buyers: Reference[]; items: Reference[] }>('/api/overview');
@@ -128,9 +141,18 @@ export function GateApp() {
     setItems(body.items);
   };
 
+  const loadGunny = async () => {
+    setGunny(await fetchGunnyOverview());
+  };
+
   useEffect(() => {
-    if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load gate entries'));
-  }, [session]);
+    if (!session) return;
+    if (screen === 'weighbridge') {
+      void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load gate entries'));
+      return;
+    }
+    void loadGunny().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load gunny bag data'));
+  }, [session, screen]);
 
   useEffect(() => {
     const dialog = editDialogRef.current;
@@ -146,15 +168,20 @@ export function GateApp() {
     event.preventDefault();
     const gross = wholeKg(form.gross_kg);
     const tare = wholeKg(form.tare_kg);
-    if (!form.vehicle_no.trim() || !form.party_id || gross == null || tare == null || gross < tare) {
-      setError('Enter a vehicle, party, and whole-kilogram gross and tare weights (gross must be at least tare).');
+    const vehicleNo = normalizeVehicleNumber(form.vehicle_no);
+    if (!vehicleNo) {
+      setError(VEHICLE_NUMBER_ERROR);
+      return;
+    }
+    if (!form.party_id || gross == null || tare == null || gross < tare) {
+      setError('Select a party and enter whole-kilogram gross and tare weights (gross must be at least tare).');
       return;
     }
     setSaving(true);
     setError(null);
     try {
       const party = form.direction === 'in' ? { supplier_id: form.party_id } : { buyer_id: form.party_id };
-      const created = await api<{ id: string }>('/api/gate', json('POST', { direction: form.direction, vehicle_no: form.vehicle_no, item_id: form.item_id || undefined, ...party }));
+      const created = await api<{ id: string }>('/api/gate', json('POST', { direction: form.direction, vehicle_no: vehicleNo, item_id: form.item_id || undefined, ...party }));
       await api(`/api/gate/${created.id}`, json('PATCH', { gross_kg: gross, tare_kg: tare, status: 'weighed' }));
       setForm({ ...form, vehicle_no: '', party_id: '', item_id: '', gross_kg: '', tare_kg: '' });
       await load();
@@ -242,6 +269,26 @@ export function GateApp() {
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
 
+        <TabRow className="screen-section-tabs" aria-label="Gate workspace">
+          <Tab selected={screen === 'weighbridge'} onClick={() => setScreen('weighbridge')}>Weighbridge</Tab>
+          {canViewGunny ? <Tab selected={screen === 'gunny'} onClick={() => setScreen('gunny')}>Gunny bags</Tab> : null}
+        </TabRow>
+
+        {screen === 'gunny' && canViewGunny ? (
+          gunny ? (
+            <GunnyBagsPanel
+              data={gunny}
+              canCreate={canCreate}
+              onSaved={loadGunny}
+              compactIntro
+            />
+          ) : (
+            <p className="muted">Loading gunny bag data…</p>
+          )
+        ) : null}
+
+        {screen === 'weighbridge' ? (
+        <>
         {canCreate && (
           <Panel title="Add New gate entry">
             <FormGrid onSubmit={submit}>
@@ -252,7 +299,16 @@ export function GateApp() {
                 </Select>
               </Field>
               <Field label="Vehicle">
-                <Input required value={form.vehicle_no} onChange={(e) => setForm({ ...form, vehicle_no: e.target.value })} />
+                <Input
+                  required
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  maxLength={VEHICLE_NUMBER_MAX_LENGTH}
+                  placeholder={VEHICLE_NUMBER_PLACEHOLDER}
+                  value={form.vehicle_no}
+                  onChange={(e) => setForm({ ...form, vehicle_no: sanitizeVehicleNumber(e.target.value) })}
+                />
               </Field>
               <Field label="Party">
                 <Select required value={form.party_id} onChange={(e) => setForm({ ...form, party_id: e.target.value })}>
@@ -294,9 +350,9 @@ export function GateApp() {
             <>
               <div className="app-dialog-head">
                 <div>
-                  <h2>Update {editing.token_no ?? editing.vehicle_no ?? 'gate entry'}</h2>
+                  <h2>Update {editing.token_no ?? formatVehicleNumber(editing.vehicle_no) ?? 'gate entry'}</h2>
                   <p>
-                    <strong>{editing.vehicle_no ?? 'Vehicle'}</strong>
+                    <strong>{formatVehicleNumber(editing.vehicle_no)}</strong>
                     {editing.item_name ? ` · ${editing.item_name}` : ''}
                   </p>
                 </div>
@@ -368,10 +424,10 @@ export function GateApp() {
               <tr key={entry.id}>
                 {tableEdit.editMode && canEdit && (
                   entry.status !== 'done'
-                    ? <TableEditCell label={entry.vehicle_no ?? 'gate entry'} onClick={() => startEdit(entry)} />
+                    ? <TableEditCell label={formatVehicleNumber(entry.vehicle_no) ?? 'gate entry'} onClick={() => startEdit(entry)} />
                     : <td className="table-edit-col" />
                 )}
-                <td><strong>{entry.vehicle_no ?? '—'}</strong></td>
+                <td><strong>{formatVehicleNumber(entry.vehicle_no)}</strong></td>
                 <td>{entry.direction === 'in' ? 'Arriving' : 'Dispatching'}</td>
                 <td>{entry.direction === 'in' ? entry.supplier_name ?? '—' : entry.buyer_name ?? '—'}</td>
                 <td>{entry.item_name ?? '—'}</td>
@@ -385,6 +441,8 @@ export function GateApp() {
             )}
           </DataTable>
         </TableCard>
+        </>
+        ) : null}
       </section>
     </main>
   );

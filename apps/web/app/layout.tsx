@@ -37,11 +37,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       className={`${ibmPlexSans.variable} ${archivo.variable} ${notoDevanagari.variable}`}
       suppressHydrationWarning
     >
-      <head>
+      <body suppressHydrationWarning>
         <ThemeScript />
         <RegionScript />
-      </head>
-      <body suppressHydrationWarning>
         {children}
       </body>
     </html>

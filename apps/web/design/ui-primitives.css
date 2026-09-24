@@ -142,6 +142,80 @@
   background: var(--bg);
 }
 
+table.dashboard-table td.table-inline-cell {
+  min-width: 10.5rem;
+}
+
+.ui-dropdown.table-inline-field {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 9rem;
+  max-width: 14rem;
+}
+
+.ui-dropdown.table-inline-field.open {
+  z-index: var(--z-dropdown);
+}
+
+.ui-dropdown.table-inline-field .ui-dropdown-trigger {
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ui-dropdown-menu--inline {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  width: max(100%, 12.25rem);
+  min-width: 12.25rem;
+  max-height: 240px;
+  overflow: auto;
+  z-index: var(--z-dropdown);
+  animation: none;
+}
+
+.data-table-card.team-table-editing,
+.data-table-card.team-table-editing .dashboard-table-wrap {
+  overflow: visible;
+}
+
+table.dashboard-table tr:has(.ui-dropdown.open) {
+  position: relative;
+  z-index: var(--z-dropdown);
+}
+
+.ui-dropdown-menu--table {
+  padding: 5px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.ui-dropdown-menu--table .ui-dropdown-option {
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+.ui-dropdown-menu--table .ui-dropdown-option.highlighted {
+  background: var(--muted-bg);
+  color: var(--ink);
+}
+
+.ui-dropdown-menu--table .ui-dropdown-option.selected {
+  background: color-mix(in srgb, var(--gold) 16%, var(--surface));
+  color: var(--ink);
+}
+
+.ui-dropdown-menu--table .ui-dropdown-option.selected.highlighted {
+  background: color-mix(in srgb, var(--gold) 24%, var(--surface));
+}
+
 .ui-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

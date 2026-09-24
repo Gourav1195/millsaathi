@@ -2,31 +2,35 @@
 
 import { AppLink } from './app-link';
 import { usePathname } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { canAccessNav, type NavModule } from '../lib/permissions';
 import { useOperationalCounts } from '../lib/operational-counts';
 import type { Session } from '../lib/session';
 
-type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'parties' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest' | 'settings' | 'access';
-type NavigationItem =
-  | { label: string; href: string; icon: IconName; module: NavModule }
-  | { divider: true };
+type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'parties' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest' | 'settings';
+type NavigationLink = { label: string; href: string; icon: IconName; module: NavModule };
 
-const navigation: NavigationItem[] = [
-  { label: 'Dashboard', href: '/app/dashboard', icon: 'dashboard', module: 'dashboard' },
-  { label: 'Gate & Weighbridge', href: '/app/gate', icon: 'gate', module: 'gate' },
-  { label: 'Purchase & Saudas', href: '/app/purchase', icon: 'purchase', module: 'purchase' },
-  { label: 'Stock & Lots', href: '/app/stock', icon: 'stock', module: 'stock' },
-  { label: 'Parties', href: '/app/parties', icon: 'parties', module: 'parties' },
-  { label: 'Items', href: '/app/items', icon: 'items', module: 'items' },
-  { label: 'Processing', href: '/app', icon: 'processing', module: 'processing' },
-  { divider: true },
-  { label: 'Billing', href: '/app/billing', icon: 'billing', module: 'billing' },
-  { label: 'Team', href: '/app/team', icon: 'team', module: 'team' },
-  { label: 'Documents', href: '/app/documents', icon: 'documents', module: 'documents' },
-  { label: 'Night Digest', href: '/app/digest', icon: 'digest', module: 'digest' },
-  { divider: true },
+const navigationSections: NavigationLink[][] = [
+  [
+    { label: 'Dashboard', href: '/app/dashboard', icon: 'dashboard', module: 'dashboard' },
+    { label: 'Purchase & Saudas', href: '/app/purchase', icon: 'purchase', module: 'purchase' },
+    { label: 'Gate & Weighbridge', href: '/app/gate', icon: 'gate', module: 'gate' },
+    { label: 'Stock & Lots', href: '/app/stock', icon: 'stock', module: 'stock' },
+    { label: 'Processing', href: '/app', icon: 'processing', module: 'processing' },
+    { label: 'Mill Intelligence (Beta)', href: '/app/mill-intelligence', icon: 'processing', module: 'processing' },
+  ],
+  [
+    { label: 'Parties', href: '/app/parties', icon: 'parties', module: 'parties' },
+    { label: 'Items', href: '/app/items', icon: 'items', module: 'items' },
+    { label: 'Team', href: '/app/team', icon: 'team', module: 'team' },
+    { label: 'Documents', href: '/app/documents', icon: 'documents', module: 'documents' },
+    { label: 'Night Digest', href: '/app/digest', icon: 'digest', module: 'digest' },
+    { label: 'Billing', href: '/app/billing', icon: 'billing', module: 'billing' },
+  ],
+];
+
+const footerNavigation: NavigationLink[] = [
   { label: 'Settings', href: '/app/settings', icon: 'settings', module: 'settings' },
-  { label: 'My access', href: '/app/access', icon: 'access', module: 'access' },
 ];
 
 function NavIcon({ name }: { name: IconName }) {
@@ -41,7 +45,6 @@ function NavIcon({ name }: { name: IconName }) {
   if (name === 'processing') return <svg {...common}><path d="M4 5h6v6H4zM14 13h6v6h-6zM10 8h4v8h-4z" {...stroke}/></svg>;
   if (name === 'team') return <svg {...common}><circle cx="9" cy="8" r="3" {...stroke}/><circle cx="17" cy="9" r="2.5" {...stroke}/><path d="M3 20a6 6 0 0 1 12 0M15 20a4 4 0 0 1 6 0" {...stroke} strokeLinecap="round"/></svg>;
   if (name === 'documents') return <svg {...common}><path d="M6 3h9l3 3v15H6z" {...stroke}/><path d="M9 11h6M9 15h6M9 7h4" {...stroke} strokeLinecap="round"/></svg>;
-  if (name === 'access') return <svg {...common}><path d="M12 3a5 5 0 0 0-5 5v2H5v11h14V10h-2V8a5 5 0 0 0-5-5Z" {...stroke} strokeLinejoin="round"/><circle cx="12" cy="15" r="2" {...stroke}/></svg>;
   if (name === 'settings') return (
     <svg {...common}>
       <path
@@ -62,16 +65,76 @@ function initials(name: string) {
 export function AppHeader({ session }: { session: Session }) {
   const pathname = usePathname();
   const { pendingStockReceipts } = useOperationalCounts();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const user = { role: session.role, role_code: session.role };
-  const visibleNavigation = navigation.filter((item) => ('divider' in item ? true : canAccessNav(user, item.module)));
+  const visibleSections = navigationSections
+    .map((section) => section.filter((item) => canAccessNav(user, item.module)))
+    .filter((section) => section.length > 0);
+  const visibleFooterNavigation = footerNavigation.filter((item) => canAccessNav(user, item.module));
   const active = (href: string) => {
     const path = href.split('?')[0];
     return path === '/app' ? pathname === path : pathname === path || pathname.startsWith(`${path}/`);
   };
 
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setMenuOpen(false);
+      toggleRef.current?.focus();
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuOpen]);
+
   return (
-    <aside className="app-sidebar" aria-label="Application sidebar">
-      <div className="app-sidebar-logo">
+    <>
+      <header className="app-topbar">
+        <button
+          ref={toggleRef}
+          type="button"
+          className="app-topbar-toggle"
+          aria-expanded={menuOpen}
+          aria-controls="app-sidebar"
+          aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            {menuOpen ? (
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            ) : (
+              <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            )}
+          </svg>
+        </button>
+        <AppLink href="/app/dashboard" className="app-topbar-brand" onClick={closeMenu}>
+          <div className="app-topbar-title">MillSaathi</div>
+          <div className="app-topbar-mill">{session.mill.name}</div>
+        </AppLink>
+        <div className="app-topbar-avatar" aria-hidden="true">{initials(session.name)}</div>
+      </header>
+
+      <div
+        className="app-sidebar-backdrop"
+        data-open={menuOpen ? 'true' : 'false'}
+        onClick={closeMenu}
+        aria-hidden="true"
+      />
+
+      <aside id="app-sidebar" className="app-sidebar" data-open={menuOpen ? 'true' : 'false'} aria-label="Application sidebar">
+      <AppLink href="/app/dashboard" className="app-sidebar-logo" onClick={closeMenu} aria-label="MillSaathi dashboard">
         <span className="app-sidebar-mark" aria-hidden="true">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
             <path d="M4 20V9l8-5 8 5v11" stroke="#1B2431" strokeWidth="2.1" strokeLinejoin="round" strokeLinecap="round" />
@@ -82,29 +145,48 @@ export function AppHeader({ session }: { session: Session }) {
           <div className="app-sidebar-title">MillSaathi</div>
           <div className="app-sidebar-mill">{session.mill.name}</div>
         </div>
-      </div>
+      </AppLink>
 
-      <nav className="app-sidebar-nav ms-scroll" aria-label="Application navigation">
-        {visibleNavigation.map((item, index) => {
-          if ('divider' in item) {
-            const prev = visibleNavigation[index - 1];
-            const next = visibleNavigation[index + 1];
-            if (!prev || !next || 'divider' in prev || 'divider' in next) return null;
-            return <div className="nav-divider" role="separator" key={`divider-${index}`} />;
-          }
-          return (
-            <AppLink key={item.label} href={item.href} className={active(item.href) ? 'active' : ''}>
+      <nav className="app-sidebar-nav" aria-label="Application navigation">
+        {visibleSections.map((section, sectionIndex) => (
+          <div className="app-sidebar-nav-section" key={section.map((item) => item.label).join('-')}>
+            {sectionIndex > 0 ? <div className="nav-divider" role="separator" /> : null}
+            {section.map((item) => (
+              <AppLink
+                key={item.label}
+                href={item.href}
+                className={active(item.href) ? 'active' : ''}
+                onClick={closeMenu}
+              >
+                <NavIcon name={item.icon} />
+                <span className="app-sidebar-link-label">{item.label}</span>
+                {item.icon === 'stock' && pendingStockReceipts > 0 ? (
+                  <span className="app-nav-badge" aria-label={`${pendingStockReceipts} pending truck${pendingStockReceipts === 1 ? '' : 's'}`}>
+                    {pendingStockReceipts}
+                  </span>
+                ) : null}
+              </AppLink>
+            ))}
+          </div>
+        ))}
+      </nav>
+
+      {visibleFooterNavigation.length ? (
+        <div className="app-sidebar-footer-nav">
+          <div className="nav-divider" role="separator" />
+          {visibleFooterNavigation.map((item) => (
+            <AppLink
+              key={item.label}
+              href={item.href}
+              className={active(item.href) ? 'active' : ''}
+              onClick={closeMenu}
+            >
               <NavIcon name={item.icon} />
               <span className="app-sidebar-link-label">{item.label}</span>
-              {item.icon === 'stock' && pendingStockReceipts > 0 ? (
-                <span className="app-nav-badge" aria-label={`${pendingStockReceipts} pending truck${pendingStockReceipts === 1 ? '' : 's'}`}>
-                  {pendingStockReceipts}
-                </span>
-              ) : null}
             </AppLink>
-          );
-        })}
-      </nav>
+          ))}
+        </div>
+      ) : null}
 
       <div className="app-sidebar-user">
         <div className="app-sidebar-avatar" aria-hidden="true">{initials(session.name)}</div>
@@ -113,6 +195,7 @@ export function AppHeader({ session }: { session: Session }) {
           <div className="app-sidebar-user-role">{(session.role_label ?? session.role).replaceAll('_', ' ')}</div>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

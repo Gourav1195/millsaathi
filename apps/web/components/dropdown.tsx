@@ -5,9 +5,11 @@ import {
   isValidElement,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactElement,
   type ReactNode,
@@ -44,8 +46,43 @@ function nextEnabledIndex(options: DropdownOption[], start: number, direction: 1
   return -1;
 }
 
+function computeMenuStyle(trigger: HTMLElement): CSSProperties {
+  const rect = trigger.getBoundingClientRect();
+  const viewportPadding = 8;
+  const maxMenuHeight = 240;
+  const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+  const spaceAbove = rect.top - viewportPadding;
+  const openUp = spaceBelow < 160 && spaceAbove > spaceBelow;
+  const available = openUp ? spaceAbove : spaceBelow;
+  const menuMinWidth = Math.max(rect.width, 196);
+  return {
+    position: 'fixed',
+    left: rect.left,
+    width: menuMinWidth,
+    minWidth: menuMinWidth,
+    maxHeight: Math.min(maxMenuHeight, Math.max(available, 120)),
+    top: openUp ? undefined : rect.bottom + 4,
+    bottom: openUp ? window.innerHeight - rect.top + 4 : undefined,
+    zIndex: 'var(--z-dropdown)',
+  };
+}
+
+function scrollHighlightedIntoMenu(menu: HTMLUListElement, item: HTMLElement) {
+  const itemTop = item.offsetTop;
+  const itemBottom = itemTop + item.offsetHeight;
+  const viewTop = menu.scrollTop;
+  const viewBottom = viewTop + menu.clientHeight;
+  if (itemTop < viewTop) menu.scrollTop = itemTop;
+  else if (itemBottom > viewBottom) menu.scrollTop = itemBottom - menu.clientHeight;
+}
+
 export type DropdownProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, 'children'> & {
   children: ReactNode;
+  /** Portal menus follow scroll; inline menus anchor to the trigger (tables). */
+  menuPlacement?: 'portal' | 'inline';
+  /** When false, a portaled menu stays pinned on open. */
+  trackScroll?: boolean;
+  menuClassName?: string;
 };
 
 export function Dropdown({
@@ -58,6 +95,9 @@ export function Dropdown({
   required,
   name,
   id,
+  menuPlacement = 'portal',
+  trackScroll = true,
+  menuClassName = '',
   'aria-label': ariaLabel,
 }: DropdownProps) {
   const options = parseOptions(children);
@@ -91,12 +131,14 @@ export function Dropdown({
     if (option.disabled) return;
     emitChange(option.value);
     close();
-    triggerRef.current?.focus();
+    triggerRef.current?.focus({ preventScroll: true });
   }
 
   function openMenu(startIndex?: number) {
     if (disabled || !options.length) return;
     const initial = startIndex ?? (selectedIndex >= 0 ? selectedIndex : nextEnabledIndex(options, -1, 1));
+    const trigger = triggerRef.current;
+    if (trigger && menuPlacement === 'portal') setMenuStyle(computeMenuStyle(trigger));
     setHighlighted(initial >= 0 ? initial : 0);
     setOpen(true);
   }
@@ -104,48 +146,36 @@ export function Dropdown({
   function updateMenuPosition() {
     const trigger = triggerRef.current;
     if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const viewportPadding = 8;
-    const maxMenuHeight = 240;
-    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
-    const spaceAbove = rect.top - viewportPadding;
-    const openUp = spaceBelow < 160 && spaceAbove > spaceBelow;
-    const available = openUp ? spaceAbove : spaceBelow;
-    setMenuStyle({
-      position: 'fixed',
-      left: rect.left,
-      width: rect.width,
-      minWidth: rect.width,
-      maxHeight: Math.min(maxMenuHeight, Math.max(available, 120)),
-      top: openUp ? undefined : rect.bottom + 4,
-      bottom: openUp ? window.innerHeight - rect.top + 4 : undefined,
-      zIndex: 'var(--z-dropdown)',
-    });
+    setMenuStyle(computeMenuStyle(trigger));
   }
 
   useEffect(() => {
     if (!open) return;
-    updateMenuPosition();
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
       if (rootRef.current?.contains(target) || listRef.current?.contains(target)) return;
       close();
     };
-    const onViewportChange = () => updateMenuPosition();
     window.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('resize', onViewportChange);
-    window.addEventListener('scroll', onViewportChange, true);
-    return () => {
-      window.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('resize', onViewportChange);
-      window.removeEventListener('scroll', onViewportChange, true);
-    };
+    return () => window.removeEventListener('mousedown', onPointerDown);
   }, [open]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!open || menuPlacement !== 'portal') return;
+    updateMenuPosition();
+    const onViewportChange = () => updateMenuPosition();
+    window.addEventListener('resize', onViewportChange);
+    if (trackScroll) window.addEventListener('scroll', onViewportChange, true);
+    return () => {
+      window.removeEventListener('resize', onViewportChange);
+      if (trackScroll) window.removeEventListener('scroll', onViewportChange, true);
+    };
+  }, [open, menuPlacement, trackScroll]);
+
+  useLayoutEffect(() => {
     if (!open || highlighted < 0 || !listRef.current) return;
     const item = listRef.current.children.item(highlighted) as HTMLElement | null;
-    item?.scrollIntoView({ block: 'nearest' });
+    if (item) scrollHighlightedIntoMenu(listRef.current, item);
   }, [open, highlighted]);
 
   function onTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -191,39 +221,42 @@ export function Dropdown({
     }
   }
 
-  const menu = open && typeof document !== 'undefined'
-    ? createPortal(
-        <ul
-          ref={listRef}
-          id={listboxId}
-          role="listbox"
-          className="ui-dropdown-menu"
-          style={menuStyle}
-          aria-label={ariaLabel}
-        >
-          {options.map((option, index) => {
-            const isSelected = option.value === String(currentValue);
-            const isHighlighted = index === highlighted;
-            return (
-              <li
-                key={`${option.value}-${index}`}
-                role="option"
-                aria-selected={isSelected}
-                aria-disabled={option.disabled || undefined}
-                className={`ui-dropdown-option${isSelected ? ' selected' : ''}${isHighlighted ? ' highlighted' : ''}${option.disabled ? ' disabled' : ''}`}
-                onMouseEnter={() => !option.disabled && setHighlighted(index)}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => selectOption(option)}
-              >
-                <span className="ui-dropdown-option-label">{option.label}</span>
-                {isSelected ? <span className="ui-dropdown-option-check" aria-hidden="true">✓</span> : null}
-              </li>
-            );
-          })}
-        </ul>,
-        document.body,
-      )
-    : null;
+  const menuClass = [
+    'ui-dropdown-menu',
+    menuPlacement === 'inline' ? 'ui-dropdown-menu--inline' : '',
+    menuClassName,
+  ].filter(Boolean).join(' ');
+
+  const menu = open ? (
+    <ul
+      ref={listRef}
+      id={listboxId}
+      role="listbox"
+      className={menuClass}
+      style={menuPlacement === 'portal' ? { visibility: menuStyle.position ? 'visible' : 'hidden', ...menuStyle } : undefined}
+      aria-label={ariaLabel}
+    >
+      {options.map((option, index) => {
+        const isSelected = option.value === String(currentValue);
+        const isHighlighted = index === highlighted;
+        return (
+          <li
+            key={`${option.value}-${index}`}
+            role="option"
+            aria-selected={isSelected}
+            aria-disabled={option.disabled || undefined}
+            className={`ui-dropdown-option${isSelected ? ' selected' : ''}${isHighlighted ? ' highlighted' : ''}${option.disabled ? ' disabled' : ''}`}
+            onMouseEnter={() => !option.disabled && setHighlighted(index)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => selectOption(option)}
+          >
+            <span className="ui-dropdown-option-label">{option.label}</span>
+            {isSelected ? <span className="ui-dropdown-option-check" aria-hidden="true">✓</span> : null}
+          </li>
+        );
+      })}
+    </ul>
+  ) : null;
 
   return (
     <div ref={rootRef} className={`ui-dropdown${open ? ' open' : ''} ${className}`.trim()}>
@@ -250,13 +283,19 @@ export function Dropdown({
         aria-controls={listboxId}
         aria-label={ariaLabel}
         disabled={disabled}
+        onMouseDown={(event) => {
+          if (disabled) return;
+          event.preventDefault();
+        }}
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onTriggerKeyDown}
       >
         <span className="ui-dropdown-value">{displayLabel}</span>
         <span className="ui-dropdown-chevron" aria-hidden="true" />
       </button>
-      {menu}
+      {menuPlacement === 'portal' && menu && typeof document !== 'undefined'
+        ? createPortal(menu, document.body)
+        : menu}
     </div>
   );
 }
