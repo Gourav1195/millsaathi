@@ -93,7 +93,9 @@
   --hero-ink: var(--solid-fg);
   --hero-muted: var(--side-text);
   --hero-grid: var(--side-line);
-  --shell-cols: 256px minmax(0, 1fr);
+  --sidebar-width: 256px;
+  --sidebar-width-collapsed: 68px;
+  --shell-cols: var(--sidebar-width) minmax(0, 1fr);
 
   /* Typography scale */
   --text-xs: 11px;

@@ -5,11 +5,13 @@ import type { CatalogProcessType } from './process-catalog';
 import { Button, Field, Input, Select } from './ui';
 import {
   chainInputLabel,
+  classifyItemsForProcess,
   classifyLotsForProcess,
   classicUnits,
   computeClassicForecast,
-  lotMatchesProcessInput,
+  itemMatchesProcessInput,
   roundClassicQty,
+  type CatalogItem,
 } from '../lib/process-chain-classic';
 import type { ProcessingChainRecord } from '../lib/process-studio';
 import {
@@ -37,13 +39,13 @@ import {
 } from '../lib/chain-run';
 
 const DRAG_TYPE = 'application/millsaathi-classic-process';
-const MATERIAL_DRAG_TYPE = 'application/millsaathi-classic-material';
+const ITEM_DRAG_TYPE = 'application/millsaathi-classic-item';
 
-type StepMaterialAssignment = {
-  lotId: string;
+type StepInputAssignment = {
   itemId: string;
   itemName: string;
-  lotCode: string;
+  lotId?: string;
+  lotCode?: string;
 };
 
 function ClassicLibraryItem({ type }: { type: CatalogProcessType }) {
@@ -58,22 +60,38 @@ function ClassicLibraryItem({ type }: { type: CatalogProcessType }) {
   );
 }
 
-function MaterialCard({
-  lot,
+function ChainLibraryPanel({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="chain-library-panel">
+      <strong>{title}</strong>
+      <span className="hint">{hint}</span>
+      <div className="chain-library-scroll">{children}</div>
+    </section>
+  );
+}
+
+function ItemCard({
+  item,
   selected,
-  draggable,
-  readOnly,
   onSelect,
 }: {
-  lot: AvailableLot;
+  item: CatalogItem;
   selected: boolean;
-  draggable?: boolean;
-  readOnly?: boolean;
   onSelect: () => void;
 }) {
+  const unitLabel = (item.display_unit ?? item.unit ?? 'QUINTAL').toLowerCase();
+
   function onDragStart(event: React.DragEvent<HTMLButtonElement>) {
-    if (!draggable || selected || readOnly) return;
-    event.dataTransfer.setData(MATERIAL_DRAG_TYPE, lot.id);
+    if (selected) return;
+    event.dataTransfer.setData(ITEM_DRAG_TYPE, item.id);
     event.dataTransfer.effectAllowed = 'copy';
   }
 
@@ -81,8 +99,35 @@ function MaterialCard({
     <button
       type="button"
       className={`process-material${selected ? ' used' : ''}`}
-      draggable={draggable && !selected && !readOnly}
+      draggable={!selected}
       onDragStart={onDragStart}
+      onClick={onSelect}
+      disabled={selected}
+    >
+      <span className="process-material-head">
+        <span><strong>{item.name}</strong><small>{item.category_code ?? item.category ?? 'Item'}</small></span>
+        <b>{selected ? 'Added' : 'Use'}</b>
+      </span>
+      <small>Catalog item · {unitLabel}</small>
+    </button>
+  );
+}
+
+function MaterialCard({
+  lot,
+  selected,
+  readOnly,
+  onSelect,
+}: {
+  lot: AvailableLot;
+  selected: boolean;
+  readOnly?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`process-material${selected ? ' used' : ''}`}
       onClick={readOnly ? undefined : onSelect}
       disabled={selected || readOnly}
     >
@@ -122,15 +167,15 @@ function StepNode({
   linesEditable,
   planningMode,
   inputSatisfied,
-  assignedMaterial,
+  assignedInput,
   mainOverride,
   lineQtys,
   massBalance,
   onSelect,
   onMainChange,
   onLineQtyChange,
-  onAssignMaterial,
-  onClearMaterial,
+  onAssignItem,
+  onClearInput,
 }: {
   step: ChainRunStep;
   unit: string;
@@ -139,15 +184,15 @@ function StepNode({
   linesEditable: boolean;
   planningMode: boolean;
   inputSatisfied: boolean;
-  assignedMaterial?: StepMaterialAssignment | null;
+  assignedInput?: StepInputAssignment | null;
   mainOverride?: number;
   lineQtys: Record<string, string>;
   massBalance?: StepMassBalance;
   onSelect: () => void;
   onMainChange?: (value: number) => void;
   onLineQtyChange?: (lineId: string, value: string) => void;
-  onAssignMaterial?: (lotId: string) => void;
-  onClearMaterial?: () => void;
+  onAssignItem?: (itemId: string) => void;
+  onClearInput?: () => void;
 }) {
   const mainLine = step.lines.find((l) => l.kind === 'main');
   const mainForecast = baseToDisplay(step.forecast_main_base, unit);
@@ -172,11 +217,11 @@ function StepNode({
   const sideLines = step.lines.filter((l) => l.kind !== 'main');
   const showSideOutputs = !planningMode || inputSatisfied;
 
-  function onMaterialDrop(event: React.DragEvent) {
+  function onItemDrop(event: React.DragEvent) {
     event.preventDefault();
     event.currentTarget.classList.remove('drag-over');
-    const lotId = event.dataTransfer.getData(MATERIAL_DRAG_TYPE);
-    if (lotId) onAssignMaterial?.(lotId);
+    const itemId = event.dataTransfer.getData(ITEM_DRAG_TYPE);
+    if (itemId) onAssignItem?.(itemId);
   }
 
   return (
@@ -196,7 +241,7 @@ function StepNode({
           onDragLeave={(event) => event.currentTarget.classList.remove('drag-over')}
           onDrop={(event) => {
             if (!planningMode || inputSatisfied) return;
-            onMaterialDrop(event);
+            onItemDrop(event);
           }}
         >
           <span className="chain-status-dot" aria-hidden="true" />
@@ -207,19 +252,19 @@ function StepNode({
             <div
               className="chain-map-input-slot"
               onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); }}
-              onDrop={(event) => { event.stopPropagation(); onMaterialDrop(event); }}
+              onDrop={(event) => { event.stopPropagation(); onItemDrop(event); }}
             >
-              <span className="hint">Drop an eligible material here</span>
+              <span className="hint">Drop an eligible item here</span>
             </div>
           ) : (
             <span className={`chain-map-metric${massBalance?.overInput ? ' chain-input-over' : ''}`}>
-              Input <b>{assignedMaterial ? assignedMaterial.itemName : `${inputDisplay} ${unit}`}</b>
-              {assignedMaterial ? <small className="chain-map-assigned-lot">{assignedMaterial.lotCode}</small> : null}
+              Input <b>{assignedInput ? assignedInput.itemName : `${inputDisplay} ${unit}`}</b>
+              {assignedInput?.lotCode ? <small className="chain-map-assigned-lot">{assignedInput.lotCode}</small> : null}
               {massBalance?.overInput ? <small className="chain-input-over-hint">Exceeds input</small> : null}
             </span>
           )}
-          {planningMode && assignedMaterial && (
-            <button type="button" className="chain-map-clear-input" onClick={(event) => { event.stopPropagation(); onClearMaterial?.(); }}>
+          {planningMode && assignedInput && (
+            <button type="button" className="chain-map-clear-input" onClick={(event) => { event.stopPropagation(); onClearInput?.(); }}>
               Clear input
             </button>
           )}
@@ -346,7 +391,8 @@ function ClassicChainMap({
   const [godowns, setGodowns] = useState<{ id: string; name: string }[]>([]);
   const [mainOverrides, setMainOverrides] = useState<Record<string, number>>({});
   const [lineOverrides, setLineOverrides] = useState<Record<string, string>>({});
-  const [stepAssignments, setStepAssignments] = useState<Record<string, StepMaterialAssignment>>({});
+  const [stepAssignments, setStepAssignments] = useState<Record<string, StepInputAssignment>>({});
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [workspaceLots, setWorkspaceLots] = useState<AvailableLot[]>([]);
 
   const run = runDetail?.chain_run ?? null;
@@ -431,9 +477,14 @@ function ClassicChainMap({
     [types, selectedStep?.process_type_id],
   );
 
-  const assignedLotIds = useMemo(
-    () => new Set(Object.values(stepAssignments).map((assignment) => assignment.lotId)),
+  const assignedItemIds = useMemo(
+    () => new Set(Object.values(stepAssignments).map((assignment) => assignment.itemId)),
     [stepAssignments],
+  );
+
+  const classifiedItems = useMemo(
+    () => classifyItemsForProcess(selectedProcessType, catalogItems),
+    [selectedProcessType, catalogItems],
   );
 
   const planningMode = editMode && !isRunning && !isReadOnly;
@@ -469,7 +520,10 @@ function ClassicChainMap({
   useEffect(() => {
     void fetch('/api/overview', { credentials: 'include' })
       .then((r) => r.json())
-      .then((body: { godowns?: { id: string; name: string }[] }) => setGodowns(body.godowns ?? []))
+      .then((body: { godowns?: { id: string; name: string }[]; items?: CatalogItem[] }) => {
+        setGodowns(body.godowns ?? []);
+        setCatalogItems(body.items ?? []);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -525,41 +579,34 @@ function ClassicChainMap({
     setActualDraft(draft);
   }, [selectedStep, unit]);
 
-  function assignMaterialToStep(stepId: string, lotId: string) {
+  function assignItemToStep(stepId: string, itemId: string) {
     const step = steps.find((candidate) => candidate.id === stepId);
     if (!step) return;
     const processType = types.find((type) => type.id === step.process_type_id);
-    const lot = [
-      ...(materials?.eligible ?? []),
-      ...(materials?.for_reuse ?? []),
-      ...workspaceLots,
-    ].find((candidate) => candidate.id === lotId);
-    if (!lot) {
-      onError('Material not found. Pick a lot from Available materials.');
+    const item = catalogItems.find((candidate) => candidate.id === itemId);
+    if (!item) {
+      onError('Item not found. Pick an item from the Items list.');
       return;
     }
-    if (assignedLotIds.has(lot.id) && stepAssignments[stepId]?.lotId !== lot.id) {
-      onError('This lot is already assigned to another step.');
+    if (assignedItemIds.has(item.id) && stepAssignments[stepId]?.itemId !== item.id) {
+      onError('This item is already assigned to another step.');
       return;
     }
-    if (!lotMatchesProcessInput(processType, lot)) {
-      onError(`${lot.item_name} is not accepted by ${step.process_type_name ?? 'this process'}.`);
+    if (!itemMatchesProcessInput(processType, item.id)) {
+      onError(`${item.name} is not accepted by ${step.process_type_name ?? 'this process'}.`);
       return;
     }
     onError(null);
     setStepAssignments((current) => ({
       ...current,
       [stepId]: {
-        lotId: lot.id,
-        itemId: lot.item_id,
-        itemName: lot.item_name,
-        lotCode: lot.code,
+        itemId: item.id,
+        itemName: item.name,
       },
     }));
-    setSelectedInputLotId(lot.id);
   }
 
-  function clearStepMaterial(stepId: string) {
+  function clearStepInput(stepId: string) {
     setStepAssignments((current) => {
       const next = { ...current };
       delete next[stepId];
@@ -761,7 +808,7 @@ function ClassicChainMap({
         <div>
           <h3 className="chain-map-title">{chain.name}{run?.code ? ` · ${run.code}` : ''}</h3>
           <p className="muted">
-            {planningMode && 'Edit mode — assign materials to each step, drag processes from the library, then enter expected outputs.'}
+            {planningMode && 'Edit mode — assign items to each step, drag processes from the library, then enter expected outputs.'}
             {!editMode && isDraft && !isRunning && 'Draft — review the chain forecast, then use Edit chain to assign materials.'}
             {isRunning && 'Running — enter actuals for the active step.'}
             {isReadOnly && 'Completed run — read-only audit trail.'}
@@ -814,50 +861,36 @@ function ClassicChainMap({
       </div>
 
       <div className="chain-map-layout">
-        <aside className="chain-library">
+        <aside className={`chain-library${editMode ? ' chain-library--edit' : ''}`}>
           {editMode ? (
             <>
-              <strong>Process library</strong>
-              <span className="hint">Drag a process to add it to this run.</span>
-              <div>{libraryTypes.map((type) => <ClassicLibraryItem key={type.id} type={type} />)}</div>
+              <ChainLibraryPanel title="Process library" hint="Drag a process to add it to this run.">
+                {libraryTypes.map((type) => <ClassicLibraryItem key={type.id} type={type} />)}
+              </ChainLibraryPanel>
               <div className="chain-library-divider" />
-              <strong>Available materials</strong>
-              <span className="hint">
-                Drag or click a lot for {selectedStep?.process_type_name ?? 'the selected step'}. Only accepted items can be assigned.
-              </span>
-              {materials?.for_reuse.length ? (
+              <ChainLibraryPanel
+                title="Items"
+                hint={`Drag or click an item for ${selectedStep?.process_type_name ?? 'the selected step'}. Only accepted items can be assigned.`}
+              >
                 <div className="chain-materials-section">
-                  <small>For reuse</small>
-                  {materials.for_reuse.map((lot) => (
-                    <MaterialCard
-                      key={lot.id}
-                      lot={lot}
-                      draggable
-                      selected={assignedLotIds.has(lot.id)}
-                      onSelect={() => selectedStep && assignMaterialToStep(selectedStep.id, lot.id)}
+                  {classifiedItems.eligible.length ? classifiedItems.eligible.map((item) => (
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      selected={assignedItemIds.has(item.id)}
+                      onSelect={() => selectedStep && assignItemToStep(selectedStep.id, item.id)}
                     />
-                  ))}
+                  )) : <p className="muted">No eligible items for this step.</p>}
                 </div>
-              ) : null}
-              <div className="chain-materials-section">
-                {materials?.eligible.length ? materials.eligible.map((lot) => (
-                  <MaterialCard
-                    key={lot.id}
-                    lot={lot}
-                    draggable
-                    selected={assignedLotIds.has(lot.id)}
-                    onSelect={() => selectedStep && assignMaterialToStep(selectedStep.id, lot.id)}
-                  />
-                )) : <p className="muted">No eligible lots for this step.</p>}
-              </div>
-              {materials?.ineligible.length ? (
-                <details className="chain-materials-ineligible">
-                  <summary>Not eligible here ({materials.ineligible.length})</summary>
-                  {materials.ineligible.map(({ lot, reason }) => (
-                    <p key={lot.id} className="muted"><strong>{lot.item_name}</strong> · {reason}</p>
-                  ))}
-                </details>
-              ) : null}
+                {classifiedItems.ineligible.length ? (
+                  <details className="chain-materials-ineligible">
+                    <summary>Not eligible here ({classifiedItems.ineligible.length})</summary>
+                    {classifiedItems.ineligible.map(({ item, reason }) => (
+                      <p key={item.id} className="muted"><strong>{item.name}</strong> · {reason}</p>
+                    ))}
+                  </details>
+                ) : null}
+              </ChainLibraryPanel>
             </>
           ) : (
             <>
@@ -875,7 +908,7 @@ function ClassicChainMap({
                       key={lot.id}
                       lot={lot}
                       readOnly={!isRunning}
-                      selected={isRunning ? selectedInputLotId === lot.id : assignedLotIds.has(lot.id)}
+                      selected={isRunning ? selectedInputLotId === lot.id : assignedItemIds.has(lot.item_id)}
                       onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
                     />
                   ))}
@@ -887,7 +920,7 @@ function ClassicChainMap({
                     key={lot.id}
                     lot={lot}
                     readOnly={!isRunning}
-                    selected={isRunning ? selectedInputLotId === lot.id : assignedLotIds.has(lot.id)}
+                    selected={isRunning ? selectedInputLotId === lot.id : assignedItemIds.has(lot.item_id)}
                     onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
                   />
                 )) : <p className="muted">{isRunning ? 'No eligible lots.' : 'No eligible lots for this step.'}</p>}
@@ -938,15 +971,15 @@ function ClassicChainMap({
                   linesEditable={linesEditable}
                   planningMode={planningMode}
                   inputSatisfied={inputSatisfied}
-                  assignedMaterial={stepAssignments[step.id] ?? null}
+                  assignedInput={stepAssignments[step.id] ?? null}
                   mainOverride={mainOverrides[step.id]}
                   lineQtys={lineQtys}
                   massBalance={stepMassBalance}
                   onSelect={() => setSelectedStepId(step.id)}
                   onMainChange={(value) => setMainOverrides((current) => ({ ...current, [step.id]: value }))}
                   onLineQtyChange={(lineId, value) => updateLineQty(step, lineId, value)}
-                  onAssignMaterial={(lotId) => assignMaterialToStep(step.id, lotId)}
-                  onClearMaterial={() => clearStepMaterial(step.id)}
+                  onAssignItem={(itemId) => assignItemToStep(step.id, itemId)}
+                  onClearInput={() => clearStepInput(step.id)}
                 />
               );
             })}

@@ -62,10 +62,22 @@ function initials(name: string) {
   return name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'millsaathi-sidebar-collapsed';
+
+function SidebarCollapseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="4" width="7" height="16" rx="1.5" stroke="currentColor" strokeWidth="1.9" />
+      <path d="M13 8l4 4-4 4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function AppHeader({ session }: { session: Session }) {
   const pathname = usePathname();
   const { pendingStockReceipts } = useOperationalCounts();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const user = { role: session.role, role_code: session.role };
   const visibleSections = navigationSections
@@ -78,6 +90,25 @@ export function AppHeader({ session }: { session: Session }) {
   };
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const collapseSidebar = useCallback(() => setSidebarCollapsed(true), []);
+  const expandSidebar = useCallback(() => setSidebarCollapsed(false), []);
+
+  useEffect(() => {
+    try {
+      setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true');
+    } catch {
+      // Ignore storage access errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.sidebarCollapsed = sidebarCollapsed ? 'true' : 'false';
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+    } catch {
+      // Ignore storage access errors.
+    }
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     setMenuOpen(false);
@@ -133,19 +164,50 @@ export function AppHeader({ session }: { session: Session }) {
         aria-hidden="true"
       />
 
-      <aside id="app-sidebar" className="app-sidebar" data-open={menuOpen ? 'true' : 'false'} aria-label="Application sidebar">
-      <AppLink href="/app/dashboard" className="app-sidebar-logo" onClick={closeMenu} aria-label="MillSaathi dashboard">
-        <span className="app-sidebar-mark" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-            <path d="M4 20V9l8-5 8 5v11" stroke="#1B2431" strokeWidth="2.1" strokeLinejoin="round" strokeLinecap="round" />
-            <path d="M9 20v-5h6v5" stroke="#1B2431" strokeWidth="2.1" strokeLinecap="round" />
-          </svg>
-        </span>
-        <div className="app-sidebar-brand">
-          <div className="app-sidebar-title">MillSaathi</div>
-          <div className="app-sidebar-mill">{session.mill.name}</div>
-        </div>
-      </AppLink>
+      <aside
+        id="app-sidebar"
+        className="app-sidebar"
+        data-open={menuOpen ? 'true' : 'false'}
+        data-collapsed={sidebarCollapsed ? 'true' : 'false'}
+        aria-label="Application sidebar"
+        aria-expanded={sidebarCollapsed ? 'false' : 'true'}
+      >
+      <div className="app-sidebar-logo-row">
+        <AppLink
+          href="/app/dashboard"
+          className="app-sidebar-logo"
+          onClick={(event) => {
+            if (sidebarCollapsed) {
+              event.preventDefault();
+              expandSidebar();
+              return;
+            }
+            closeMenu();
+          }}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'MillSaathi dashboard'}
+          title={sidebarCollapsed ? 'Expand sidebar' : undefined}
+        >
+          <span className="app-sidebar-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M4 20V9l8-5 8 5v11" stroke="#1B2431" strokeWidth="2.1" strokeLinejoin="round" strokeLinecap="round" />
+              <path d="M9 20v-5h6v5" stroke="#1B2431" strokeWidth="2.1" strokeLinecap="round" />
+            </svg>
+          </span>
+          <div className="app-sidebar-brand">
+            <div className="app-sidebar-title">MillSaathi</div>
+            <div className="app-sidebar-mill">{session.mill.name}</div>
+          </div>
+        </AppLink>
+        <button
+          type="button"
+          className="app-sidebar-collapse-btn"
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          onClick={collapseSidebar}
+        >
+          <SidebarCollapseIcon />
+        </button>
+      </div>
 
       <nav className="app-sidebar-nav" aria-label="Application navigation">
         {visibleSections.map((section, sectionIndex) => (
@@ -156,6 +218,7 @@ export function AppHeader({ session }: { session: Session }) {
                 key={item.label}
                 href={item.href}
                 className={active(item.href) ? 'active' : ''}
+                title={sidebarCollapsed ? item.label : undefined}
                 onClick={closeMenu}
               >
                 <NavIcon name={item.icon} />
@@ -179,6 +242,7 @@ export function AppHeader({ session }: { session: Session }) {
               key={item.label}
               href={item.href}
               className={active(item.href) ? 'active' : ''}
+              title={sidebarCollapsed ? item.label : undefined}
               onClick={closeMenu}
             >
               <NavIcon name={item.icon} />
@@ -188,7 +252,7 @@ export function AppHeader({ session }: { session: Session }) {
         </div>
       ) : null}
 
-      <div className="app-sidebar-user">
+      <div className="app-sidebar-user" title={sidebarCollapsed ? session.name : undefined}>
         <div className="app-sidebar-avatar" aria-hidden="true">{initials(session.name)}</div>
         <div className="app-sidebar-user-meta">
           <div className="app-sidebar-user-name">{session.name}</div>

@@ -36,6 +36,21 @@ export type ClassifiedMaterials = {
   permissive: boolean;
 };
 
+export type CatalogItem = {
+  id: string;
+  name: string;
+  category?: string | null;
+  category_code?: string | null;
+  unit?: string | null;
+  display_unit?: string | null;
+};
+
+export type ClassifiedItems = {
+  eligible: CatalogItem[];
+  ineligible: { item: CatalogItem; reason: string }[];
+  permissive: boolean;
+};
+
 const CLASSIC_UNITS = ['Bags', 'KG', 'QUINTAL', 'TONNE'];
 
 export function classicUnits(preferred?: string | null) {
@@ -78,6 +93,25 @@ export function classifyLotsForProcess(type: CatalogProcessType | undefined, lot
 export function lotMatchesProcessInput(type: CatalogProcessType | undefined, lot: AvailableLot) {
   const allowed = allowedInputItemIds(type);
   return allowed.size === 0 || allowed.has(lot.item_id);
+}
+
+export function classifyItemsForProcess(type: CatalogProcessType | undefined, items: CatalogItem[]): ClassifiedItems {
+  const allowed = allowedInputItemIds(type);
+  const permissive = allowed.size === 0;
+  const eligible: CatalogItem[] = [];
+  const ineligible: { item: CatalogItem; reason: string }[] = [];
+
+  for (const item of items) {
+    if (permissive || allowed.has(item.id)) eligible.push(item);
+    else ineligible.push({ item, reason: 'This item is not accepted by this process' });
+  }
+
+  return { eligible, ineligible, permissive };
+}
+
+export function itemMatchesProcessInput(type: CatalogProcessType | undefined, itemId: string) {
+  const allowed = allowedInputItemIds(type);
+  return allowed.size === 0 || allowed.has(itemId);
 }
 
 /** Legacy rice-mill yield defaults keyed by process name. */
