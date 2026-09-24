@@ -398,6 +398,9 @@ table.dashboard-table tr:has(.ui-dropdown.open) {
 .party-row--seller td { background: var(--row-seller-bg); }
 .party-row--broker td { background: var(--row-broker-bg); }
 
+.sauda-row--purchase td { background: var(--row-seller-bg); }
+.sauda-row--sale td { background: var(--row-buyer-bg); }
+
 .party-avatar {
   display: inline-flex;
   align-items: center;

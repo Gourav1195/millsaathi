@@ -144,6 +144,12 @@ async function nextCode(db: D1Database, millId: string, key: string, prefix: str
   return `${prefix}-${row!.value}`;
 }
 
+async function nextSaudaCode(db: D1Database, millId: string, direction: 'in' | 'out'): Promise<string> {
+  return direction === 'out'
+    ? nextCode(db, millId, 'sauda_sale', 'SEL')
+    : nextCode(db, millId, 'sauda_purchase', 'PUR');
+}
+
 const GATE_STATUSES = ['at_gate', 'weighing', 'in_lab', 'weighed', 'unloading', 'done'] as const;
 const SAUDA_STATUSES = ['open', 'advance_paid', 'settled', 'disputed'] as const;
 const SUPPORT_ADMIN_EMAIL = 'gouravmodi1195@gmail.com';
@@ -713,7 +719,7 @@ api.post('/saudas', async (c) => {
     : await c.env.DB.prepare(`SELECT id FROM buyers WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(b.buyer_id, mill.id).first();
   if (!party) return c.json({ error: 'party not found' }, 400);
   if (b.item_id && !await c.env.DB.prepare(`SELECT id FROM items WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(b.item_id, mill.id).first()) return c.json({ error: 'item not found' }, 400);
-  const code = await nextCode(c.env.DB, mill.id, 'sauda', 'SAU');
+  const code = await nextSaudaCode(c.env.DB, mill.id, direction as 'in' | 'out');
   const id = uuid();
   await c.env.DB.prepare(
     `INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise)
@@ -954,7 +960,7 @@ api.post('/saudas/import/commit', async (c) => {
   for (const row of valid) {
     const quantity = await normalizeItemQuantity(c.env.DB, mill.id, row.item_id, row.quantity, row.unit);
     if (!quantity || quantity.base <= 0) return c.json({ error: 'one or more quantities cannot be converted for its item' }, 400);
-    const code = await nextCode(c.env.DB, mill.id, 'sauda', 'SAU');
+    const code = await nextSaudaCode(c.env.DB, mill.id, row.direction);
     await c.env.DB.prepare(`INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(uuid(), mill.id, code, row.direction, row.supplier_id, row.buyer_id, row.broker_name, row.item_id, Math.round(quantity.base), quantity.quantity, quantity.unit, row.rate_paise_per_qtl, row.moisture_pct, row.advance_paise, row.note, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_type === 'fixed' ? null : row.commission_value, row.commission_type === 'fixed' ? Math.round(row.commission_value * 100) : null).run();
   }

@@ -159,7 +159,7 @@
 
 .chain-map-layout {
   display: grid;
-  grid-template-columns: minmax(152px, 180px) minmax(0, 1fr) minmax(215px, 250px);
+  grid-template-columns: minmax(152px, 180px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
   min-height: 360px;
@@ -209,6 +209,11 @@
   padding-right: 2px;
 }
 
+.chain-library:not(.chain-library--edit) .chain-library-scroll {
+  height: auto;
+  max-height: min(58vh, 495px);
+}
+
 .chain-library-item {
   padding: 7px 8px;
   border: 1px solid var(--border);
@@ -226,9 +231,10 @@
 }
 
 .chain-map-stage {
+  position: relative;
   min-width: 0;
   overflow: auto;
-  padding: 12px;
+  padding: 12px 12px 88px;
   border: 1px solid var(--canvas-border);
   border-radius: 11px;
   background: var(--canvas-stage);
@@ -278,6 +284,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 214px;
+  flex: 0 0 214px;
 }
 
 button.chain-map-node,
@@ -291,7 +299,7 @@ button.chain-map-node,
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 170px;
+  width: 214px;
   min-height: 142px;
   padding: 14px 12px 11px;
   border: 1px solid var(--node-border);
@@ -369,22 +377,35 @@ button.chain-map-node,
 
 .chain-map-metric b { color: var(--ink); white-space: nowrap; }
 
-.chain-map-output-field {
-  display: inline-flex;
-  align-items: center;
+.chain-map-metric.editable {
+  flex-direction: column;
+  align-items: stretch;
   gap: 4px;
-  margin-left: auto;
+}
+
+.chain-map-output-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.chain-map-output-field input {
+  flex: 1;
+  min-width: 0;
 }
 
 .chain-map-metric input {
-  width: 52px;
-  padding: 2px 3px;
+  width: 100%;
+  min-width: 108px;
+  padding: 4px 6px;
   border: 0;
   border-bottom: 1px dashed #B89224;
   background: #F1F3F5;
   color: #68717B;
-  font: 800 11px var(--font-sans);
+  font: 800 12px var(--font-sans);
   text-align: right;
+  box-sizing: border-box;
 }
 
 .chain-map-node.review .chain-map-metric input {
@@ -449,50 +470,79 @@ button.chain-map-node,
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-left: 18px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .chain-map-byproduct-branch {
+  --branch-line: #C96A52;
   display: flex;
   align-items: center;
   gap: 8px;
   min-height: 34px;
 }
 
+.chain-map-byproduct-branch--loss {
+  --branch-line: #B33C35;
+}
+
 .chain-map-byproduct-arrow {
   position: relative;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
+  flex: 0 0 22px;
+  width: 22px;
+  align-self: stretch;
+  background: linear-gradient(var(--branch-line), var(--branch-line)) 7px 50% / 11px 2px no-repeat;
 }
 
 .chain-map-byproduct-arrow::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 18px;
-  height: 18px;
-  border-left: 2px solid #C96A52;
-  border-bottom: 2px solid #C96A52;
-  border-bottom-left-radius: 8px;
+  left: 7px;
+  width: 2px;
+  background: var(--branch-line);
+  border: none;
+  border-radius: 0;
+}
+
+.chain-map-byproduct-branch:first-child:not(:last-child) .chain-map-byproduct-arrow::before {
+  top: -8px;
+  bottom: -3px;
+}
+
+.chain-map-byproduct-branch:last-child:not(:first-child) .chain-map-byproduct-arrow::before {
+  top: -3px;
+  bottom: 50%;
+}
+
+.chain-map-byproduct-branch:not(:first-child):not(:last-child) .chain-map-byproduct-arrow::before {
+  top: -3px;
+  bottom: -3px;
+}
+
+.chain-map-byproduct-branch:first-child:last-child .chain-map-byproduct-arrow::before {
+  top: -8px;
+  bottom: 50%;
 }
 
 .chain-map-byproduct-arrow::after {
   content: '';
   position: absolute;
-  left: 15px;
-  bottom: 1px;
+  left: 16px;
+  top: 50%;
   width: 0;
   height: 0;
+  transform: translateY(-50%);
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  border-left: 6px solid #C96A52;
+  border-left: 5px solid var(--branch-line);
 }
 
 .chain-map-byproduct-pill {
   display: grid;
   gap: 2px;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   padding: 6px 9px;
   border-radius: 8px;
   background: #F8F1E4;
@@ -520,11 +570,14 @@ button.chain-map-node,
 }
 
 .chain-map-byproduct-qty input {
-  width: 72px;
-  padding: 3px 5px;
+  flex: 1;
+  min-width: 108px;
+  width: 100%;
+  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 5px;
-  font: 700 11px var(--font-sans);
+  font: 700 12px var(--font-sans);
+  box-sizing: border-box;
 }
 
 .chain-actual-line-inputs {
@@ -535,10 +588,13 @@ button.chain-map-node,
 }
 
 .chain-actual-line-inputs input {
-  width: 88px;
+  width: 132px;
+  min-width: 108px;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
+  font-size: 13px;
+  box-sizing: border-box;
 }
 
 .chain-map-byproduct-pill.chain-variance-high .chain-map-byproduct-qty input {
@@ -549,17 +605,6 @@ button.chain-map-node,
 .chain-map-byproduct-pill.chain-variance-low .chain-map-byproduct-qty input {
   color: #c0451c;
   border-color: #c0451c;
-}
-
-.chain-map-byproduct-branch--loss .chain-map-byproduct-arrow::before {
-  border-left-color: #B33C35;
-  border-bottom-color: #B33C35;
-}
-
-.chain-map-byproduct-branch--loss .chain-map-byproduct-arrow::after {
-  border-left-color: #B33C35;
-  border-top-color: transparent;
-  border-bottom-color: transparent;
 }
 
 .chain-map-byproduct-branch--loss .chain-map-byproduct-pill {
@@ -596,24 +641,53 @@ button.chain-map-node,
   text-align: center;
 }
 
-.chain-map-detail-title {
-  margin: 0;
-  font: 800 18px/1.2 var(--font-display);
+.chain-yield-float {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  width: min(228px, calc(100% - 24px));
+  max-height: min(38vh, 200px);
+  padding: 10px 11px;
+  border: 1px solid #D9D4C9;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--library-bg) 94%, white);
+  box-shadow: 0 10px 24px rgba(24, 20, 12, 0.12);
+  overflow: auto;
+  pointer-events: auto;
 }
 
-.chain-map-detail {
-  overflow-y: auto;
+.chain-yield-float-title {
+  margin: 0 0 6px;
+  font: 800 13px/1.2 var(--font-display);
 }
 
-.chain-map-detail dl { margin: 14px 0; }
-.chain-map-detail dl div { padding: 7px 0; border-top: 1px solid var(--line); }
-.chain-map-detail dt {
+.chain-yield-float-label {
+  margin: 0 0 4px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.chain-map-detail dd { margin: 2px 0 0; font-size: 12px; font-weight: 700; }
+
+.chain-yield-float-label + .chain-yield-float-list {
+  margin-bottom: 8px;
+}
+
+.chain-yield-float-list {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.chain-actuals-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
 
 .chain-map-yield-list {
   margin: 0;
@@ -696,11 +770,14 @@ button.chain-map-node,
 }
 
 .chain-actuals-form {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
   display: grid;
   gap: 8px;
+}
+
+.chain-actuals-panel .chain-actuals-form {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .chain-actual-line {
@@ -779,6 +856,26 @@ button.chain-map-node,
 
 .process-chain-classic-shell { display: grid; gap: 14px; }
 
+.chain-recent-runs { margin-top: 16px; }
+
+.chain-recent-run-link {
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chain-recent-run-link small {
+  color: var(--muted2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .processing-chain-mode-tabs {
   display: flex;
   gap: 6px;
@@ -804,13 +901,20 @@ button.chain-map-node,
 
 @media (max-width: 1050px) {
   .chain-map-layout { grid-template-columns: 135px minmax(0, 1fr); }
-  .chain-map-detail { grid-column: 1 / -1; max-height: 260px; }
 }
 
 @media (max-width: 700px) {
   .chain-map-head { flex-direction: column; }
   .chain-map-controls { justify-content: flex-start; }
   .chain-map-layout { grid-template-columns: 1fr; }
+  .chain-map-stage { padding-bottom: 12px; }
+  .chain-yield-float {
+    position: static;
+    width: 100%;
+    max-height: none;
+    margin-top: 12px;
+    box-shadow: none;
+  }
   .chain-library > div { flex-direction: row; overflow-x: auto; }
   .chain-library-scroll { height: 140px; }
   .chain-library-item { flex: 0 0 auto; }

@@ -30,6 +30,7 @@ import {
   validateSaudaImport,
 } from './spreadsheet-import-button';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
+import { formatSaudaCode } from '../lib/format';
 import { millHeaderMeta } from '../lib/app-meta';
 import { can, canViewFinance } from '../lib/permissions';
 import {
@@ -124,6 +125,8 @@ export function PurchaseApp() {
     if (!statusEdit && dialog.open) dialog.close();
   }, [statusEdit]);
   const parties = agreement.direction === 'in' ? overview?.suppliers ?? [] : overview?.buyers ?? [];
+  const agreementPanelClass = `party-add-panel party-add-panel--${agreement.direction === 'in' ? 'seller' : 'buyer'}`;
+  const saudaCode = (sauda: Sauda) => formatSaudaCode(sauda.code, sauda.direction);
 
   async function createAgreement(event: FormEvent) {
     event.preventDefault();
@@ -295,7 +298,7 @@ export function PurchaseApp() {
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
 
         {canCreate && (
-          <Panel title="Add New agreement">
+          <Panel title="Add New agreement" className={agreementPanelClass}>
             <FormGrid onSubmit={createAgreement}>
               <Field label="Type">
                 <Select value={agreement.direction} onChange={(e) => setAgreement({ ...agreement, direction: e.target.value as 'in' | 'out', party_id: '' })}>
@@ -354,7 +357,7 @@ export function PurchaseApp() {
         )}
 
         {deliveryFor && (
-          <Panel title={`Manual delivery · ${deliveryFor.code ?? 'Agreement'}`}>
+          <Panel title={`Manual delivery · ${saudaCode(deliveryFor)}`}>
             <FormGrid onSubmit={addDelivery}>
               <Field label="Quantity">
                 <Input required type="number" min="0.001" step="0.001" value={delivery.quantity} onChange={(e) => setDelivery({ ...delivery, quantity: e.target.value })} />
@@ -388,7 +391,7 @@ export function PurchaseApp() {
 
         {historyFor && (
           <Panel
-            title={`Delivery history · ${historyFor.code ?? 'Agreement'}`}
+            title={`Delivery history · ${saudaCode(historyFor)}`}
             actions={<Button className="secondary" type="button" onClick={() => setHistoryFor(null)}>Close</Button>}
           >
             {deliveries.length ? deliveries.map((entry) => (
@@ -432,7 +435,7 @@ export function PurchaseApp() {
           }
         >
           <TableFilters
-            title="saudas"
+            compact
             onClear={() => { setQuery(''); setFilters({}); }}
             clearDisabled={!query && !Object.keys(filters).length}
           >
@@ -467,18 +470,18 @@ export function PurchaseApp() {
 
           <DataTable columns={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive })}>
             {pageData.rows.length ? pageData.rows.map((sauda) => (
-              <tr key={sauda.id}>
+              <tr key={sauda.id} className={sauda.direction === 'out' ? 'sauda-row--sale' : 'sauda-row--purchase'}>
                 {tableEdit.editMode && canArchive && (
                   <TableArchiveCell
-                    label={sauda.code ?? 'Sauda'}
+                    label={saudaCode(sauda)}
                     checked={!!tableEdit.selected[sauda.id]}
                     onChange={(checked) => tableEdit.toggleSelected(sauda.id, checked)}
                   />
                 )}
                 {tableEdit.editMode && canManage && (
-                  <TableEditCell label={sauda.code ?? 'Sauda'} onClick={() => startStatusEdit(sauda)} />
+                  <TableEditCell label={saudaCode(sauda)} onClick={() => startStatusEdit(sauda)} />
                 )}
-                <td><strong>{sauda.code ?? '—'}</strong></td>
+                <td><strong>{saudaCode(sauda)}</strong></td>
                 <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
                 <td>{sauda.direction === 'out' ? sauda.buyer_name ?? '—' : sauda.supplier_name ?? '—'}</td>
                 <td>{sauda.item_name ?? '—'}</td>
@@ -524,7 +527,7 @@ export function PurchaseApp() {
                 <div className="app-dialog-head">
                   <div>
                     <h2>Update status</h2>
-                    <p><strong>{statusEdit.code ?? 'Sauda'}</strong></p>
+                    <p><strong>{saudaCode(statusEdit)}</strong></p>
                   </div>
                   <button
                     type="button"
@@ -566,7 +569,7 @@ export function PurchaseApp() {
         {canViewFinance(session) && (
           <p className="hint" style={{ marginTop: 12 }}>
             Rate visibility is server-controlled. Listed rate values, where permitted:{' '}
-            {filteredSaudas.slice(0, 3).map((sauda) => `${sauda.code ?? 'Agreement'} ${money(sauda.rate_paise_per_qtl)}/qtl`).join(' · ') || '—'}
+            {filteredSaudas.slice(0, 3).map((sauda) => `${saudaCode(sauda)} ${money(sauda.rate_paise_per_qtl)}/qtl`).join(' · ') || '—'}
           </p>
         )}
       </section>

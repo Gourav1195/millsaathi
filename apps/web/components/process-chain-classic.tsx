@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogProcessType } from './process-catalog';
-import { Button, Field, Input, Select } from './ui';
+import { Badge, Button, DataTable, EmptyState, Field, Input, Select, TableCard } from './ui';
+import { TableEditCell, TableEditModeButton } from './table-edit-mode';
+import { can } from '../lib/permissions';
+import { useSession } from '../lib/session';
+import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import {
   chainInputLabel,
   classifyItemsForProcess,
@@ -30,8 +34,12 @@ import {
   splitLot,
   startChainRun,
   validateStepActuals,
+  voidChainRun,
+  chainRunStatusLabel,
+  formatChainRunLinesSummary,
   type AvailableLot,
   type ChainRunDetail,
+  type ChainRunListItem,
   type ChainRunStep,
   type ChainRunStepLine,
   type StepMassBalance,
@@ -39,6 +47,13 @@ import {
 } from '../lib/chain-run';
 
 const DRAG_TYPE = 'application/millsaathi-classic-process';
+const CHAIN_RUN_COLUMNS_BASE = [
+  { id: 'date', label: 'Date' },
+  { id: 'run', label: 'Run' },
+  { id: 'lines', label: 'Lines' },
+  { id: 'postedBy', label: 'Posted by' },
+  { id: 'status', label: 'Status' },
+];
 const ITEM_DRAG_TYPE = 'application/millsaathi-classic-item';
 
 type StepInputAssignment = {
@@ -374,6 +389,9 @@ function ClassicChainMap({
   canStartRun: boolean;
   onError: (message: string | null) => void;
 }) {
+  const { session } = useSession();
+  const tableEdit = useTableEditMode();
+  const canVoidRun = can(session, 'processing:void');
   const cardRef = useRef<HTMLDivElement>(null);
   const unitOptions = useMemo(() => classicUnits(preferredUnit), [preferredUnit]);
   const [unit, setUnit] = useState(unitOptions[0] ?? 'Quintal');
@@ -384,7 +402,8 @@ function ClassicChainMap({
   const [fullscreen, setFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [history, setHistory] = useState<ChainRunDetail['chain_run'][]>([]);
+  const [history, setHistory] = useState<ChainRunListItem[]>([]);
+  const [recentRuns, setRecentRuns] = useState<ChainRunListItem[]>([]);
   const [materials, setMaterials] = useState<{ eligible: AvailableLot[]; for_reuse: AvailableLot[]; ineligible: { lot: AvailableLot; reason: string }[] } | null>(null);
   const [selectedInputLotId, setSelectedInputLotId] = useState('');
   const [actualDraft, setActualDraft] = useState<Record<string, { qty: string; godownId: string }>>({});
@@ -462,6 +481,16 @@ function ClassicChainMap({
     }
   }, [chain.id, onError, plannedInput, run?.status, run?.id, unit]);
 
+  const loadRecentRuns = useCallback(async () => {
+    try {
+      const body = await loadChainRunHistory(chain.id);
+      const finished = body.chain_runs.filter((entry) => entry.status === 'COMPLETED' || entry.status === 'VOID');
+      setRecentRuns(finished.slice(0, 8));
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Could not load recent chain runs');
+    }
+  }, [chain.id, onError]);
+
   useEffect(() => {
     setRunDetail(null);
     setEditMode(false);
@@ -470,7 +499,8 @@ function ClassicChainMap({
     setLineOverrides({});
     setStepAssignments({});
     setWorkspaceLots([]);
-  }, [chain.id]);
+    void loadRecentRuns();
+  }, [chain.id, loadRecentRuns]);
 
   const selectedProcessType = useMemo(
     () => types.find((type) => type.id === selectedStep?.process_type_id),
@@ -720,6 +750,7 @@ function ClassicChainMap({
       });
       setRunDetail(detail);
       setSelectedInputLotId('');
+      if (detail.chain_run.status === 'COMPLETED') await loadRecentRuns();
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not post actuals');
     } finally {
@@ -733,8 +764,25 @@ function ClassicChainMap({
     try {
       const detail = await skipRunStep(run.id, selectedStep.id);
       setRunDetail(detail);
+      if (detail.chain_run.status === 'COMPLETED') await loadRecentRuns();
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not skip step');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleVoidRun(entry: ChainRunListItem) {
+    const label = entry.code || entry.chain_name || 'this chain run';
+    if (!window.confirm(`Void ${label}? Its stock movements will be reversed.`)) return;
+    setBusy(true);
+    onError(null);
+    try {
+      await voidChainRun(entry.id);
+      if (run?.id === entry.id) await refreshRun(entry.id);
+      await loadRecentRuns();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : 'Could not void chain run');
     } finally {
       setBusy(false);
     }
@@ -893,13 +941,14 @@ function ClassicChainMap({
               </ChainLibraryPanel>
             </>
           ) : (
-            <>
-              <strong>Available materials</strong>
-              <span className="hint">
-                {isRunning
+            <ChainLibraryPanel
+              title="Available materials"
+              hint={
+                isRunning
                   ? `Lots eligible for ${selectedStep?.process_type_name ?? 'selected step'}.`
-                  : `Lots for ${selectedStep?.process_type_name ?? 'the selected step'}. Use Edit chain to assign them to steps.`}
-              </span>
+                  : `Lots for ${selectedStep?.process_type_name ?? 'the selected step'}. Use Edit chain to assign them to steps.`
+              }
+            >
               {materials?.for_reuse.length ? (
                 <div className="chain-materials-section">
                   <small>For reuse</small>
@@ -933,7 +982,7 @@ function ClassicChainMap({
                   ))}
                 </details>
               ) : null}
-            </>
+            </ChainLibraryPanel>
           )}
         </aside>
 
@@ -985,117 +1034,153 @@ function ClassicChainMap({
             })}
             {editMode && !isRunning && (isDraft || !run) && <div className="chain-map-drop">Drop process here</div>}
           </div>
-        </div>
-
-        <aside className="chain-map-detail">
           {selectedStep ? (
-            <>
-              <h4 className="chain-map-detail-title">{selectedStep.process_type_name ?? 'Process'}</h4>
-              <dl>
-                <div>
-                  <dt>Yield profile</dt>
-                  <dd>
-                    <ul className="chain-map-yield-list">
-                      {selectedStep.lines.map((line) => (
-                        <li key={line.id}>
-                          {line.kind}: {line.item_name} {line.expected_pct ?? 0}%
-                          {line.expected_min_pct != null || line.expected_max_pct != null
-                            ? ` (${line.expected_min_pct ?? '—'}–${line.expected_max_pct ?? '—'}%)`
-                            : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  </dd>
-                </div>
-                {varianceSummary?.length ? (
-                  <div>
-                    <dt>Variance summary</dt>
-                    <dd>
-                      <ul className="chain-map-yield-list">
-                        {varianceSummary.map((entry) => (
-                          <li key={entry.name}>
-                            {entry.name}: {entry.delta >= 0 ? '+' : ''}{baseToDisplay(entry.delta, unit)} {unit}
-                          </li>
-                        ))}
-                      </ul>
-                    </dd>
-                  </div>
-                ) : null}
-              </dl>
-              {isRunning && selectedStep.status === 'ACTIVE' && (
-                <div className="chain-actuals-form">
-                  <h5>Enter actuals</h5>
-                  <p className="muted chain-actuals-hint">
-                    Enter main output and by-products only. Waste is calculated as input minus what you accounted for.
-                  </p>
-                  {selectedInputLotId ? (
-                    <p className="chain-actuals-lot muted">Input lot selected from materials.</p>
-                  ) : (
-                    <p className="chain-actuals-lot chain-input-over">Select an input lot from Available materials.</p>
+            <aside className="chain-yield-float" aria-label="Yield profile">
+              <h4 className="chain-yield-float-title">{selectedStep.process_type_name ?? 'Process'}</h4>
+              <p className="chain-yield-float-label">Yield profile</p>
+              <ul className="chain-map-yield-list chain-yield-float-list">
+                {selectedStep.lines.map((line) => (
+                  <li key={line.id}>
+                    {line.kind}: {line.item_name} {line.expected_pct ?? 0}%
+                    {line.expected_min_pct != null || line.expected_max_pct != null
+                      ? ` (${line.expected_min_pct ?? '—'}–${line.expected_max_pct ?? '—'}%)`
+                      : ''}
+                  </li>
+                ))}
+              </ul>
+              {varianceSummary?.length ? (
+                <>
+                  <p className="chain-yield-float-label">Variance summary</p>
+                  <ul className="chain-map-yield-list chain-yield-float-list">
+                    {varianceSummary.map((entry) => (
+                      <li key={entry.name}>
+                        {entry.name}: {entry.delta >= 0 ? '+' : ''}{baseToDisplay(entry.delta, unit)} {unit}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </aside>
+          ) : null}
+        </div>
+      </div>
+
+      {selectedStep && isRunning && selectedStep.status === 'ACTIVE' && (
+        <div className="chain-actuals-panel">
+          <div className="chain-actuals-form">
+            <h5>Enter actuals — {selectedStep.process_type_name ?? 'active step'}</h5>
+            <p className="muted chain-actuals-hint">
+              Enter main output and by-products only. Waste is calculated as input minus what you accounted for.
+            </p>
+            {selectedInputLotId ? (
+              <p className="chain-actuals-lot muted">Input lot selected from materials.</p>
+            ) : (
+              <p className="chain-actuals-lot chain-input-over">Select an input lot from Available materials.</p>
+            )}
+            {activeMassBalance?.overInput ? (
+              <p className="chain-actuals-warning">
+                Output and by-products ({activeMassBalance.totalOutDisplay} {unit.toLowerCase()}) exceed input ({activeMassBalance.inputDisplay} {unit.toLowerCase()}).
+              </p>
+            ) : null}
+            {selectedStep.lines.filter((line) => line.kind !== 'loss').map((line) => (
+              <label key={line.id} className="chain-actual-line">
+                <span>
+                  <strong>{lineKindLabel(line.kind)}</strong>
+                  {' '}{line.item_name ?? line.kind}
+                </span>
+                <div className="chain-actual-line-inputs">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    value={actualDraft[line.id]?.qty ?? ''}
+                    onChange={(event) => setActualDraft((current) => ({
+                      ...current,
+                      [line.id]: { ...current[line.id], qty: event.target.value, godownId: current[line.id]?.godownId ?? '' },
+                    }))}
+                    aria-label={`${lineKindLabel(line.kind)} quantity for ${line.item_name ?? line.kind}`}
+                  />
+                  <span>{unit.toLowerCase()}</span>
+                  {line.kind === 'byproduct' && (
+                    <Select
+                      value={actualDraft[line.id]?.godownId ?? ''}
+                      onChange={(event) => setActualDraft((current) => ({
+                        ...current,
+                        [line.id]: { ...current[line.id], godownId: event.target.value, qty: current[line.id]?.qty ?? '' },
+                      }))}
+                      aria-label={`Godown for ${line.item_name}`}
+                    >
+                      <option value="">Choose godown</option>
+                      {godowns.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    </Select>
                   )}
-                  {activeMassBalance?.overInput ? (
-                    <p className="chain-actuals-warning">
-                      Output and by-products ({activeMassBalance.totalOutDisplay} {unit.toLowerCase()}) exceed input ({activeMassBalance.inputDisplay} {unit.toLowerCase()}).
-                    </p>
-                  ) : null}
-                  {selectedStep.lines.filter((line) => line.kind !== 'loss').map((line) => (
-                    <label key={line.id} className="chain-actual-line">
-                      <span>
-                        <strong>{lineKindLabel(line.kind)}</strong>
-                        {' '}{line.item_name ?? line.kind}
-                      </span>
-                      <div className="chain-actual-line-inputs">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.001"
-                          value={actualDraft[line.id]?.qty ?? ''}
-                          onChange={(event) => setActualDraft((current) => ({
-                            ...current,
-                            [line.id]: { ...current[line.id], qty: event.target.value, godownId: current[line.id]?.godownId ?? '' },
-                          }))}
-                          aria-label={`${lineKindLabel(line.kind)} quantity for ${line.item_name ?? line.kind}`}
-                        />
-                        <span>{unit.toLowerCase()}</span>
-                        {line.kind === 'byproduct' && (
-                          <Select
-                            value={actualDraft[line.id]?.godownId ?? ''}
-                            onChange={(event) => setActualDraft((current) => ({
-                              ...current,
-                              [line.id]: { ...current[line.id], godownId: event.target.value, qty: current[line.id]?.qty ?? '' },
-                            }))}
-                            aria-label={`Godown for ${line.item_name}`}
-                          >
-                            <option value="">Choose godown</option>
-                            {godowns.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                          </Select>
-                        )}
-                      </div>
-                    </label>
-                  ))}
-                  {selectedStep.lines.some((line) => line.kind === 'loss') && activeMassBalance ? (
-                    <p className="chain-actuals-waste muted">
-                      Waste (calculated): <strong>{activeMassBalance.lossDisplay} {unit.toLowerCase()}</strong>
-                    </p>
-                  ) : null}
-                  <div className="chain-actuals-actions">
-                    <Button type="button" disabled={busy || activeMassBalance?.overInput} onClick={() => void handlePostActuals()}>Post step</Button>
-                    <Button type="button" className="secondary" disabled={busy} onClick={() => void handleSkipStep()}>Skip step</Button>
-                  </div>
                 </div>
-              )}
-              {selectedStep.status === 'COMPLETED' && selectedStep.lines.filter((l) => l.kind === 'byproduct' && l.lot_id).map((line) => (
-                <div key={line.id} className="chain-disposition-actions">
-                  <span>{line.item_name} · {line.lot_code}</span>
-                  <Button type="button" className="secondary" onClick={() => void handleDisposition(line.lot_id!, 'FOR_SALE')}>Mark for sale</Button>
-                  <Button type="button" className="secondary" onClick={() => void handleDisposition(line.lot_id!, 'FOR_REUSE')}>Mark for reuse</Button>
-                </div>
-              ))}
-            </>
-          ) : (
-            <p className="muted">Select a process step to review its yield profile.</p>
-          )}
-        </aside>
+              </label>
+            ))}
+            {selectedStep.lines.some((line) => line.kind === 'loss') && activeMassBalance ? (
+              <p className="chain-actuals-waste muted">
+                Waste (calculated): <strong>{activeMassBalance.lossDisplay} {unit.toLowerCase()}</strong>
+              </p>
+            ) : null}
+            <div className="chain-actuals-actions">
+              <Button type="button" disabled={busy || activeMassBalance?.overInput} onClick={() => void handlePostActuals()}>Post step</Button>
+              <Button type="button" className="secondary" disabled={busy} onClick={() => void handleSkipStep()}>Skip step</Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {selectedStep?.status === 'COMPLETED' && selectedStep.lines.filter((l) => l.kind === 'byproduct' && l.lot_id).map((line) => (
+        <div key={line.id} className="chain-disposition-actions">
+          <span>{line.item_name} · {line.lot_code}</span>
+          <Button type="button" className="secondary" onClick={() => void handleDisposition(line.lot_id!, 'FOR_SALE')}>Mark for sale</Button>
+          <Button type="button" className="secondary" onClick={() => void handleDisposition(line.lot_id!, 'FOR_REUSE')}>Mark for reuse</Button>
+        </div>
+      ))}
+
+      <div className="chain-recent-runs">
+        <TableCard
+          title="Recent chain runs"
+          subtitle="Inputs, outputs and by-products remain linked to the stock ledger."
+          actions={
+            <TableEditModeButton
+              enabled={canVoidRun}
+              editMode={tableEdit.editMode}
+              onToggle={tableEdit.toggleEditMode}
+            />
+          }
+        >
+          <DataTable columns={withEditModeColumns(CHAIN_RUN_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoidRun })}>
+            {recentRuns.length ? recentRuns.map((entry) => (
+              <tr key={entry.id}>
+                {tableEdit.editMode && canVoidRun && (
+                  entry.status === 'COMPLETED'
+                    ? <TableEditCell label={entry.code || entry.chain_name || 'chain run'} onClick={() => void handleVoidRun(entry)} />
+                    : <td className="table-edit-col" />
+                )}
+                <td>{entry.end_date ?? entry.start_date ?? '—'}</td>
+                <td>
+                  <button type="button" className="chain-recent-run-link" onClick={() => void loadHistoricalRun(entry.id)}>
+                    <strong>{entry.chain_name ?? chain.name}</strong>
+                    {entry.code ? <small>{entry.code}</small> : null}
+                  </button>
+                </td>
+                <td>{formatChainRunLinesSummary(entry)}</td>
+                <td>{entry.creator_name ?? '—'}</td>
+                <td>
+                  <Badge tone={entry.status === 'COMPLETED' ? 'success' : 'neutral'}>
+                    {chainRunStatusLabel(entry.status)}
+                  </Badge>
+                </td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={withEditModeColumns(CHAIN_RUN_COLUMNS_BASE, tableEdit.editMode, { canEdit: canVoidRun }).length}>
+                  <EmptyState>No completed chain runs yet.</EmptyState>
+                </td>
+              </tr>
+            )}
+          </DataTable>
+        </TableCard>
       </div>
 
       {historyOpen && (

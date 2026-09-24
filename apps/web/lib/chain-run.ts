@@ -54,6 +54,12 @@ export type ChainRunRecord = {
   notes?: string | null;
 };
 
+export type ChainRunListItem = ChainRunRecord & {
+  creator_name?: string | null;
+  total_steps?: number;
+  completed_steps?: number;
+};
+
 export type ChainRunDetail = {
   chain_run: ChainRunRecord;
   run_steps: ChainRunStep[];
@@ -284,7 +290,38 @@ export async function loadChainRunHistory(chainId: string, from?: string, to?: s
   const params = new URLSearchParams({ chain_id: chainId });
   if (from) params.set('from', from);
   if (to) params.set('to', to);
-  return apiJson<{ chain_runs: (ChainRunRecord & { total_steps?: number; completed_steps?: number })[] }>(`/api/chain-runs?${params}`);
+  return apiJson<{ chain_runs: ChainRunListItem[] }>(`/api/chain-runs?${params}`);
+}
+
+export async function voidChainRun(runId: string, reason?: string) {
+  return apiJson<{ ok: boolean }>(`/api/chain-runs/${encodeURIComponent(runId)}/void`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function chainRunStatusLabel(status: ChainRunStatus) {
+  if (status === 'COMPLETED') return 'Completed';
+  if (status === 'VOID') return 'Void';
+  if (status === 'IN_PROGRESS') return 'In progress';
+  if (status === 'DRAFT') return 'Draft';
+  if (status === 'PAUSED') return 'Paused';
+  return status;
+}
+
+export function formatChainRunLinesSummary(run: ChainRunListItem) {
+  const unit = (run.unit ?? 'QUINTAL').toLowerCase();
+  const inputBase = run.total_input_base ?? run.planned_input_base ?? 0;
+  const input = baseToDisplay(inputBase, run.unit ?? 'QUINTAL');
+  const output = baseToDisplay(run.total_output_base ?? 0, run.unit ?? 'QUINTAL');
+  const byproduct = baseToDisplay(run.total_byproduct_base ?? 0, run.unit ?? 'QUINTAL');
+  const loss = baseToDisplay(run.total_loss_base ?? 0, run.unit ?? 'QUINTAL');
+  const parts = [`input: ${input} ${unit}`];
+  if (output > 0) parts.push(`output: ${output} ${unit}`);
+  if (byproduct > 0) parts.push(`by-products: ${byproduct} ${unit}`);
+  if (loss > 0) parts.push(`waste: ${loss} ${unit}`);
+  return parts.join(' · ');
 }
 
 export async function splitLot(lotId: string, quantity: number, unit: string, disposition: 'FOR_SALE' | 'FOR_REUSE' | 'STOCK', godownId?: string) {
