@@ -1,5 +1,7 @@
 // Stock lot grouping and processing input consumption with transactional safety.
 
+import { gateIntakeLineCount } from './gateIntakeLines';
+
 function itemUsesVariableBags(mode: string | null | undefined): boolean {
   return String(mode ?? '').trim().toUpperCase() === 'VARIABLE_BAG';
 }
@@ -313,17 +315,18 @@ export async function undoGateLotAccept(
   if ((lot.consumed_qty_kg ?? 0) > 0 || lot.qty_kg <= 0) {
     return { ok: false, error: 'this lot has already been used and cannot be undone' };
   }
-  const settlementLine = await db.prepare(
-    `SELECT id FROM gate_intake_lines WHERE mill_id = ? AND lot_id = ? LIMIT 1`,
-  ).bind(millId, lotId).first();
-  if (settlementLine) return { ok: false, error: 'only one-click truck accepts can be undone here' };
+  const gateEntryId = lot.gate_entry_id;
+  const intakeLineCount = await gateIntakeLineCount(db, millId, gateEntryId);
+  if (intakeLineCount > 1) {
+    return { ok: false, error: 'use stock adjustment for lots from a split truck settlement' };
+  }
   const consumed = await db.prepare(
     `SELECT id FROM processing_input_consumptions WHERE mill_id = ? AND lot_id = ? LIMIT 1`,
   ).bind(millId, lotId).first();
   if (consumed) return { ok: false, error: 'this lot has already been used and cannot be undone' };
 
-  const gateEntryId = lot.gate_entry_id;
   await db.batch([
+    db.prepare(`DELETE FROM gate_intake_lines WHERE mill_id = ? AND lot_id = ?`).bind(millId, lotId),
     db.prepare(
       `UPDATE stock_movements
        SET status = 'VOID',

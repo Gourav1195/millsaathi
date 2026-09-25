@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -30,12 +30,12 @@ import {
   validateSaudaImport,
 } from './spreadsheet-import-button';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
-import { formatSaudaCode } from '../lib/format';
+import { formatRupee, formatSaudaCode } from '../lib/format';
+import { saudaAgreedValuePaise } from '../lib/sauda-stock';
 import { millHeaderMeta } from '../lib/app-meta';
 import { can, canViewFinance } from '../lib/permissions';
 import {
   TableArchiveCell,
-  TableEditCell,
   TableEditModeBar,
   TableEditModeButton,
   TableSelectAllBar,
@@ -47,10 +47,10 @@ import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 import { TableCellDetail, TableClampedText } from './table-cell-detail';
 import { SaudaTruckTable } from './sauda-truck-table';
+import { SaudaLotTable, type SaudaLotEntry } from './sauda-lot-table';
 import {
   commercialQuantityStep,
   commercialQuantityUnitsForItem,
-  commercialRateLabel,
   defaultCommercialQuantityUnit,
   formatCommercialQuantity,
   type ItemTrackingConfigInput,
@@ -70,6 +70,7 @@ type Sauda = {
   agreed_quantity?: number | null;
   agreed_unit?: string | null;
   fulfilled_qty_base?: number;
+  agreed_value_paise?: number;
   rate_paise_per_qtl?: number;
   broker_name?: string | null;
   agreement_date?: string | null;
@@ -84,14 +85,6 @@ type Sauda = {
 };
 type Reference = { id: string; name: string };
 type ItemRef = Reference & ItemTrackingConfigInput;
-type Overview = {
-  saudas: Sauda[];
-  suppliers: Reference[];
-  buyers: Reference[];
-  items: ItemRef[];
-  godowns: Reference[];
-  gate?: GateEntry[];
-};
 type GateEntry = {
   id: string;
   sauda_id?: string | null;
@@ -106,11 +99,33 @@ type GateEntry = {
   stock_status?: string;
   entry_date?: string;
 };
+type StockLotRef = {
+  id: string;
+  code?: string;
+  sauda_id?: string | null;
+  gate_token_no?: string | null;
+  gate_vehicle_no?: string | null;
+  qty_kg?: number;
+  value_paise?: number;
+  godown_name?: string;
+  in_date?: string;
+  note?: string | null;
+};
+type Overview = {
+  saudas: Sauda[];
+  suppliers: Reference[];
+  buyers: Reference[];
+  items: ItemRef[];
+  godowns: Reference[];
+  gate?: GateEntry[];
+  lots?: StockLotRef[];
+};
 type Delivery = { id: string; actual_date?: string; actual_qty_base?: number; actual_qty?: number; actual_unit?: string; status?: string; gate_entry_id?: string | null; lot_code?: string | null; notes?: string | null };
-type AgreementForm = { direction: 'in' | 'out'; party_id: string; item_id: string; quantity: string; unit: string; rate: string; agreement_date: string; delivery_start: string; delivery_end: string; tolerance: string; broker: string; note: string };
+type AgreementForm = { direction: 'in' | 'out'; party_id: string; item_id: string; quantity: string; unit: string; value: string; agreement_date: string; delivery_start: string; delivery_end: string; tolerance: string; broker: string; note: string };
+
+const EMPTY_SAUDAS: Sauda[] = [];
 
 const qtl = (kg: number | undefined) => `${((kg ?? 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} qtl`;
-const money = (paise: number | undefined) => paise == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(paise / 100);
 const formatSaudaAgreed = (sauda: Sauda) => {
   const unit = String(sauda.agreed_unit ?? '').trim().toUpperCase();
   if (sauda.agreed_quantity != null && unit) return formatCommercialQuantity(sauda.agreed_quantity, unit);
@@ -126,7 +141,7 @@ const formatDeliveryQuantity = (entry: Delivery) => {
   return qtl(entry.actual_qty_base);
 };
 const today = () => new Date().toISOString().slice(0, 10);
-const blankAgreement = (): AgreementForm => ({ direction: 'in', party_id: '', item_id: '', quantity: '', unit: 'QUINTAL', rate: '', agreement_date: today(), delivery_start: '', delivery_end: '', tolerance: '5', broker: 'Direct', note: '' });
+const blankAgreement = (): AgreementForm => ({ direction: 'in', party_id: '', item_id: '', quantity: '', unit: 'QUINTAL', value: '', agreement_date: today(), delivery_start: '', delivery_end: '', tolerance: '5', broker: 'Direct', note: '' });
 const blankDelivery = () => ({ quantity: '', unit: 'KG', actual_date: today(), godown_id: '', notes: '' });
 
 const SAUDA_COLUMNS_BASE = [
@@ -140,6 +155,19 @@ const SAUDA_COLUMNS_BASE = [
   { id: 'terms', label: 'Terms' },
   { id: 'actions', label: '' },
 ];
+
+const SAUDA_STATUS_OPTIONS = [
+  { value: 'open', label: 'Open' },
+  { value: 'advance_paid', label: 'Advance paid' },
+  { value: 'settled', label: 'Settled' },
+  { value: 'disputed', label: 'Disputed' },
+] as const;
+
+const TABLE_SELECT_PROPS = {
+  className: 'table-inline-field',
+  menuClassName: 'ui-dropdown-menu--table',
+  menuPlacement: 'inline' as const,
+};
 
 export function PurchaseApp() {
   const { session, sessionError } = useSession();
@@ -155,10 +183,10 @@ export function PurchaseApp() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [statusEdit, setStatusEdit] = useState<Sauda | null>(null);
-  const [statusValue, setStatusValue] = useState('open');
-  const [expandedSaudaId, setExpandedSaudaId] = useState<string | null>(null);
-  const statusDialogRef = useRef<HTMLDialogElement>(null);
+  const [statusDrafts, setStatusDrafts] = useState<Record<string, string>>({});
+  const [savingSaudaId, setSavingSaudaId] = useState<string | null>(null);
+  const [expandedTrucksSaudaId, setExpandedTrucksSaudaId] = useState<string | null>(null);
+  const [expandedLotsSaudaId, setExpandedLotsSaudaId] = useState<string | null>(null);
   const tableEdit = useTableEditMode();
 
   const load = async () => setOverview(await api<Overview>('/api/overview'));
@@ -166,7 +194,7 @@ export function PurchaseApp() {
     if (session) void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load Saudās'));
   }, [session]);
 
-  const saudas = overview?.saudas ?? [];
+  const saudas = overview?.saudas ?? EMPTY_SAUDAS;
   const gateEntries = overview?.gate ?? [];
 
   const trucksBySauda = useMemo(() => {
@@ -177,6 +205,26 @@ export function PurchaseApp() {
     }
     return map;
   }, [gateEntries]);
+
+  const lotsBySauda = useMemo(() => {
+    const map = new Map<string, SaudaLotEntry[]>();
+    for (const lot of overview?.lots ?? []) {
+      if (!lot.sauda_id) continue;
+      const entry: SaudaLotEntry = {
+        id: lot.id,
+        code: lot.code,
+        qty_kg: lot.qty_kg,
+        value_paise: lot.value_paise,
+        godown_name: lot.godown_name,
+        in_date: lot.in_date,
+        gate_token_no: lot.gate_token_no,
+        gate_vehicle_no: lot.gate_vehicle_no,
+        note: lot.note,
+      };
+      map.set(lot.sauda_id, [...(map.get(lot.sauda_id) ?? []), entry]);
+    }
+    return map;
+  }, [overview?.lots]);
 
   const filteredSaudas = useMemo(
     () => filterRows(saudas, query, filters, {
@@ -202,13 +250,34 @@ export function PurchaseApp() {
   const canArchive = can(session, 'saudas:archive');
   const canExport = can(session, 'finance:export');
   const showSaudaMoney = canViewFinance(session ?? { role: '' });
+  const editing = tableEdit.editMode && canManage;
+
+  const saudaColumns = useMemo(() => {
+    const columns = [...SAUDA_COLUMNS_BASE];
+    if (showSaudaMoney) {
+      const fulfilledIndex = columns.findIndex((column) => column.id === 'fulfilled');
+      columns.splice(fulfilledIndex + 1, 0, { id: 'value', label: 'Value' });
+    }
+    return columns;
+  }, [showSaudaMoney]);
 
   useEffect(() => {
-    const dialog = statusDialogRef.current;
-    if (!dialog) return;
-    if (statusEdit && !dialog.open) dialog.showModal();
-    if (!statusEdit && dialog.open) dialog.close();
-  }, [statusEdit]);
+    if (!editing) {
+      setStatusDrafts((current) => (Object.keys(current).length ? {} : current));
+      return;
+    }
+    setStatusDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const sauda of saudas) {
+        if (next[sauda.id] === undefined) {
+          next[sauda.id] = sauda.status ?? 'open';
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [editing, saudas]);
   const parties = agreement.direction === 'in' ? overview?.suppliers ?? [] : overview?.buyers ?? [];
   const agreementItem = useMemo(
     () => (overview?.items ?? []).find((item) => item.id === agreement.item_id) ?? null,
@@ -235,9 +304,9 @@ export function PurchaseApp() {
   async function createAgreement(event: FormEvent) {
     event.preventDefault();
     const quantity = Number(agreement.quantity);
-    const ratePaise = Math.round(Number(agreement.rate) * 100);
-    if (!agreement.party_id || !agreement.item_id || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(ratePaise) || ratePaise < 0) {
-      setError('Choose a party and item, then enter a positive quantity and a valid rate.');
+    const valuePaise = Math.round(Number(agreement.value) * 100);
+    if (!agreement.party_id || !agreement.item_id || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(valuePaise) || valuePaise < 0) {
+      setError('Choose a party and item, then enter a positive quantity and total value.');
       return;
     }
     setSaving(true);
@@ -249,7 +318,7 @@ export function PurchaseApp() {
         item_id: agreement.item_id,
         quantity,
         unit: agreement.unit,
-        rate_paise_per_qtl: ratePaise,
+        value_paise: valuePaise,
         agreement_date: agreement.agreement_date,
         delivery_start: agreement.delivery_start || null,
         delivery_end: agreement.delivery_end || null,
@@ -332,23 +401,19 @@ export function PurchaseApp() {
     }
   }
 
-  function startStatusEdit(sauda: Sauda) {
-    setStatusEdit(sauda);
-    setStatusValue(sauda.status ?? 'open');
+  function updateStatusDraft(saudaId: string, status: string) {
+    setStatusDrafts((current) => ({ ...current, [saudaId]: status }));
   }
 
-  async function saveStatusEdit(event: FormEvent) {
-    event.preventDefault();
-    if (!statusEdit) return;
-    setSaving(true);
+  async function saveSaudaStatus(sauda: Sauda) {
+    const status = statusDrafts[sauda.id] ?? sauda.status ?? 'open';
+    if (status === (sauda.status ?? 'open')) return;
+    setSavingSaudaId(sauda.id);
     setError(null);
     try {
-      await changeStatus(statusEdit, statusValue);
-      setStatusEdit(null);
-    } catch {
-      // changeStatus already sets error
+      await changeStatus(sauda, status);
     } finally {
-      setSaving(false);
+      setSavingSaudaId(null);
     }
   }
 
@@ -442,8 +507,8 @@ export function PurchaseApp() {
                   {agreementUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                 </Select>
               </Field>
-              <Field label={commercialRateLabel(agreement.unit)}>
-                <Input required type="number" min="0" step="0.01" value={agreement.rate} onChange={(e) => setAgreement({ ...agreement, rate: e.target.value })} />
+              <Field label="Total value ₹">
+                <Input required type="number" min="0" step="0.01" value={agreement.value} onChange={(e) => setAgreement({ ...agreement, value: e.target.value })} />
               </Field>
               <Field label="Agreement date">
                 <Input required type="date" value={agreement.agreement_date} onChange={(e) => setAgreement({ ...agreement, agreement_date: e.target.value })} />
@@ -525,8 +590,13 @@ export function PurchaseApp() {
         )}
 
         <TableCard
+          className={editing ? 'sauda-table-editing' : ''}
           title="Saudās & purchases"
-          subtitle={`${filteredSaudas.length} agreement${filteredSaudas.length === 1 ? '' : 's'}`}
+          subtitle={
+            editing
+              ? 'Update settlement status inline, then save each row.'
+              : `${filteredSaudas.length} agreement${filteredSaudas.length === 1 ? '' : 's'}`
+          }
           actions={
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               {canExport && (
@@ -580,22 +650,31 @@ export function PurchaseApp() {
             onArchive={() => void bulkArchive()}
           />
 
-          <DataTable columns={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive })}>
+          <DataTable columns={withEditModeColumns(saudaColumns, tableEdit.editMode, { canEdit: false, canArchive })}>
             {pageData.rows.length ? pageData.rows.flatMap((sauda) => {
               const trucks = trucksBySauda.get(sauda.id) ?? [];
-              const expanded = expandedSaudaId === sauda.id;
-              const colSpan = withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive }).length;
+              const lots = lotsBySauda.get(sauda.id) ?? [];
+              const trucksExpanded = expandedTrucksSaudaId === sauda.id;
+              const lotsExpanded = expandedLotsSaudaId === sauda.id;
+              const detailsExpanded = trucksExpanded || lotsExpanded;
+              const colSpan = withEditModeColumns(saudaColumns, tableEdit.editMode, { canEdit: false, canArchive }).length;
+              const rowSaving = savingSaudaId === sauda.id;
+              const draftStatus = statusDrafts[sauda.id] ?? sauda.status ?? 'open';
+              const statusDirty = draftStatus !== (sauda.status ?? 'open');
               return [
-                <tr key={sauda.id} className={sauda.direction === 'out' ? 'sauda-row--sale' : 'sauda-row--purchase'}>
+                <tr
+                  key={sauda.id}
+                  className={[
+                    sauda.direction === 'out' ? 'sauda-row--sale' : 'sauda-row--purchase',
+                    rowSaving ? 'table-row-saving' : undefined,
+                  ].filter(Boolean).join(' ') || undefined}
+                >
                   {tableEdit.editMode && canArchive && (
                     <TableArchiveCell
                       label={saudaCode(sauda)}
                       checked={!!tableEdit.selected[sauda.id]}
                       onChange={(checked) => tableEdit.toggleSelected(sauda.id, checked)}
                     />
-                  )}
-                  {tableEdit.editMode && canManage && (
-                    <TableEditCell label={saudaCode(sauda)} onClick={() => startStatusEdit(sauda)} />
                   )}
                   <td>
                     <TableCellDetail
@@ -610,13 +689,53 @@ export function PurchaseApp() {
                   <td>{sauda.item_name ?? '—'}</td>
                   <td>{formatSaudaAgreed(sauda)}</td>
                   <td>{formatSaudaFulfilled(sauda)}</td>
-                  <td><Badge tone="gold">{sauda.fulfilment_status ?? sauda.status ?? '—'}</Badge></td>
+                  {showSaudaMoney ? <td>{formatRupee(saudaAgreedValuePaise(sauda))}</td> : null}
+                  <td className={editing ? 'table-inline-cell' : undefined}>
+                    {editing ? (
+                      <Select
+                        {...TABLE_SELECT_PROPS}
+                        aria-label={`Status for ${saudaCode(sauda)}`}
+                        value={draftStatus}
+                        disabled={rowSaving}
+                        onChange={(event) => updateStatusDraft(sauda.id, event.target.value)}
+                      >
+                        {SAUDA_STATUS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </Select>
+                    ) : (
+                      <Badge tone="gold">{sauda.fulfilment_status ?? sauda.status ?? '—'}</Badge>
+                    )}
+                  </td>
                   <td className="table-note-col"><TableClampedText text={sauda.note} /></td>
                   <td>
                     <TableActions>
+                      {editing ? (
+                        <Button
+                          type="button"
+                          className="quiet"
+                          disabled={rowSaving || !statusDirty}
+                          onClick={() => void saveSaudaStatus(sauda)}
+                        >
+                          {rowSaving ? 'Saving…' : 'Save'}
+                        </Button>
+                      ) : null}
                       {trucks.length ? (
-                        <Button type="button" className="secondary" onClick={() => setExpandedSaudaId(expanded ? null : sauda.id)}>
-                          {expanded ? 'Hide' : 'Show'} trucks ({trucks.length})
+                        <Button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setExpandedTrucksSaudaId(trucksExpanded ? null : sauda.id)}
+                        >
+                          {trucksExpanded ? 'Hide' : 'Show'} trucks ({trucks.length})
+                        </Button>
+                      ) : null}
+                      {lots.length ? (
+                        <Button
+                          type="button"
+                          className="secondary"
+                          onClick={() => setExpandedLotsSaudaId(lotsExpanded ? null : sauda.id)}
+                        >
+                          {lotsExpanded ? 'Hide' : 'Show'} lots ({lots.length})
                         </Button>
                       ) : null}
                       <Button type="button" className="secondary" onClick={() => void openHistory(sauda)}>History</Button>
@@ -626,17 +745,18 @@ export function PurchaseApp() {
                     </TableActions>
                   </td>
                 </tr>,
-                ...(expanded ? [(
-                  <tr key={`${sauda.id}-trucks`} className="sauda-truck-row">
+                ...(detailsExpanded ? [(
+                  <tr key={`${sauda.id}-details`} className="sauda-truck-row">
                     <td colSpan={colSpan}>
-                      <SaudaTruckTable trucks={trucks} />
+                      {trucksExpanded ? <SaudaTruckTable trucks={trucks} /> : null}
+                      {lotsExpanded ? <SaudaLotTable lots={lots} showMoney={showSaudaMoney} /> : null}
                     </td>
                   </tr>
                 )] : []),
               ];
             }) : (
               <tr>
-                <td colSpan={withEditModeColumns(SAUDA_COLUMNS_BASE, tableEdit.editMode, { canEdit: canManage, canArchive }).length}><EmptyState>No Saudās in this view.</EmptyState></td>
+                <td colSpan={withEditModeColumns(saudaColumns, tableEdit.editMode, { canEdit: false, canArchive }).length}><EmptyState>No Saudās in this view.</EmptyState></td>
               </tr>
             )}
           </DataTable>
@@ -648,52 +768,6 @@ export function PurchaseApp() {
             label="Select all on this page"
           />
 
-          <dialog
-            ref={statusDialogRef}
-            className="app-dialog"
-            onClose={() => {
-              if (!saving) setStatusEdit(null);
-            }}
-            onCancel={(event) => {
-              event.preventDefault();
-              if (!saving) setStatusEdit(null);
-            }}
-          >
-            {statusEdit ? (
-              <>
-                <div className="app-dialog-head">
-                  <div>
-                    <h2>Update status</h2>
-                    <p><strong>{saudaCode(statusEdit)}</strong></p>
-                  </div>
-                  <button
-                    type="button"
-                    className="app-dialog-close ms-focus-ring"
-                    aria-label="Close status dialog"
-                    onClick={() => setStatusEdit(null)}
-                    disabled={saving}
-                  >
-                    ×
-                  </button>
-                </div>
-                <FormGrid className="ui-form-grid--compact" onSubmit={saveStatusEdit}>
-                  <Field label="Status">
-                    <Select value={statusValue} onChange={(e) => setStatusValue(e.target.value)}>
-                      <option value="open">Open</option>
-                      <option value="advance_paid">Advance paid</option>
-                      <option value="settled">Settled</option>
-                      <option value="disputed">Disputed</option>
-                    </Select>
-                  </Field>
-                  <FormActions>
-                    <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save status'}</Button>
-                    <Button className="secondary" type="button" onClick={() => setStatusEdit(null)} disabled={saving}>Cancel</Button>
-                  </FormActions>
-                </FormGrid>
-              </>
-            ) : null}
-          </dialog>
-
           <TablePager
             total={pageData.total}
             index={pageData.index}
@@ -702,13 +776,6 @@ export function PurchaseApp() {
             onNext={() => setPage((current) => current + 1)}
           />
         </TableCard>
-
-        {canViewFinance(session) && (
-          <p className="hint" style={{ marginTop: 12 }}>
-            Rate visibility is server-controlled. Listed rate values, where permitted:{' '}
-            {filteredSaudas.slice(0, 3).map((sauda) => `${saudaCode(sauda)} ${money(sauda.rate_paise_per_qtl)}/qtl`).join(' · ') || '—'}
-          </p>
-        )}
       </section>
     </main>
   );

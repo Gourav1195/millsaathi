@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   allocateProportionalKg,
   calculateCommercialValue,
+  deriveRatePaiseFromTotalValue,
   deriveAverageKgPerBag,
   fixedPackageKg,
   formatBagCount,
@@ -15,7 +16,10 @@ import {
   formatCommercialQuantity,
   normalizeCommercialQuantityInput,
   normalizeItemQuantityInput,
+  proRateSaudaValuePaise,
   rejectVariableBagFixedConversion,
+  resolveSaudaCommercialInput,
+  saudaAgreedValuePaise,
   validateItemTrackingConfig,
 } from '../shared/quantity.ts';
 
@@ -120,6 +124,35 @@ import {
 {
   assert.equal(calculateCommercialValue({ qtyKg: 6250, bagCount: 30, rateInr: 250, rateUnit: 'BAG' }), 750000);
   assert.equal(calculateCommercialValue({ qtyKg: 1875, rateInr: 200, rateUnit: 'QTL' }), 375000);
+  assert.equal(
+    deriveRatePaiseFromTotalValue({ totalValuePaise: 750000, qtyKg: 0, quantity: 30, unit: 'BAG' }),
+    25000,
+  );
+  assert.equal(
+    deriveRatePaiseFromTotalValue({ totalValuePaise: 375000, qtyKg: 1875, quantity: 18.75, unit: 'QUINTAL' }),
+    20000,
+  );
+}
+
+// Sauda agreed value
+{
+  const bagSauda = {
+    agreed_value_paise: 750000,
+    agreed_quantity: 30,
+    agreed_unit: 'BAG',
+    qty_kg: 0,
+    rate_paise_per_qtl: 25000,
+  };
+  assert.equal(saudaAgreedValuePaise(bagSauda), 750000);
+  assert.equal(proRateSaudaValuePaise(bagSauda, 0, 10), 250000);
+  const resolved = resolveSaudaCommercialInput({
+    valuePaise: 375000,
+    quantity: 18.75,
+    unit: 'QUINTAL',
+    qtyKg: 1875,
+  });
+  assert.equal(resolved?.agreedValuePaise, 375000);
+  assert.equal(resolved?.ratePaisePerUnit, 20000);
 }
 
 // Commercial quantity units and normalization

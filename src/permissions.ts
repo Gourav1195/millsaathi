@@ -107,6 +107,9 @@ function slimSauda(row: Record<string, unknown>) {
     agreed_quantity: row.agreed_quantity,
     agreed_unit: row.agreed_unit,
     fulfilled_qty_base: row.fulfilled_qty_base,
+    agreed_value_paise: row.agreed_value_paise,
+    rate_paise_per_qtl: row.rate_paise_per_qtl,
+    moisture_pct: row.moisture_pct,
     status: row.status,
     fulfilment_status: row.fulfilment_status,
     supplier_name: row.supplier_name,
@@ -115,10 +118,46 @@ function slimSauda(row: Record<string, unknown>) {
   };
 }
 
+function stockLinkedSaudas(body: Record<string, unknown>) {
+  return (body.saudas as Record<string, unknown>[] | undefined)?.map(slimSauda) ?? [];
+}
+
 function slimLot(row: Record<string, unknown>) {
   const copy = { ...row };
   delete copy.value_paise;
   return copy;
+}
+
+function slimPurchaseLot(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    code: row.code,
+    sauda_id: row.sauda_id,
+    gate_token_no: row.gate_token_no,
+    gate_vehicle_no: row.gate_vehicle_no,
+    qty_kg: row.qty_kg,
+    value_paise: row.value_paise,
+    godown_name: row.godown_name,
+    in_date: row.in_date,
+    note: row.note,
+  };
+}
+
+function slimGateIntakeLine(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    gate_entry_id: row.gate_entry_id,
+    lot_id: row.lot_id,
+    sort_order: row.sort_order,
+    outcome: row.outcome,
+    bag_count: row.bag_count,
+    qty_kg: row.qty_kg,
+    rate_paise_per_qtl: row.rate_paise_per_qtl,
+    rate_paise_per_bag: row.rate_paise_per_bag,
+    rate_unit: row.rate_unit,
+    reason: row.reason,
+    gate_token_no: row.gate_token_no,
+  };
 }
 
 /** Shape the monolithic overview payload to the caller's role. */
@@ -165,7 +204,11 @@ export function shapeOverviewPayload(user: SessionUser, body: Record<string, unk
       alerts: body.alerts,
       items: (body.items as Record<string, unknown>[] | undefined)?.map(slimItem) ?? [],
       lots: (body.lots as Record<string, unknown>[] | undefined)?.map(slimLot) ?? [],
+      gate_intake_lines: (body.gate_intake_lines as Record<string, unknown>[] | undefined)?.map(slimGateIntakeLine) ?? [],
       godowns: body.godowns,
+      ...(hasCapability(user, 'stock:create') || hasCapability(user, 'stock:receive')
+        ? { saudas: stockLinkedSaudas(body) }
+        : {}),
       stock_by_item: body.stock_by_item,
       item_flows: body.item_flows,
       processing_summary: body.processing_summary,
@@ -188,6 +231,8 @@ export function shapeOverviewPayload(user: SessionUser, body: Record<string, unk
       buyers: body.buyers,
       saudas: body.saudas,
       items: (body.items as Record<string, unknown>[] | undefined)?.map(slimItem) ?? [],
+      lots: (body.lots as Record<string, unknown>[] | undefined)?.map(slimPurchaseLot) ?? [],
+      gate_intake_lines: (body.gate_intake_lines as Record<string, unknown>[] | undefined)?.map(slimGateIntakeLine) ?? [],
       stock_by_item: body.stock_by_item,
       gate: (body.gate as Record<string, unknown>[] | undefined)?.map((row) => ({
         id: row.id,
@@ -215,6 +260,9 @@ export function shapeOverviewPayload(user: SessionUser, body: Record<string, unk
   if (role === 'manager' || role === 'operator') {
     const redacted = applyFinancePolicy(user, { ...body, me }) as Record<string, unknown>;
     delete redacted.saudas;
+    if (hasCapability(user, 'stock:create') || hasCapability(user, 'stock:receive')) {
+      redacted.saudas = stockLinkedSaudas(body);
+    }
     return redacted;
   }
 

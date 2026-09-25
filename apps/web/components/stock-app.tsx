@@ -23,10 +23,20 @@ import {
   TableFilters,
   TablePager,
   Textarea,
+  Tab,
+  TabRow,
 } from './ui';
 import { millHeaderMeta } from '../lib/app-meta';
 import { filterRows, paginate, PAGE_SIZE, uniqueValues } from '../lib/list-view';
-import { formatDate, formatQtl, formatRupee } from '../lib/format';
+import { formatDate, formatQtl, formatRupee, formatSaudaCode } from '../lib/format';
+import {
+  proRatedSaudaValuePaise,
+  qtlFromKg,
+  saudaIsOpenForStock,
+  saudaMatchesQuery,
+  saudaRemainingKg,
+  type SaudaStockRef,
+} from '../lib/sauda-stock';
 import { useOperationalCounts } from '../lib/operational-counts';
 import { TableClampedText } from './table-cell-detail';
 import { TableEditCell, TableEditModeButton } from './table-edit-mode';
@@ -36,10 +46,13 @@ import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 import { groupLotsForDisplay } from '../lib/stock-groups';
 import { stockReceiptBagInfo, stockReceiptRemainingKg } from '../lib/stock-receipts';
+import { receiptProRatedValuePaise } from '../lib/stock-settlement';
 import { splitLot } from '../lib/chain-run';
 import { formatDualQuantity, itemUsesVariableBags } from '../../../shared/quantity';
 import { StockSettlementDialog } from './stock-settlement-dialog';
 import { StockLedger } from './stock-ledger';
+import { LotValueCell } from './lot-value-cell';
+import { intakeLinesByGate, type GateIntakeLineRef } from '../lib/lot-value-breakdown';
 
 type Lot = {
   id: string;
@@ -58,6 +71,7 @@ type Lot = {
   note?: string | null;
   sauda_id?: string | null;
   sauda_code?: string | null;
+  gate_entry_id?: string | null;
   gate_token_no?: string | null;
 };
 
@@ -90,6 +104,8 @@ type Receipt = {
 
 type Overview = {
   lots: Lot[];
+  gate_intake_lines?: GateIntakeLineRef[];
+  saudas?: SaudaStockRef[];
   godowns: Godown[];
   items: Item[];
   pending_receipts: Receipt[];
@@ -105,7 +121,12 @@ type LotForm = {
   note: string;
 };
 
+type NewLotMode = 'sauda' | 'manual';
+
 type NewLotForm = {
+  mode: NewLotMode;
+  sauda_id: string;
+  saudaQuery: string;
   godown_id: string;
   item_id: string;
   quantity: string;
@@ -136,6 +157,9 @@ const initialEditForm = (lot: Lot): LotForm => ({
 });
 
 const emptyNewForm = (godownId = ''): NewLotForm => ({
+  mode: 'sauda',
+  sauda_id: '',
+  saudaQuery: '',
   godown_id: godownId,
   item_id: '',
   quantity: '',
@@ -150,11 +174,6 @@ function godownFill(stockKg: number, capacityKg: number) {
   if (fill > 85) return { fill, tone: 'danger' as const };
   if (fill > 60) return { fill, tone: 'warning' as const };
   return { fill, tone: 'success' as const };
-}
-
-function receiptValue(receipt: Receipt, qtyKg?: number) {
-  const quantityKg = qtyKg ?? stockReceiptRemainingKg(receipt);
-  return Math.round(Math.max(0, quantityKg) * ((receipt.sauda_rate_paise_per_qtl ?? 0) / 100));
 }
 
 function ExpandChevron({ expanded }: { expanded: boolean }) {
@@ -280,6 +299,33 @@ export function StockApp() {
   const godownOptions = useMemo(() => uniqueValues(overview?.lots ?? [], (lot) => lot.godown_name), [overview]);
   const itemOptions = useMemo(() => uniqueValues(overview?.lots ?? [], (lot) => lot.item_name), [overview]);
 
+  const saudaById = useMemo(
+    () => new Map((overview?.saudas ?? []).map((sauda) => [sauda.id, sauda])),
+    [overview?.saudas],
+  );
+  const eligibleSaudas = useMemo(
+    () => (overview?.saudas ?? []).filter(saudaIsOpenForStock),
+    [overview?.saudas],
+  );
+  const filteredEligibleSaudas = useMemo(() => {
+    const filtered = eligibleSaudas.filter((sauda) => saudaMatchesQuery(sauda, newForm.saudaQuery));
+    if (newForm.sauda_id && !filtered.some((sauda) => sauda.id === newForm.sauda_id)) {
+      const selected = saudaById.get(newForm.sauda_id);
+      if (selected) return [selected, ...filtered];
+    }
+    return filtered;
+  }, [eligibleSaudas, newForm.saudaQuery, newForm.sauda_id, saudaById]);
+  const selectedNewSauda = newForm.sauda_id ? saudaById.get(newForm.sauda_id) ?? null : null;
+  const newFormQtyKg = Number(newForm.quantity) > 0 ? Number(newForm.quantity) * 100 : 0;
+  const derivedSaudaValuePaise = selectedNewSauda && newFormQtyKg > 0
+    ? proRatedSaudaValuePaise(selectedNewSauda, newFormQtyKg)
+    : 0;
+
+  const intakeByGate = useMemo(
+    () => intakeLinesByGate(overview?.gate_intake_lines ?? []),
+    [overview?.gate_intake_lines],
+  );
+
   const pending = overview?.pending_receipts ?? [];
   const rejected = overview?.rejected_receipts ?? [];
   const shownReceipts = receiptsExpanded ? pending : pending.slice(0, 1);
@@ -395,29 +441,48 @@ export function StockApp() {
     event.preventDefault();
     const quantityValue = Number(newForm.quantity);
     const moisture = newForm.moisture === '' ? null : Number(newForm.moisture);
-    const valuePaise = newForm.value === '' ? 0 : Math.round(Number(newForm.value) * 100);
     if (
       !newForm.godown_id ||
-      !newForm.item_id ||
       !Number.isFinite(quantityValue) ||
       quantityValue <= 0 ||
-      (moisture != null && (!Number.isFinite(moisture) || moisture < 0 || moisture > 100)) ||
-      !Number.isFinite(valuePaise) ||
-      valuePaise < 0
+      (moisture != null && (!Number.isFinite(moisture) || moisture < 0 || moisture > 100))
     ) {
-      setError('Choose a godown and item, then enter a positive quantity.');
+      setError('Choose a godown and enter a positive quantity in quintals.');
       return;
     }
+
+    const selectedSauda = newForm.mode === 'sauda' ? selectedNewSauda : null;
+    if (newForm.mode === 'sauda') {
+      if (!selectedSauda) {
+        setError('Select a purchase sauda.');
+        return;
+      }
+    } else if (!newForm.item_id) {
+      setError('Choose an item for this manual lot.');
+      return;
+    }
+
+    const qtyKg = Math.round(quantityValue * 100);
+    const valuePaise = newForm.mode === 'sauda'
+      ? derivedSaudaValuePaise
+      : (newForm.value === '' ? 0 : Math.round(Number(newForm.value) * 100));
+    if (newForm.mode === 'manual' && (!Number.isFinite(valuePaise) || valuePaise < 0)) {
+      setError('Enter a non-negative value.');
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
-      await api(
+      const result = await api<{ warning?: boolean }>(
         '/api/lots',
         json('POST', {
           godown_id: newForm.godown_id,
-          item_id: newForm.item_id,
+          item_id: newForm.mode === 'sauda' ? selectedSauda!.item_id : newForm.item_id,
+          sauda_id: newForm.mode === 'sauda' ? selectedSauda!.id : undefined,
           quantity: quantityValue,
           unit: 'QUINTAL',
+          qty_kg: qtyKg,
           moisture_pct: moisture,
           value_paise: valuePaise,
           note: newForm.note || null,
@@ -426,6 +491,7 @@ export function StockApp() {
       setShowNew(false);
       setNewForm(emptyNewForm(overview?.godowns[0]?.id ?? ''));
       await load();
+      if (result.warning) setError('Lot saved, but this receipt exceeds the sauda tolerance.');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create stock lot');
     } finally {
@@ -457,7 +523,7 @@ export function StockApp() {
               ? { quantity: bagInfo.remainingBags, unit: 'BAG' }
               : {}),
           moisture_pct: receipt.moisture_pct ?? null,
-          value_paise: receiptValue(receipt, remainingKg),
+          value_paise: receiptProRatedValuePaise(receipt, remainingKg),
         }),
       );
       scheduleAcceptUndo({
@@ -598,6 +664,7 @@ export function StockApp() {
                       {receipt.token_no ?? 'Truck'} · {receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(remainingKg || receipt.net_kg)}
                       {bagInfo ? ` · ${bagInfo.remainingBags} bag${bagInfo.remainingBags === 1 ? '' : 's'} left` : ''}
                       {receipt.moisture_pct != null ? ` · ${pct(receipt.moisture_pct)}` : ''}
+                      {canMoney ? ` · stock value ${formatRupee(receiptProRatedValuePaise(receipt, remainingKg))}` : ''}
                     </p>
                     <p className="receipt-toast-hint">
                       Accept takes the full remaining truck into stock. Use Reject to split rejected bags and accepted bags at different rates.
@@ -685,7 +752,10 @@ export function StockApp() {
                   <div key={receipt.id} className="rejected-receipt">
                     <div>
                       <strong>{receipt.token_no ?? 'Truck'}</strong>
-                      <span>{receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(receipt.net_kg)}</span>
+                      <span>
+                        {receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(receipt.net_kg)}
+                        {canMoney ? ` · rejected value ${formatRupee(receiptProRatedValuePaise(receipt, receipt.net_kg ?? 0))}` : ''}
+                      </span>
                       {receipt.stock_note ? <span className="rejected-receipt-note">{receipt.stock_note}</span> : null}
                     </div>
                     {canEdit && receipt.can_reopen ? (
@@ -725,20 +795,77 @@ export function StockApp() {
 
         {showNew && (
           <Panel title="New lot">
+            <TabRow className="screen-section-tabs" aria-label="New lot source">
+              <Tab
+                selected={newForm.mode === 'sauda'}
+                onClick={() => setNewForm((current) => ({ ...emptyNewForm(current.godown_id), mode: 'sauda' }))}
+              >
+                From sauda
+              </Tab>
+              <Tab
+                selected={newForm.mode === 'manual'}
+                onClick={() => setNewForm((current) => ({ ...emptyNewForm(current.godown_id), mode: 'manual' }))}
+              >
+                Manual stock
+              </Tab>
+            </TabRow>
             <FormGrid className="ui-form-grid--compact" onSubmit={createLot}>
+              {newForm.mode === 'sauda' ? (
+                <>
+                  <Field label="Sauda">
+                    <Select
+                      required
+                      value={newForm.sauda_id}
+                      onChange={(e) => setNewForm((current) => ({
+                        ...current,
+                        sauda_id: e.target.value,
+                        moisture: saudaById.get(e.target.value)?.moisture_pct != null
+                          ? String(saudaById.get(e.target.value)!.moisture_pct)
+                          : current.moisture,
+                      }))}
+                      searchable
+                      searchValue={newForm.saudaQuery}
+                      onSearchChange={(value) => setNewForm((current) => ({ ...current, saudaQuery: value }))}
+                      searchPlaceholder="Search by code, party, or item…"
+                      emptyMessage={newForm.saudaQuery.trim() ? 'No saudas match this search' : 'No open purchase saudas'}
+                    >
+                      <option value="">Select sauda</option>
+                      {filteredEligibleSaudas.map((sauda) => (
+                        <option key={sauda.id} value={sauda.id}>{formatSaudaCode(sauda.code, sauda.direction)}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                  {selectedNewSauda ? (
+                    <div className="gate-sauda-summary">
+                      <dl className="gate-sauda-summary-grid">
+                        <div><dt>Sauda</dt><dd>{formatSaudaCode(selectedNewSauda.code, selectedNewSauda.direction)}</dd></div>
+                        <div><dt>Party</dt><dd>{selectedNewSauda.supplier_name ?? '—'}</dd></div>
+                        <div><dt>Item</dt><dd>{selectedNewSauda.item_name ?? '—'}</dd></div>
+                        <div><dt>Agreed</dt><dd>{qtlFromKg(selectedNewSauda.qty_kg)}</dd></div>
+                        <div><dt>Delivered</dt><dd>{qtlFromKg(selectedNewSauda.fulfilled_qty_base)}</dd></div>
+                        <div><dt>Remaining</dt><dd>{qtlFromKg(saudaRemainingKg(selectedNewSauda))}</dd></div>
+                        {canMoney && newFormQtyKg > 0 ? (
+                          <div><dt>Value</dt><dd>{formatRupee(derivedSaudaValuePaise)}</dd></div>
+                        ) : null}
+                      </dl>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <Field label="Item">
+                  <Select required value={newForm.item_id} onChange={(e) => setNewForm({ ...newForm, item_id: e.target.value })}>
+                    <option value="">Choose item</option>
+                    {(overview?.items ?? []).map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
               <Field label="Godown">
                 <Select required value={newForm.godown_id} onChange={(e) => setNewForm({ ...newForm, godown_id: e.target.value })}>
                   <option value="">Choose godown</option>
                   {(overview?.godowns ?? []).map((godown) => (
                     <option key={godown.id} value={godown.id}>{godown.name}</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Item">
-                <Select required value={newForm.item_id} onChange={(e) => setNewForm({ ...newForm, item_id: e.target.value })}>
-                  <option value="">Choose item</option>
-                  {(overview?.items ?? []).map((item) => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
                   ))}
                 </Select>
               </Field>
@@ -748,9 +875,14 @@ export function StockApp() {
               <Field label="Moisture %">
                 <Input type="number" min="0" max="100" step="0.1" value={newForm.moisture} onChange={(e) => setNewForm({ ...newForm, moisture: e.target.value })} />
               </Field>
-              {canMoney ? (
+              {canMoney && newForm.mode === 'manual' ? (
                 <Field label="Value ₹">
                   <Input type="number" min="0" step="1" value={newForm.value} onChange={(e) => setNewForm({ ...newForm, value: e.target.value })} />
+                </Field>
+              ) : null}
+              {canMoney && newForm.mode === 'sauda' && selectedNewSauda && newFormQtyKg > 0 ? (
+                <Field label="Value ₹">
+                  <p className="muted">{formatRupee(derivedSaudaValuePaise)} pro-rated from sauda rate</p>
                 </Field>
               ) : null}
               <Field label="Note">
@@ -937,7 +1069,11 @@ export function StockApp() {
                 <td><strong>{formatQtl(lot.qty_kg)}</strong></td>
                 <td>{pct(lot.moisture_pct)}</td>
                 <td className="muted">{lot.in_date ? formatDate(lot.in_date) : '—'}</td>
-                {canMoney ? <td><strong>{formatRupee(lot.value_paise)}</strong></td> : null}
+                {canMoney ? (
+                  <td>
+                    <LotValueCell lot={lot} intakeByGate={intakeByGate} />
+                  </td>
+                ) : null}
                 <td className="table-note-col"><TableClampedText text={lot.note} /></td>
               </tr>
             )) : (

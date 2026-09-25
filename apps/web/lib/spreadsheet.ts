@@ -216,7 +216,7 @@ export function mapSaudaImportRows(rows: SpreadsheetRow[]) {
     item: ['item', 'material', 'item_name'],
     quantity: ['quantity', 'qty'],
     unit: ['unit'],
-    rate: ['rate', 'rate_qtl', 'rate_qtl_'],
+    total_value: ['total_value', 'value', 'total_value_', 'deal_value', 'rate', 'rate_qtl', 'rate_qtl_'],
     broker: ['broker', 'broker_name'],
     moisture_pct: ['moisture_pct', 'moisture'],
     agreement_date: ['agreement_date', 'date'],

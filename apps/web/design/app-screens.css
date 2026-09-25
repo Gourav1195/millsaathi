@@ -430,6 +430,23 @@
 }
 .gate-sauda-summary-grid dt { margin: 0; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
 .gate-sauda-summary-grid dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.lot-value-cell { display: inline-flex; align-items: center; gap: 6px; }
+.lot-value-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--muted-bg);
+  color: var(--muted);
+  font: 700 11px/1 'IBM Plex Sans', sans-serif;
+  cursor: help;
+}
+.lot-value-info:hover,
+.lot-value-info:focus-visible { color: var(--ink); border-color: var(--gold); }
 .gate-weigh-fields {
   grid-column: 1 / -1;
   display: grid;

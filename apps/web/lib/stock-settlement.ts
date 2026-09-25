@@ -26,6 +26,39 @@ export function receiptDefaultRatePaise(receipt: { sauda_rate_paise_per_qtl?: nu
   return receipt.sauda_rate_paise_per_qtl ?? receipt.gate_rate_paise_per_qtl ?? 0;
 }
 
+/** Pro-rate truck deal value by received kg using the agreed sauda or gate rate. */
+export function receiptProRatedValuePaise(
+  receipt: { sauda_rate_paise_per_qtl?: number; gate_rate_paise_per_qtl?: number },
+  qtyKg: number,
+) {
+  return Math.round(Math.max(0, qtyKg) * (receiptDefaultRatePaise(receipt) / 100));
+}
+
+function lineNominalPaiseAtAgreedRate(
+  amount: number,
+  usesBags: boolean,
+  agreedRatePaisePerQtl: number,
+  averageKgPerBag: number | null,
+) {
+  if (usesBags) {
+    const kgPerBag = averageKgPerBag && averageKgPerBag > 0 ? averageKgPerBag : 0;
+    return Math.round(amount * kgPerBag * (agreedRatePaisePerQtl / 100));
+  }
+  return Math.round(amount * agreedRatePaisePerQtl);
+}
+
+function linePayablePaise(
+  line: SettlementLineDraft,
+  amount: number,
+  usesBags: boolean,
+) {
+  const rateInr = Number(line.rate_inr);
+  if (!Number.isFinite(rateInr) || rateInr < 0) return 0;
+  return usesBags
+    ? Math.round(amount * rateInr * 100)
+    : Math.round(amount * 100 * rateInr);
+}
+
 export function settlementUsesBags(receipt: StockReceiptRow, items: StockReceiptItem[]) {
   return stockReceiptBagInfo(receipt, items) != null;
 }
@@ -41,30 +74,53 @@ export function settlementRemainingQtl(receipt: StockReceiptRow) {
 export function summarizeSettlementLines(
   lines: SettlementLineDraft[],
   usesBags: boolean,
-): { allocated: number; accepted: number; rejected: number; payablePaise: number; remaining: number } {
+  agreedRatePaisePerQtl = 0,
+  averageKgPerBag: number | null = null,
+): {
+  allocated: number;
+  accepted: number;
+  rejected: number;
+  payablePaise: number;
+  rejectedValuePaise: number;
+  qualityReductionPaise: number;
+  nominalDealPaise: number;
+  remaining: number;
+} {
   let allocated = 0;
   let accepted = 0;
   let rejected = 0;
   let payablePaise = 0;
+  let rejectedValuePaise = 0;
+  let qualityReductionPaise = 0;
+  let nominalDealPaise = 0;
 
   for (const line of lines) {
     const amount = usesBags ? Number(line.bags) : Number(line.quantity_qtl);
     if (!Number.isFinite(amount) || amount <= 0) continue;
     allocated += amount;
+    const nominalPaise = lineNominalPaiseAtAgreedRate(amount, usesBags, agreedRatePaisePerQtl, averageKgPerBag);
+    nominalDealPaise += nominalPaise;
     if (line.outcome === 'ACCEPTED') {
       accepted += amount;
-      const rateInr = Number(line.rate_inr);
-      if (Number.isFinite(rateInr) && rateInr >= 0) {
-        payablePaise += usesBags
-          ? Math.round(amount * rateInr * 100)
-          : Math.round(amount * 100 * rateInr);
-      }
+      const negotiatedPaise = linePayablePaise(line, amount, usesBags);
+      payablePaise += negotiatedPaise;
+      qualityReductionPaise += Math.max(0, nominalPaise - negotiatedPaise);
     } else {
       rejected += amount;
+      rejectedValuePaise += nominalPaise;
     }
   }
 
-  return { allocated, accepted, rejected, payablePaise, remaining: 0 };
+  return {
+    allocated,
+    accepted,
+    rejected,
+    payablePaise,
+    rejectedValuePaise,
+    qualityReductionPaise,
+    nominalDealPaise,
+    remaining: 0,
+  };
 }
 
 export function validateSettlementLines(

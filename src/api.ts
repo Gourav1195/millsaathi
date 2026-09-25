@@ -38,6 +38,7 @@ import {
   type ItemTrackingConfig,
   type TrackingMode,
 } from '../shared/quantity';
+import { proRateSaudaValuePaise, resolveSaudaCommercialInput } from '../shared/quantity';
 import {
   buildStepProfile,
   loadChainRunDetail,
@@ -48,6 +49,7 @@ import {
 } from './chainRunExecution';
 import { ensureRiceMillChainTemplates } from './chainBatch';
 import { settleGateIntake, type SettlementLineInput } from './gateIntakeSettlement';
+import { gateIntakeLineInsertStatement, gateIntakeLineCount, nextGateIntakeSortOrder } from './gateIntakeLines';
 import {
   gateAllocatedKg,
   groupStockLots,
@@ -215,6 +217,47 @@ function isSupportAdmin(user: { email: string }): boolean {
   return user.email.trim().toLowerCase() === SUPPORT_ADMIN_EMAIL;
 }
 
+async function recordManualSaudaDelivery(
+  db: D1Database,
+  millId: string,
+  saudaId: string,
+  lotId: string,
+  lotEntry: { quantity: number; unit: string; base: number },
+  weightKg: number,
+  godownId: string | null,
+  note: string | null,
+  deliveryDate: string,
+) {
+  const sauda = await db.prepare(
+    `SELECT id, qty_kg, agreed_quantity, agreed_unit, delivery_tolerance_pct
+     FROM saudas WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`,
+  ).bind(saudaId, millId).first<{ id: string; qty_kg: number; agreed_quantity: number | null; agreed_unit: string | null; delivery_tolerance_pct: number | null }>();
+  if (!sauda) throw new Error('sauda not found');
+  const agreedUnit = String(sauda.agreed_unit ?? 'KG').trim().toUpperCase();
+  const agreedBase = agreedUnit === 'BAG'
+    ? Number(sauda.agreed_quantity ?? 0)
+    : sauda.qty_kg;
+  const delivered = await db.prepare(
+    `SELECT COALESCE(SUM(actual_qty_base),0) AS quantity FROM sauda_deliveries WHERE sauda_id = ? AND mill_id = ? AND status = 'POSTED'`,
+  ).bind(saudaId, millId).first<{ quantity: number }>();
+  const fulfilled = (delivered?.quantity || 0) + lotEntry.base;
+  const warning = fulfilled > agreedBase * (1 + (sauda.delivery_tolerance_pct || 5) / 100);
+  const deliveryId = uuid();
+  const notes = String(note ?? '').trim() || 'Manual stock receipt';
+  return {
+    warning,
+    deliveryId,
+    statements: [
+      db.prepare(
+        `INSERT INTO sauda_deliveries (id, mill_id, sauda_id, gate_entry_id, actual_qty, actual_unit, actual_qty_base, actual_weight_kg, actual_date, godown_id, lot_id, notes)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(deliveryId, millId, saudaId, lotEntry.quantity, lotEntry.unit, lotEntry.base, weightKg, deliveryDate, godownId, lotId, notes),
+      db.prepare(`UPDATE saudas SET fulfilment_status = ? WHERE id = ? AND mill_id = ?`)
+        .bind(fulfilled >= agreedBase ? 'FULFILLED' : 'PARTIALLY_FULFILLED', saudaId, millId),
+    ],
+  };
+}
+
 async function syncCompletedGate(c: any, gateId: string) {
   const { mill, user } = c.get('session');
   const db: D1Database = c.env.DB;
@@ -372,8 +415,8 @@ api.get('/overview', async (c) => {
       ).bind(mill.id, trend.start),
       db.prepare(
         `SELECT sa.*, s.name AS supplier_name, b.name AS buyer_name, i.name AS item_name,
-                sa.qty_kg * sa.rate_paise_per_qtl / 100 AS value_paise,
-                CASE sa.commission_type WHEN 'fixed' THEN COALESCE(sa.commission_paise, 0) WHEN 'per_unit' THEN COALESCE(sa.commission_value, 0) * sa.qty_kg / 100 WHEN 'percentage' THEN (sa.qty_kg * sa.rate_paise_per_qtl / 100) * COALESCE(sa.commission_value, 0) / 100 ELSE 0 END AS commission_paise,
+                sa.agreed_value_paise AS value_paise,
+                CASE sa.commission_type WHEN 'fixed' THEN COALESCE(sa.commission_paise, 0) WHEN 'per_unit' THEN COALESCE(sa.commission_value, 0) * sa.qty_kg / 100 WHEN 'percentage' THEN sa.agreed_value_paise * COALESCE(sa.commission_value, 0) / 100 ELSE 0 END AS commission_paise,
                 COALESCE((SELECT SUM(d.actual_qty_base) FROM sauda_deliveries d WHERE d.sauda_id = sa.id AND d.mill_id = sa.mill_id AND d.status = 'POSTED'), 0) AS fulfilled_qty_base
          FROM saudas sa
          LEFT JOIN suppliers s ON s.id = sa.supplier_id
@@ -402,7 +445,7 @@ api.get('/overview', async (c) => {
                      WHERE g.supplier_id = s.id AND g.direction='in' AND g.status='done'), 0) AS supplied_kg,
            (SELECT MAX(g.created_at) FROM gate_entries g WHERE g.supplier_id = s.id) AS last_at,
            MAX(0,
-             COALESCE((SELECT SUM(sa.qty_kg * sa.rate_paise_per_qtl / 100) FROM saudas sa
+             COALESCE((SELECT SUM(sa.agreed_value_paise) FROM saudas sa
                        WHERE sa.supplier_id = s.id AND sa.status <> 'disputed'), 0)
              - COALESCE((SELECT SUM(p.amount_paise) FROM payments p
                          WHERE p.party_kind='supplier' AND p.party_id = s.id AND p.direction='paid' AND p.status = 'POSTED'), 0)
@@ -462,6 +505,8 @@ api.get('/overview', async (c) => {
         ? db.prepare(
             `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
                     s.name AS supplier_name, i.name AS item_name, g.stock_note, g.updated_at,
+                    sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl,
+                    g.rate_paise_per_qtl AS gate_rate_paise_per_qtl,
                     CASE
                       WHEN g.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
                        AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
@@ -470,6 +515,7 @@ api.get('/overview', async (c) => {
              FROM gate_entries g
              LEFT JOIN suppliers s ON s.id = g.supplier_id
              LEFT JOIN items i ON i.id = g.item_id
+             LEFT JOIN saudas sa ON sa.id = g.sauda_id
              WHERE g.mill_id = ?
                AND g.direction = 'in'
                AND g.status = 'done'
@@ -585,8 +631,14 @@ api.get('/overview', async (c) => {
   const stockValuePaise = lots.reduce((a, l) => a + ((l.value_paise as number) ?? 0), 0);
   const purchaseValueToday = doneIn.reduce((a, g) => {
     const sauda = saudas.find((s) => s.id === g.sauda_id);
-    const rate = (sauda?.rate_paise_per_qtl as number) ?? 0;
-    return a + Math.round((Math.max(0, g.net_kg as number) * rate) / 100);
+    if (!sauda) return a;
+    return a + proRateSaudaValuePaise({
+      agreed_value_paise: sauda.agreed_value_paise as number,
+      rate_paise_per_qtl: sauda.rate_paise_per_qtl as number,
+      agreed_quantity: sauda.agreed_quantity as number,
+      agreed_unit: sauda.agreed_unit as string,
+      qty_kg: sauda.qty_kg as number,
+    }, Math.max(0, g.net_kg as number));
   }, 0);
   const salesValueToday = outToday.reduce(
     (a, g) => a + Math.round((Math.max(0, g.net_kg as number) * ((g.rate_paise_per_qtl as number) ?? 0)) / 100),
@@ -622,6 +674,24 @@ api.get('/overview', async (c) => {
   }
   if (labPending > 0) alerts.push({ level: 'amber', title: `${labPending} lab test${labPending > 1 ? 's' : ''} pending`, body: 'Trucks are waiting on moisture results at the lab.' });
 
+  let gateIntakeLines: Record<string, unknown>[] = [];
+  if (hasStockReceiptFields) {
+    const intakeTable = await db.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'gate_intake_lines'`,
+    ).first();
+    if (intakeTable) {
+      const intakeRes = await db.prepare(
+        `SELECT gil.*, g.token_no AS gate_token_no
+         FROM gate_intake_lines gil
+         JOIN gate_entries g ON g.id = gil.gate_entry_id AND g.mill_id = gil.mill_id
+         WHERE gil.mill_id = ?
+         ORDER BY gil.gate_entry_id, gil.sort_order, gil.created_at
+         LIMIT 5000`,
+      ).bind(mill.id).all();
+      gateIntakeLines = intakeRes.results as Record<string, unknown>[];
+    }
+  }
+
   const body = {
     me: { id: user.id, name: user.name, email: user.email, role: effectiveRole(user), preferred_unit: user.preferred_unit || 'QUINTAL', theme: user.theme || 'light' },
     mill: { id: mill.id, name: mill.name, mill_type: mill.mill_type || 'RICE', address: mill.address, phone: mill.phone, email: mill.email, gstin: mill.gstin, place_of_supply: mill.place_of_supply, plan: mill.plan, loss_limit_pct: mill.loss_limit_pct, season_label: mill.season_label, created_at: mill.created_at },
@@ -656,6 +726,7 @@ api.get('/overview', async (c) => {
     rejected_receipts: rejectedReceiptsRes.results,
     onboarding: { gate_count: activity.gate_count ?? 0, first_gate_date: activity.first_gate_date ?? null },
     gate: gateAll,
+    gate_intake_lines: gateIntakeLines,
     saudas,
     lots,
     godowns: godownsRes.results,
@@ -798,7 +869,6 @@ api.post('/saudas', async (c) => {
   if (direction === 'out' && !String(b.buyer_id ?? '').trim()) return c.json({ error: 'buyer_id is required for sales saudas' }, 400);
   const agreedQuantity = b.quantity != null ? b.quantity : b.qty_kg;
   const agreedUnit = b.quantity != null ? (b.unit || 'QUINTAL') : 'KG';
-  const agreedRate = Number(b.rate_paise_per_qtl);
   const itemConfig = b.item_id ? await loadItemTrackingConfig(c.env.DB, mill.id, b.item_id) : null;
   let normalizedAgreement = itemConfig
     ? normalizeCommercialQuantityInput(itemConfig, agreedQuantity, agreedUnit)
@@ -812,7 +882,14 @@ api.post('/saudas', async (c) => {
     : (normalizedAgreement.baseUnit === 'BAG' || normalizedAgreement.baseUnit === 'PIECE'
       ? 0
       : Math.round(normalizedAgreement.base));
-  if (!Number.isFinite(agreedRate) || agreedRate < 0) return c.json({ error: 'rate_paise_per_qtl must be non-negative' }, 400);
+  const commercial = resolveSaudaCommercialInput({
+    valuePaise: b.value_paise != null ? Number(b.value_paise) : null,
+    ratePaise: b.rate_paise_per_qtl != null ? Number(b.rate_paise_per_qtl) : null,
+    quantity: normalizedAgreement.quantity,
+    unit: normalizedAgreement.unit,
+    qtyKg: canonicalQtyKg,
+  });
+  if (!commercial) return c.json({ error: 'value_paise or rate_paise_per_qtl is required' }, 400);
   const commissionType = String(b.commission_type ?? '').trim().toLowerCase();
   if (commissionType && !['fixed', 'per_unit', 'percentage'].includes(commissionType)) return c.json({ error: 'invalid commission type' }, 400);
   const commissionValue = commissionType ? Number(b.commission_value) : 0;
@@ -830,11 +907,11 @@ api.post('/saudas', async (c) => {
   const code = await nextSaudaCode(c.env.DB, mill.id, direction as 'in' | 'out');
   const id = uuid();
   await c.env.DB.prepare(
-    `INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, agreed_value_paise, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(id, mill.id, code, direction, (b.supplier_id as string) || null, (b.buyer_id as string) || null, String(b.broker_name ?? 'Direct'),
-      (b.item_id as string) || null, canonicalQtyKg, normalizedAgreement.quantity, normalizedAgreement.unit, Math.round(agreedRate),
+      (b.item_id as string) || null, canonicalQtyKg, normalizedAgreement.quantity, normalizedAgreement.unit, commercial.agreedValuePaise, commercial.ratePaisePerUnit,
       b.moisture_pct != null ? Number(b.moisture_pct) : null, Math.round(Number(b.advance_paise) || 0), (b.note as string) || null, String(b.agreement_date ?? istToday()), deliveryStart, deliveryEnd, deliveryTolerance, commissionType || null, commissionType === 'percentage' || commissionType === 'per_unit' ? commissionValue : null, commissionType === 'fixed' ? Math.round(commissionValue * 100) : null)
     .run();
   return c.json({ id, code }, 201);
@@ -858,6 +935,20 @@ api.post('/lots', async (c) => {
   const denied = denyUnlessCapability(c, 'stock:create'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
+  const gateEntryId = (b.gate_entry_id as string) || null;
+  const saudaId = String(b.sauda_id ?? '').trim() || null;
+  if (saudaId && gateEntryId) return c.json({ error: 'link either a gate entry or a sauda, not both' }, 400);
+  if (saudaId) {
+    const sauda = await c.env.DB.prepare(
+      `SELECT id, direction, item_id FROM saudas WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`,
+    ).bind(saudaId, mill.id).first<{ id: string; direction: string; item_id: string | null }>();
+    if (!sauda) return c.json({ error: 'sauda not found' }, 400);
+    if (sauda.direction !== 'in') return c.json({ error: 'only purchase saudas can receive stock lots' }, 400);
+    if (sauda.item_id) {
+      if (b.item_id && b.item_id !== sauda.item_id) return c.json({ error: 'item does not match this sauda' }, 400);
+      b.item_id = sauda.item_id;
+    }
+  }
   const itemConfig = b.item_id ? await loadItemTrackingConfig(c.env.DB, mill.id, b.item_id) : null;
   let lotBagCount: number | null = b.bag_count != null ? Math.round(Number(b.bag_count)) : null;
   let lotWeightSource: string | null = b.weight_source != null ? String(b.weight_source) : null;
@@ -875,7 +966,43 @@ api.post('/lots', async (c) => {
   if (!lotEntry || lotEntry.base <= 0) return c.json({ error: 'positive quantity and a supported unit are required' }, 400);
   if (lotBagCount == null && 'bagCount' in lotEntry && lotEntry.bagCount != null) lotBagCount = lotEntry.bagCount;
   const lotQuantity = lotEntry.base;
-  const lotValue = b.value_paise == null ? 0 : Number(b.value_paise);
+  let lotValue = b.value_paise == null ? 0 : Number(b.value_paise);
+  if (saudaId && (!Number.isFinite(lotValue) || lotValue <= 0)) {
+    const saudaRow = await c.env.DB.prepare(
+      `SELECT agreed_value_paise, rate_paise_per_qtl, agreed_quantity, agreed_unit, qty_kg
+       FROM saudas WHERE id = ? AND mill_id = ?`,
+    ).bind(saudaId, mill.id).first<{
+      agreed_value_paise: number | null;
+      rate_paise_per_qtl: number | null;
+      agreed_quantity: number | null;
+      agreed_unit: string | null;
+      qty_kg: number;
+    }>();
+    if (saudaRow) {
+      lotValue = proRateSaudaValuePaise(saudaRow, lotQuantity, lotBagCount);
+    }
+  }
+  if (gateEntryId && (!Number.isFinite(lotValue) || lotValue <= 0)) {
+    const gateRow = await c.env.DB.prepare(
+      `SELECT sa.agreed_value_paise, sa.rate_paise_per_qtl, sa.agreed_quantity, sa.agreed_unit, sa.qty_kg,
+              g.rate_paise_per_qtl AS gate_rate_paise_per_qtl
+       FROM gate_entries g
+       LEFT JOIN saudas sa ON sa.id = g.sauda_id
+       WHERE g.id = ? AND g.mill_id = ?`,
+    ).bind(gateEntryId, mill.id).first<{
+      agreed_value_paise: number | null;
+      rate_paise_per_qtl: number | null;
+      agreed_quantity: number | null;
+      agreed_unit: string | null;
+      qty_kg: number | null;
+      gate_rate_paise_per_qtl: number | null;
+    }>();
+    if (gateRow?.agreed_value_paise) {
+      lotValue = proRateSaudaValuePaise({ ...gateRow, qty_kg: gateRow.qty_kg ?? 0 }, lotQuantity, lotBagCount);
+    } else if (gateRow?.gate_rate_paise_per_qtl) {
+      lotValue = Math.round(lotQuantity * (gateRow.gate_rate_paise_per_qtl / 100));
+    }
+  }
   if (!Number.isFinite(lotQuantity) || lotQuantity <= 0 || Math.round(lotQuantity) <= 0) return c.json({ error: 'qty_kg must be positive' }, 400);
   if (!Number.isFinite(lotValue) || lotValue < 0) return c.json({ error: 'value_paise must be non-negative' }, 400);
   if (b.moisture_pct != null && (!Number.isFinite(Number(b.moisture_pct)) || Number(b.moisture_pct) < 0 || Number(b.moisture_pct) > 100)) return c.json({ error: 'moisture_pct must be between 0 and 100' }, 400);
@@ -883,7 +1010,6 @@ api.post('/lots', async (c) => {
   if (b.godown_id && !await c.env.DB.prepare(`SELECT id FROM godowns WHERE id = ? AND mill_id = ? AND active = 1`).bind(b.godown_id, mill.id).first()) return c.json({ error: 'godown not found' }, 400);
   const code = await nextCode(c.env.DB, mill.id, 'lot', 'LOT');
   const id = uuid();
-  const gateEntryId = (b.gate_entry_id as string) || null;
   const [lotColumnsRes, gateColumnsRes] = await c.env.DB.batch([
     c.env.DB.prepare(`PRAGMA table_info(lots)`),
     c.env.DB.prepare(`PRAGMA table_info(gate_entries)`),
@@ -909,7 +1035,7 @@ api.post('/lots', async (c) => {
   }
   if (lotColumns.has('sauda_id')) {
     columns.push('sauda_id');
-    values.push(null);
+    values.push(saudaId);
   }
   if (lotColumns.has('received_qty_kg')) {
     columns.push('received_qty_kg');
@@ -979,14 +1105,71 @@ api.post('/lots', async (c) => {
         values[columns.indexOf('weight_source')] = 'WEIGHED';
       }
     }
+    const gateIntakeStatements: D1PreparedStatement[] = [];
+    const intakeTable = await c.env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'gate_intake_lines'`,
+    ).first();
+    if (intakeTable) {
+      const rateRow = await c.env.DB.prepare(
+        `SELECT COALESCE(g.rate_paise_per_qtl, sa.rate_paise_per_qtl, 0) AS rate_paise_per_qtl
+         FROM gate_entries g
+         LEFT JOIN saudas sa ON sa.id = g.sauda_id
+         WHERE g.id = ? AND g.mill_id = ?`,
+      ).bind(gateEntryId, mill.id).first<{ rate_paise_per_qtl: number | null }>();
+      const sortOrder = await nextGateIntakeSortOrder(c.env.DB, mill.id, gateEntryId);
+      gateIntakeStatements.push(gateIntakeLineInsertStatement(c.env.DB, uuid(), {
+        millId: mill.id,
+        gateEntryId,
+        lotId: id,
+        userId: c.get('session').user.id,
+        sortOrder,
+        outcome: 'ACCEPTED',
+        qtyKg: Math.round(lotQuantity),
+        bagCount: lotBagCount,
+        ratePaisePerQtl: Math.round(rateRow?.rate_paise_per_qtl ?? 0),
+        ratePaisePerBag: null,
+        rateUnit: 'QTL',
+        reason: null,
+        weightSource: (lotWeightSource === 'DERIVED' || lotWeightSource === 'MANUAL' ? lotWeightSource : 'WEIGHED'),
+      }));
+    }
     await c.env.DB.batch([
-      inserts, ...(stockInsert ? [stockInsert] : []),
+      inserts, ...(stockInsert ? [stockInsert] : []), ...gateIntakeStatements,
       c.env.DB.prepare(`UPDATE sauda_deliveries SET lot_id = COALESCE(lot_id, ?), godown_id = COALESCE(godown_id, ?) WHERE mill_id = ? AND gate_entry_id = ? AND lot_id IS NULL`)
         .bind(id, (b.godown_id as string) || null, mill.id, gateEntryId),
     ]);
     await syncGateStockStatus(c.env.DB, mill.id, gateEntryId);
   } else {
-    if (stockInsert) await c.env.DB.batch([inserts, stockInsert]); else await inserts.run();
+    const statements: D1PreparedStatement[] = [inserts];
+    if (stockInsert) statements.push(stockInsert);
+    if (saudaId) {
+      try {
+        const delivery = await recordManualSaudaDelivery(
+          c.env.DB,
+          mill.id,
+          saudaId,
+          id,
+          lotEntry,
+          Math.round(lotQuantity),
+          (b.godown_id as string) || null,
+          (b.note as string) || null,
+          (b.in_date as string) || istToday(),
+        );
+        statements.push(...delivery.statements);
+        await c.env.DB.batch(statements);
+        await audit(
+          c,
+          'sauda_delivery',
+          delivery.deliveryId,
+          'CREATE',
+          delivery.warning ? 'Delivery exceeds configured tolerance' : 'Created from manual stock lot',
+        );
+        return c.json({ id, code, warning: delivery.warning || undefined }, 201);
+      } catch (cause) {
+        return c.json({ error: cause instanceof Error ? cause.message : 'could not record sauda delivery' }, 400);
+      }
+    }
+    if (stockInsert) await c.env.DB.batch(statements); else await inserts.run();
   }
   return c.json({ id, code }, 201);
 });
@@ -1029,7 +1212,7 @@ api.post('/saudas/:id/deliveries', async (c) => {
   if ((!q || q.base <= 0) && actualUnit === 'BAG' && itemConfig?.tracking_mode === 'VARIABLE_BAG') {
     const bags = b.actual_qty != null ? Math.round(Number(b.actual_qty)) : linkedGateBags;
     if (bags == null || !Number.isInteger(bags) || bags <= 0) return c.json({ error: 'actual delivered bags are required' }, 400);
-    q = { quantity: bags, unit: 'BAG', base: bags, baseUnit: 'BAG', bagCount: bags };
+    q = { quantity: bags, unit: 'BAG', base: bags, baseUnit: 'BAG', bagCount: bags } as NormalizedItemQty;
   }
   if (!q || q.base <= 0) return c.json({ error: 'actual_qty and a supported unit are required' }, 400);
   const actualWeightKg = b.actual_weight_kg == null
@@ -1095,21 +1278,21 @@ api.post('/sauda-deliveries/:id/void', async (c) => {
 api.get('/saudas/export.csv', async (c) => {
   const denied = denyUnlessCapability(c, 'finance:export'); if (denied) return denied;
   const { mill } = c.get('session');
-  const result = await c.env.DB.prepare(`SELECT sa.code, sa.direction, COALESCE(b.name, s.name) AS party, i.name AS item, sa.agreed_quantity AS quantity, sa.agreed_unit AS unit, sa.rate_paise_per_qtl, sa.broker_name, sa.moisture_pct, sa.agreement_date, sa.delivery_start, sa.delivery_end, sa.delivery_tolerance_pct, sa.commission_type, sa.commission_value, sa.commission_paise, sa.advance_paise, sa.status, sa.note FROM saudas sa LEFT JOIN suppliers s ON s.id = sa.supplier_id LEFT JOIN buyers b ON b.id = sa.buyer_id LEFT JOIN items i ON i.id = sa.item_id WHERE sa.mill_id = ? AND sa.deleted_at IS NULL ORDER BY sa.created_at DESC`).bind(mill.id).all<Record<string, unknown>>();
+  const result = await c.env.DB.prepare(`SELECT sa.code, sa.direction, COALESCE(b.name, s.name) AS party, i.name AS item, sa.agreed_quantity AS quantity, sa.agreed_unit AS unit, sa.agreed_value_paise, sa.broker_name, sa.moisture_pct, sa.agreement_date, sa.delivery_start, sa.delivery_end, sa.delivery_tolerance_pct, sa.commission_type, sa.commission_value, sa.commission_paise, sa.advance_paise, sa.status, sa.note FROM saudas sa LEFT JOIN suppliers s ON s.id = sa.supplier_id LEFT JOIN buyers b ON b.id = sa.buyer_id LEFT JOIN items i ON i.id = sa.item_id WHERE sa.mill_id = ? AND sa.deleted_at IS NULL ORDER BY sa.created_at DESC`).bind(mill.id).all<Record<string, unknown>>();
   const safe = (value: unknown) => { const text = String(value ?? ''); return /^[=+\-@]/.test(text) ? "'" + text : text; };
   const cell = (value: unknown) => '"' + safe(value).replaceAll('"', '""') + '"';
-  const header = ['Code', 'Direction', 'Party', 'Item', 'Quantity', 'Unit', 'Rate (₹/qtl)', 'Broker', 'Moisture %', 'Agreement date', 'Delivery start', 'Delivery end', 'Tolerance %', 'Commission type', 'Commission value', 'Fixed commission (₹)', 'Advance (₹)', 'Status', 'Terms'];
-  const rows = result.results.map((row) => [row.code, row.direction, row.party, row.item, row.quantity, row.unit, Number(row.rate_paise_per_qtl || 0) / 100, row.broker_name, row.moisture_pct, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_value, Number(row.commission_paise || 0) / 100, Number(row.advance_paise || 0) / 100, row.status, row.note]);
+  const header = ['Code', 'Direction', 'Party', 'Item', 'Quantity', 'Unit', 'Total value (₹)', 'Broker', 'Moisture %', 'Agreement date', 'Delivery start', 'Delivery end', 'Tolerance %', 'Commission type', 'Commission value', 'Fixed commission (₹)', 'Advance (₹)', 'Status', 'Terms'];
+  const rows = result.results.map((row) => [row.code, row.direction, row.party, row.item, row.quantity, row.unit, Number(row.agreed_value_paise || 0) / 100, row.broker_name, row.moisture_pct, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_value, Number(row.commission_paise || 0) / 100, Number(row.advance_paise || 0) / 100, row.status, row.note]);
   return new Response([header, ...rows].map((row) => row.map(cell).join(',')).join('\r\n') + '\r\n', { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="millsaathi-saudas.csv"' } });
 });
 
 api.get('/saudas/import/template.csv', async (c) => {
   const denied = denyUnlessCapability(c, 'saudas:create'); if (denied) return denied;
-  const header = 'direction,party,item,quantity,unit,rate,broker,moisture_pct,agreement_date,delivery_start,delivery_end,delivery_tolerance_pct,commission_type,commission_value,advance,note\r\n';
+  const header = 'direction,party,item,quantity,unit,total_value,broker,moisture_pct,agreement_date,delivery_start,delivery_end,delivery_tolerance_pct,commission_type,commission_value,advance,note\r\n';
   return new Response(header, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="millsaathi-saudas-import-template.csv"' } });
 });
 
-type SaudaImportRow = { direction: string; supplier_id: string | null; buyer_id: string | null; item_id: string; quantity: number; unit: string; rate_paise_per_qtl: number; broker_name: string; moisture_pct: number | null; agreement_date: string; delivery_start: string | null; delivery_end: string | null; delivery_tolerance_pct: number; commission_type: string | null; commission_value: number; advance_paise: number; note: string | null };
+type SaudaImportRow = { direction: string; supplier_id: string | null; buyer_id: string | null; item_id: string; quantity: number; unit: string; agreed_value_paise: number; rate_paise_per_qtl: number; broker_name: string; moisture_pct: number | null; agreement_date: string; delivery_start: string | null; delivery_end: string | null; delivery_tolerance_pct: number; commission_type: string | null; commission_value: number; advance_paise: number; note: string | null };
 async function parseSaudaImportRows(db: D1Database, millId: string, rows: Record<string, unknown>[]) {
   const [suppliers, buyers, items] = await db.batch([
     db.prepare(`SELECT id, name FROM suppliers WHERE mill_id = ? AND deleted_at IS NULL`).bind(millId),
@@ -1121,7 +1304,8 @@ async function parseSaudaImportRows(db: D1Database, millId: string, rows: Record
   return rows.map((raw, index) => {
     const direction = String(raw.direction || '').trim().toLowerCase();
     const party = String(raw.party || '').trim().toLowerCase(), itemName = String(raw.item || '').trim().toLowerCase();
-    const quantity = Number(raw.quantity), unit = String(raw.unit || 'QUINTAL').trim().toUpperCase(), rate = Number(raw.rate);
+    const quantity = Number(raw.quantity), unit = String(raw.unit || 'QUINTAL').trim().toUpperCase();
+    const totalValue = Number(raw.total_value ?? raw.value ?? raw.rate);
     const tolerance = raw.delivery_tolerance_pct === '' || raw.delivery_tolerance_pct == null ? 5 : Number(raw.delivery_tolerance_pct);
     const commissionType = String(raw.commission_type || '').trim().toLowerCase();
     const commissionValue = Number(raw.commission_value || 0), moisture = raw.moisture_pct === '' || raw.moisture_pct == null ? null : Number(raw.moisture_pct);
@@ -1131,13 +1315,13 @@ async function parseSaudaImportRows(db: D1Database, millId: string, rows: Record
     else if (!party || !(direction === 'in' ? supplierIds : buyerIds).has(party)) error = `${direction === 'in' ? 'supplier' : 'buyer'} party was not found`;
     else if (!itemIds.has(itemName)) error = 'item was not found';
     else if (!Number.isFinite(quantity) || quantity <= 0 || !['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(unit)) error = 'quantity must be positive and use a supported unit';
-    else if (!Number.isFinite(rate) || rate < 0) error = 'rate must be a non-negative ₹/qtl value';
+    else if (!Number.isFinite(totalValue) || totalValue < 0) error = 'total_value must be a non-negative amount in ₹';
     else if (moisture != null && (!Number.isFinite(moisture) || moisture < 0 || moisture > 100)) error = 'moisture must be between 0 and 100';
     else if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance > 100) error = 'tolerance must be between 0 and 100';
     else if (start && end && start > end) error = 'delivery start must be before delivery end';
     else if (commissionType && !['fixed', 'per_unit', 'percentage'].includes(commissionType)) error = 'invalid commission type';
     else if (commissionType && (!Number.isFinite(commissionValue) || commissionValue < 0)) error = 'commission value must be non-negative';
-    const row: SaudaImportRow | null = error ? null : { direction, supplier_id: direction === 'in' ? supplierIds.get(party)! : null, buyer_id: direction === 'out' ? buyerIds.get(party)! : null, item_id: itemIds.get(itemName)!, quantity, unit, rate_paise_per_qtl: Math.round(rate * 100), broker_name: String(raw.broker || 'Direct').trim() || 'Direct', moisture_pct: moisture, agreement_date: String(raw.agreement_date || istToday()).trim() || istToday(), delivery_start: start, delivery_end: end, delivery_tolerance_pct: tolerance, commission_type: commissionType || null, commission_value: commissionValue, advance_paise: Math.round(Number(raw.advance || 0) * 100), note: String(raw.note || '').trim() || null };
+    const row: SaudaImportRow | null = error ? null : { direction, supplier_id: direction === 'in' ? supplierIds.get(party)! : null, buyer_id: direction === 'out' ? buyerIds.get(party)! : null, item_id: itemIds.get(itemName)!, quantity, unit, agreed_value_paise: Math.round(totalValue * 100), rate_paise_per_qtl: 0, broker_name: String(raw.broker || 'Direct').trim() || 'Direct', moisture_pct: moisture, agreement_date: String(raw.agreement_date || istToday()).trim() || istToday(), delivery_start: start, delivery_end: end, delivery_tolerance_pct: tolerance, commission_type: commissionType || null, commission_value: commissionValue, advance_paise: Math.round(Number(raw.advance || 0) * 100), note: String(raw.note || '').trim() || null };
     return { row_number: index + 1, error: error || null, row };
   });
 }
@@ -1166,8 +1350,18 @@ api.post('/saudas/import/commit', async (c) => {
     const quantity = await normalizeItemQuantity(c.env.DB, mill.id, row.item_id, row.quantity, row.unit);
     if (!quantity || quantity.base <= 0) return c.json({ error: 'one or more quantities cannot be converted for its item' }, 400);
     const code = await nextSaudaCode(c.env.DB, mill.id, row.direction);
-    await c.env.DB.prepare(`INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(uuid(), mill.id, code, row.direction, row.supplier_id, row.buyer_id, row.broker_name, row.item_id, Math.round(quantity.base), quantity.quantity, quantity.unit, row.rate_paise_per_qtl, row.moisture_pct, row.advance_paise, row.note, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_type === 'fixed' ? null : row.commission_value, row.commission_type === 'fixed' ? Math.round(row.commission_value * 100) : null).run();
+    const canonicalQtyKg = quantity.baseUnit === 'KG'
+      ? Math.round(quantity.base)
+      : (quantity.baseUnit === 'BAG' || quantity.baseUnit === 'PIECE' ? 0 : Math.round(quantity.base));
+    const commercial = resolveSaudaCommercialInput({
+      valuePaise: row.agreed_value_paise,
+      quantity: quantity.quantity,
+      unit: quantity.unit,
+      qtyKg: canonicalQtyKg,
+    });
+    if (!commercial) return c.json({ error: 'one or more rows have an invalid total value' }, 400);
+    await c.env.DB.prepare(`INSERT INTO saudas (id, mill_id, code, direction, supplier_id, buyer_id, broker_name, item_id, qty_kg, agreed_quantity, agreed_unit, agreed_value_paise, rate_paise_per_qtl, moisture_pct, advance_paise, note, agreement_date, delivery_start, delivery_end, delivery_tolerance_pct, commission_type, commission_value, commission_paise) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(uuid(), mill.id, code, row.direction, row.supplier_id, row.buyer_id, row.broker_name, row.item_id, canonicalQtyKg, quantity.quantity, quantity.unit, commercial.agreedValuePaise, commercial.ratePaisePerUnit, row.moisture_pct, row.advance_paise, row.note, row.agreement_date, row.delivery_start, row.delivery_end, row.delivery_tolerance_pct, row.commission_type, row.commission_type === 'fixed' ? null : row.commission_value, row.commission_type === 'fixed' ? Math.round(row.commission_value * 100) : null).run();
   }
   await audit(c, 'sauda_import', mill.id, 'CREATE', `${valid.length} saudas imported`);
   return c.json({ imported: valid.length });
@@ -1332,6 +1526,8 @@ api.get('/stock-receipts/rejected', async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
             s.name AS supplier_name, i.name AS item_name, g.stock_note, g.updated_at,
+            sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl,
+            g.rate_paise_per_qtl AS gate_rate_paise_per_qtl,
             CASE
               WHEN g.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
                AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
@@ -1340,6 +1536,7 @@ api.get('/stock-receipts/rejected', async (c) => {
      FROM gate_entries g
      LEFT JOIN suppliers s ON s.id = g.supplier_id
      LEFT JOIN items i ON i.id = g.item_id
+     LEFT JOIN saudas sa ON sa.id = g.sauda_id
      WHERE g.mill_id = ?
        AND g.direction = 'in'
        AND g.status = 'done'

@@ -1,4 +1,5 @@
 import { formatRupee } from './format';
+import { saudaAgreedValuePaise } from './sauda-stock';
 
 export type DetailRow = { label: string; value: string };
 
@@ -42,6 +43,10 @@ export type SaudaDetailSource = {
   commission_type?: string | null;
   commission_value?: number | null;
   commission_paise?: number | null;
+  rate_paise_per_qtl?: number | null;
+  agreed_quantity?: number | null;
+  agreed_unit?: string | null;
+  qty_kg?: number;
 };
 
 export function saudaDetailRows(sauda: SaudaDetailSource, showMoney: boolean): DetailRow[] {
@@ -56,6 +61,7 @@ export function saudaDetailRows(sauda: SaudaDetailSource, showMoney: boolean): D
   ];
   if (showMoney) {
     rows.splice(1, 0,
+      { label: 'Total value', value: formatRupee(saudaAgreedValuePaise(sauda)) },
       { label: 'Broker commission', value: saudaCommission(sauda) },
       { label: 'Advance', value: formatRupee(sauda.advance_paise ?? 0) },
     );

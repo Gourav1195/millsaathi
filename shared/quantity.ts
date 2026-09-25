@@ -224,6 +224,29 @@ export function calculateCommercialValue(params: {
   return Math.round(params.qtyKg * (ratePaise / 100));
 }
 
+/** Inverse of calculateCommercialValue — derive stored rate from an entered total deal value. */
+export function deriveRatePaiseFromTotalValue(params: {
+  totalValuePaise: number;
+  qtyKg: number;
+  quantity: number;
+  unit: string;
+}): number {
+  const total = Math.round(params.totalValuePaise);
+  if (!Number.isFinite(total) || total < 0) return 0;
+  const unit = String(params.unit).trim().toUpperCase();
+  if (unit === 'BAG' || unit === 'PIECE') {
+    const count = Math.round(params.quantity);
+    if (count <= 0) return 0;
+    return Math.round(total / count);
+  }
+  if (unit === 'KG') {
+    if (params.qtyKg <= 0) return 0;
+    return Math.round(total / params.qtyKg);
+  }
+  if (params.qtyKg <= 0) return 0;
+  return Math.round((total * 100) / params.qtyKg);
+}
+
 export function rejectVariableBagFixedConversion(trackingMode: TrackingMode, unit: string): boolean {
   return trackingMode === 'VARIABLE_BAG' && String(unit).trim().toUpperCase() === 'BAG';
 }
@@ -382,4 +405,86 @@ export function normalizeItemQuantityInput(
   }
 
   return null;
+}
+
+export type SaudaCommercialRow = {
+  agreed_value_paise?: number | null;
+  rate_paise_per_qtl?: number | null;
+  agreed_quantity?: number | null;
+  agreed_unit?: string | null;
+  qty_kg?: number;
+};
+
+/** Authoritative total deal value; falls back to legacy per-unit rate when needed. */
+export function saudaAgreedValuePaise(sauda: SaudaCommercialRow): number {
+  const stored = Number(sauda.agreed_value_paise ?? 0);
+  if (stored > 0) return Math.round(stored);
+
+  const unit = String(sauda.agreed_unit ?? 'QUINTAL').trim().toUpperCase();
+  const ratePaise = sauda.rate_paise_per_qtl ?? 0;
+  if (!ratePaise) return 0;
+
+  return calculateCommercialValue({
+    qtyKg: sauda.qty_kg ?? 0,
+    bagCount: unit === 'BAG' ? sauda.agreed_quantity : null,
+    pieceCount: unit === 'PIECE' ? sauda.agreed_quantity : null,
+    rateInr: ratePaise / 100,
+    rateUnit: unit === 'QUINTAL' ? 'QTL' : unit,
+  });
+}
+
+/** Pro-rate a sauda's total value by received weight or count. */
+export function proRateSaudaValuePaise(
+  sauda: SaudaCommercialRow,
+  partialKg: number,
+  partialCount?: number | null,
+): number {
+  const total = saudaAgreedValuePaise(sauda);
+  if (total <= 0) return 0;
+
+  const unit = String(sauda.agreed_unit ?? 'QUINTAL').trim().toUpperCase();
+  if (unit === 'BAG' || unit === 'PIECE') {
+    const totalCount = Number(sauda.agreed_quantity ?? 0);
+    const partial = partialCount ?? partialKg;
+    if (totalCount <= 0) return 0;
+    return Math.round(total * (Math.max(0, partial) / totalCount));
+  }
+
+  const totalKg = Number(sauda.qty_kg ?? 0);
+  if (totalKg <= 0) return 0;
+  return Math.round(total * (Math.max(0, partialKg) / totalKg));
+}
+
+export function resolveSaudaCommercialInput(params: {
+  valuePaise?: number | null;
+  ratePaise?: number | null;
+  quantity: number;
+  unit: string;
+  qtyKg: number;
+}): { agreedValuePaise: number; ratePaisePerUnit: number } | null {
+  const unit = String(params.unit).trim().toUpperCase();
+  const hasValue = params.valuePaise != null && Number.isFinite(params.valuePaise) && params.valuePaise >= 0;
+  const hasRate = params.ratePaise != null && Number.isFinite(params.ratePaise) && params.ratePaise >= 0;
+  if (!hasValue && !hasRate) return null;
+
+  if (hasValue) {
+    const agreedValuePaise = Math.round(params.valuePaise!);
+    const ratePaisePerUnit = deriveRatePaiseFromTotalValue({
+      totalValuePaise: agreedValuePaise,
+      qtyKg: params.qtyKg,
+      quantity: params.quantity,
+      unit,
+    });
+    return { agreedValuePaise, ratePaisePerUnit };
+  }
+
+  const ratePaisePerUnit = Math.round(params.ratePaise!);
+  const agreedValuePaise = calculateCommercialValue({
+    qtyKg: params.qtyKg,
+    bagCount: unit === 'BAG' ? params.quantity : null,
+    pieceCount: unit === 'PIECE' ? params.quantity : null,
+    rateInr: ratePaisePerUnit / 100,
+    rateUnit: unit === 'QUINTAL' ? 'QTL' : unit,
+  });
+  return { agreedValuePaise, ratePaisePerUnit };
 }

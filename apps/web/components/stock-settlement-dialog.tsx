@@ -70,10 +70,11 @@ export function StockSettlementDialog({
   const defaultRateInr = (receiptDefaultRatePaise(receipt) / 100).toString();
   const remainingTotal = usesBags ? remainingBags : remainingQtl;
 
+  const agreedRatePaise = receiptDefaultRatePaise(receipt);
   const summary = useMemo(() => {
-    const base = summarizeSettlementLines(lines, usesBags);
+    const base = summarizeSettlementLines(lines, usesBags, agreedRatePaise, bagInfo?.averageKgPerBag ?? null);
     return { ...base, remaining: Math.max(0, remainingTotal - base.allocated) };
-  }, [lines, remainingTotal, usesBags]);
+  }, [agreedRatePaise, bagInfo?.averageKgPerBag, lines, remainingTotal, usesBags]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -260,7 +261,17 @@ export function StockSettlementDialog({
         <div className="stock-settlement-summary" aria-live="polite">
           <span>{summary.rejected} {usesBags ? 'bag' : 'qtl'}{summary.rejected === 1 ? '' : 's'} not accepted</span>
           <span>{summary.accepted} {usesBags ? 'bag' : 'qtl'}{summary.accepted === 1 ? '' : 's'} into stock</span>
-          {canViewFinance ? <span>Payable {formatRupee(summary.payablePaise)}</span> : null}
+          {canViewFinance ? (
+            <>
+              <span>Stock value {formatRupee(summary.payablePaise)}</span>
+              {summary.rejectedValuePaise > 0 ? (
+                <span className="warn">Rejected value {formatRupee(summary.rejectedValuePaise)}</span>
+              ) : null}
+              {summary.qualityReductionPaise > 0 ? (
+                <span className="warn">Lower-grade reduction {formatRupee(summary.qualityReductionPaise)}</span>
+              ) : null}
+            </>
+          ) : null}
           <span className={summary.remaining === 0 ? 'ok' : 'warn'}>
             {summary.remaining === 0
               ? 'Fully allocated'
