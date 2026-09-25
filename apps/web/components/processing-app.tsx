@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { AppLink } from './app-link';
 import { AppHeader } from './app-header';
 import { Alert, Button } from './ui';
@@ -15,6 +16,7 @@ type ProcessingChain = { id: string; name: string; description?: string | null; 
 
 export function ProcessingApp() {
   const { session, sessionError } = useSession();
+  const searchParams = useSearchParams();
   const [chainMode, setChainMode] = useState<ChainViewMode>('classic');
   const [error, setError] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -49,6 +51,18 @@ export function ProcessingApp() {
     if (!session) return;
     void loadChains().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Could not load processing chains'));
   }, [session, loadChains]);
+
+  const openProcessEditor = useCallback((processTypeId?: string | null) => {
+    setCatalogOpen(true);
+    setEditorTypeId(processTypeId ?? null);
+  }, []);
+
+  useEffect(() => {
+    if (searchParams.get('view') !== 'catalog') return;
+    setCatalogOpen(true);
+    const processTypeId = searchParams.get('process_type_id');
+    if (processTypeId) setEditorTypeId(processTypeId);
+  }, [searchParams]);
 
   if (session === undefined) return <main className="auth-page"><p className="muted">Checking your MillSaathi session…</p></main>;
   if (!session) {
@@ -88,7 +102,7 @@ export function ProcessingApp() {
         {canManageOrg && (
           <div className="process-toolbar">
             <div className="process-toolbar-actions">
-              <Button type="button" className="quiet" onClick={() => setCatalogOpen(true)}>
+              <Button type="button" className="quiet" onClick={() => openProcessEditor()}>
                 All processes
               </Button>
             </div>
@@ -98,7 +112,10 @@ export function ProcessingApp() {
         {canManageOrg && (
           <ProcessCatalog
             open={catalogOpen}
-            onClose={() => setCatalogOpen(false)}
+            onClose={() => {
+              setCatalogOpen(false);
+              setEditorTypeId(null);
+            }}
             editorTypeId={editorTypeId}
             onEditorTypeIdChange={setEditorTypeId}
             types={catalogTypes}
@@ -115,6 +132,8 @@ export function ProcessingApp() {
             types={catalogTypes}
             preferredUnit={session.preferred_unit ?? 'QUINTAL'}
             canStartRun={canStartChainRun}
+            canConfigureProcesses={canManageOrg}
+            onConfigureProcess={canManageOrg ? openProcessEditor : undefined}
             onError={setError}
           />
         ) : (

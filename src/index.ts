@@ -6,6 +6,7 @@ import { hashPassword, hashToken, newSessionToken, sessionExpiry, verifyPassword
 import { api } from './api';
 import { capabilitiesFor, effectiveRole, ROLE_LABELS } from './permissions';
 import { billingConfigured, checkoutAvailable, handleBillingWebhook } from './billing';
+import { ensureRiceMillChainTemplates } from './chainBatch';
 import { defaultGodownCapacity, millCatalog, normalizeMillType } from './millCatalog';
 
 export type UserRow = {
@@ -189,6 +190,9 @@ app.post('/api/auth/signup', async (c) => {
     );
   }
   await c.env.DB.batch(defaults);
+  if (millType === 'RICE') {
+    await ensureRiceMillChainTemplates(c.env.DB, millId);
+  }
 
   setSessionCookie(c, await createSession(c.env.DB, userId));
   return c.json({ ok: true, mill_id: millId }, 201);

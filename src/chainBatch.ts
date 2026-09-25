@@ -12,6 +12,17 @@ const riceRecipes: Record<string, Recipe> = {
 };
 
 // Only initialize untouched, built-in rice recipes. Configured custom recipes are authoritative.
+export async function ensureRiceMillChainTemplates(db: D1Database, millId: string) {
+  const mill = await db.prepare('SELECT mill_type FROM mills WHERE id = ?').bind(millId).first<{ mill_type: string }>();
+  if (mill?.mill_type !== 'RICE') return;
+  const chains = await db.prepare(
+    `SELECT id FROM processing_chains WHERE mill_id = ? AND deleted_at IS NULL ORDER BY sort_order, name`,
+  ).bind(millId).all<{ id: string }>();
+  for (const chain of chains.results) {
+    await prepareRiceChain(db, millId, chain.id);
+  }
+}
+
 export async function prepareRiceChain(db: D1Database, millId: string, chainId: string) {
   const mill = await db.prepare('SELECT mill_type FROM mills WHERE id = ?').bind(millId).first<{ mill_type: string }>();
   if (mill?.mill_type !== 'RICE') return;

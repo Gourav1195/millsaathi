@@ -170,4 +170,33 @@ function lot(overrides) {
   assert.equal(groups[0].allocations.length, 10);
 }
 
+// Reject processes with no configured input lines.
+{
+  const lotsById = new Map([['l1', lot({ id: 'l1', item_id: 'paddy', qty_kg: 500 })]]);
+  const unconfigured = validateInputAllocations({
+    allocations: [{ lot_id: 'l1', quantity_base: 100 }],
+    requiredTotalBase: 100,
+    lotsById,
+    allowedItemIds: new Set(),
+    processName: 'Pre-Cleaning',
+  });
+  assert.equal(unconfigured.ok, false);
+  assert.match(unconfigured.error, /no accepted input items configured/i);
+}
+
+// Wrong material rejected with a specific explanation.
+{
+  const lotsById = new Map([
+    ['l1', lot({ id: 'l1', item_id: 'paddy', item_name: 'Paddy', qty_kg: 500 })],
+  ]);
+  const bad = validateInputAllocations({
+    allocations: [{ lot_id: 'l1', quantity_base: 100 }],
+    requiredTotalBase: 100,
+    lotsById,
+    allowedItemIds: new Set(['rice']),
+  });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /not accepted/i);
+}
+
 console.log('processing-input-tests: all assertions passed');

@@ -82,3 +82,41 @@ const nextInputs = await request(`/chain-runs/${multi.chain_run.id}/available-in
 assert.equal(nextInputs.eligible.length, 1, 'other stock of the same material must not appear for step two');
 assert.equal(nextInputs.eligible[0].id, multi.run_steps[0].lines.find((line) => line.kind === 'main').lot_id);
 console.log('PASS: partial input cascades to the next step and only its own previous output is selectable.');
+
+const wrongLot = await request('/lots', 'POST', { item_id: raw.id, godown_id: godown, quantity: 100, unit: 'KG' }, 201);
+let invalid = await request('/chain-runs', 'POST', { chain_id: twoStep.id, planned_input: 30, unit: 'KG' }, 201);
+await request(`/chain-runs/${invalid.chain_run.id}`, 'PATCH', { planned_input: 30, unit: 'KG', input_allocations: [{ lot_id: wrongLot.id, quantity_base: 30 }] });
+invalid = await request(`/chain-runs/${invalid.chain_run.id}/start`, 'POST', {});
+invalid = await request(`/chain-runs/${invalid.chain_run.id}/steps/${invalid.run_steps[0].id}/actuals`, 'POST', {
+  input_quantity: 30, input_allocations: [{ lot_id: wrongLot.id, quantity: 30, unit: 'KG' }], destination_godown_id: godown,
+  lines: [{ line_id: invalid.run_steps[0].lines.find((line) => line.kind === 'main').id, quantity: 30, unit: 'KG' }],
+}, 201);
+const invalidStepTwo = invalid.run_steps[1];
+const rejectWrongInput = await fetch(`${base}/api/chain-runs/${invalid.chain_run.id}/steps/${invalidStepTwo.id}/actuals`, {
+  method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+  body: JSON.stringify({
+    input_lot_id: wrongLot.id,
+    input_quantity: 30,
+    destination_godown_id: godown,
+    lines: [{ line_id: invalidStepTwo.lines.find((line) => line.kind === 'main').id, quantity: 30, unit: 'KG' }],
+  }),
+});
+assert.equal(rejectWrongInput.status, 400, JSON.stringify(await rejectWrongInput.json()));
+console.log('PASS: step two rejects lots that are not from the previous posted output.');
+
+const skipAttempt = await fetch(`${base}/api/chain-runs/${multi.chain_run.id}/steps/${multi.run_steps[1].id}/skip`, {
+  method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+});
+assert.equal(skipAttempt.status, 400, JSON.stringify(await skipAttempt.json()));
+console.log('PASS: skip step is blocked for linear chain runs.');
+
+const bareType = await request('/process-types', 'POST', { name: 'Unconfigured regression process' }, 201);
+const bareChain = await request('/processing-chains', 'POST', { name: 'Unconfigured regression chain' }, 201);
+await request(`/processing-chains/${bareChain.id}/steps`, 'PUT', { steps: [{ process_type_id: bareType.id }] });
+const bareRun = await request('/chain-runs', 'POST', { chain_id: bareChain.id, planned_input: 10, unit: 'KG' }, 201);
+await request(`/chain-runs/${bareRun.chain_run.id}`, 'PATCH', {
+  planned_input: 10,
+  unit: 'KG',
+  input_allocations: [{ lot_id: lot.id, quantity_base: 10 }],
+}, 400);
+console.log('PASS: unconfigured process input lines are rejected on draft save.');

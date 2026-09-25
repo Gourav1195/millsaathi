@@ -1126,8 +1126,5 @@
   .document-row span:nth-of-type(2), .document-row span:nth-of-type(3), .document-row span:nth-of-type(4) { display: none; }
   .dashboard-kpis, .dashboard-grid { grid-template-columns: 1fr; }
 }
-/* Source allocations stay editable immediately before the first process. */
-.chain-map-input { min-width: 230px; max-width: 310px; gap: 10px; }
-.chain-stock-selection { display: flex; flex-direction: column; gap: 5px; padding: 10px; border: 1px dotted var(--border, #cbd5e1); border-radius: 8px; text-align: left; }
-.chain-stock-selection input { width: 100%; min-width: 0; }
+/* Drop-stock slot before each process step — styles live in interactive.css (.chain-map-input-slot-panel). */
 .process-material-group-head[draggable="true"] { cursor: grab; }

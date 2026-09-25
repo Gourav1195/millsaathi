@@ -13,6 +13,8 @@ export type StockLotRow = {
   sauda_id?: string | null;
   sauda_code?: string | null;
   gate_entry_id?: string | null;
+  gate_token_no?: string | null;
+  supplier_name?: string | null;
   disposition?: string | null;
   allocation_status?: string | null;
 };
@@ -93,8 +95,15 @@ export function validateInputAllocations(params: {
   lotsById: Map<string, StockLotRow>;
   allowedItemIds?: Set<string>;
   permissiveItems?: boolean;
+  processName?: string | null;
 }): ValidateAllocationsResult {
-  const { allocations, requiredTotalBase, lotsById, allowedItemIds, permissiveItems = false } = params;
+  const { allocations, requiredTotalBase, lotsById, allowedItemIds, permissiveItems = false, processName } = params;
+  if (!permissiveItems && allowedItemIds && allowedItemIds.size === 0) {
+    return {
+      ok: false,
+      error: `${processName ?? 'This process'} has no accepted input items configured. Open All processes and assign input lines before selecting stock.`,
+    };
+  }
   if (!allocations.length) return { ok: false, error: 'Select at least one stock lot allocation for processing input.' };
   if (!Number.isFinite(requiredTotalBase) || requiredTotalBase <= 0) {
     return { ok: false, error: 'Processing input quantity must be greater than zero.' };
@@ -146,11 +155,16 @@ export async function loadProcessingStockLots(
   let query = `
     SELECT l.id, l.code, l.item_id, l.qty_kg, l.received_qty_kg, l.consumed_qty_kg,
            l.godown_id, l.sauda_id, l.gate_entry_id, l.disposition, l.allocation_status,
-           i.name AS item_name, g.name AS godown_name, sa.code AS sauda_code
+           i.name AS item_name, g.name AS godown_name, sa.code AS sauda_code,
+           ge.token_no AS gate_token_no,
+           COALESCE(sup_sa.name, sup_ge.name) AS supplier_name
     FROM lots l
     LEFT JOIN items i ON i.id = l.item_id
     LEFT JOIN godowns g ON g.id = l.godown_id
     LEFT JOIN saudas sa ON sa.id = l.sauda_id
+    LEFT JOIN gate_entries ge ON ge.id = l.gate_entry_id AND ge.mill_id = l.mill_id
+    LEFT JOIN suppliers sup_sa ON sup_sa.id = sa.supplier_id
+    LEFT JOIN suppliers sup_ge ON sup_ge.id = ge.supplier_id
     WHERE l.mill_id = ? AND l.qty_kg > 0
       AND COALESCE(l.disposition, 'STOCK') IN ('STOCK', 'FOR_REUSE')
   `;

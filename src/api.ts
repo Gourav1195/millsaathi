@@ -37,6 +37,7 @@ import {
   recomputeDraftForecasts,
   roundClassicQty,
 } from './chainRunExecution';
+import { ensureRiceMillChainTemplates } from './chainBatch';
 import {
   groupStockLots,
   loadProcessingStockLots,
@@ -1490,6 +1491,7 @@ api.post('/process-types', async (c) => {
 api.get('/process-types', async (c) => {
   const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
+  await ensureRiceMillChainTemplates(c.env.DB, mill.id);
   const includeArchived = c.req.query('include_archived') === '1';
   const result = await c.env.DB.prepare(`SELECT * FROM process_types WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY name`).bind(mill.id).all();
   const types = result.results as Record<string, unknown>[];
@@ -1867,6 +1869,7 @@ api.post('/processing-chains', async (c) => {
 api.get('/processing-chains', async (c) => {
   const denied = denyUnlessCapability(c, 'processing:view'); if (denied) return denied;
   const { mill } = c.get('session');
+  await ensureRiceMillChainTemplates(c.env.DB, mill.id);
   const includeArchived = c.req.query('include_archived') === '1';
   const chains = await c.env.DB.prepare(`SELECT * FROM processing_chains WHERE mill_id = ?${includeArchived ? '' : ' AND deleted_at IS NULL'} ORDER BY sort_order, name`).bind(mill.id).all<Record<string, unknown>>();
   const chainIds = chains.results.map((ch) => String(ch.id));
@@ -2070,10 +2073,10 @@ api.patch('/chain-runs/:id', async (c) => {
     if (!Array.isArray(b.input_allocations)) return c.json({ error: 'Invalid input allocations.' }, 400);
     const allocations = b.input_allocations.map((entry: Record<string, unknown>) => ({ lot_id: String(entry.lot_id ?? ''), quantity_base: Number(entry.quantity_base) }));
     if (allocations.length || plannedInputBase > 0) {
-      const first = await c.env.DB.prepare(`SELECT process_type_id FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(id, mill.id).first<{ process_type_id: string }>();
+      const first = await c.env.DB.prepare(`SELECT process_type_id, process_type_name FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(id, mill.id).first<{ process_type_id: string; process_type_name: string | null }>();
       const inputs = await c.env.DB.prepare(`SELECT item_id FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND line_type = 'INPUT' AND active = 1`).bind(first?.process_type_id ?? '', mill.id).all<{ item_id: string }>();
       const lots = await loadProcessingStockLots(c.env.DB, mill.id);
-      const check = validateInputAllocations({ allocations, requiredTotalBase: plannedInputBase, lotsById: new Map(lots.map((lot) => [lot.id, lot])), allowedItemIds: new Set(inputs.results.map((line) => line.item_id).filter(Boolean)) });
+      const check = validateInputAllocations({ allocations, requiredTotalBase: plannedInputBase, lotsById: new Map(lots.map((lot) => [lot.id, lot])), allowedItemIds: new Set(inputs.results.map((line) => line.item_id).filter(Boolean)), processName: first?.process_type_name });
       if (!check.ok) return c.json({ error: check.error }, 400);
     }
     allocationsJson = JSON.stringify(allocations);
@@ -2133,7 +2136,15 @@ api.post('/chain-runs/:id/start', async (c) => {
   if (run.status !== 'DRAFT') return c.json({ error: 'only draft runs can be started' }, 409);
   const savedAllocations = JSON.parse(String(run.input_allocations_json ?? '[]')) as { lot_id: string; quantity_base: number }[];
   const sourceLots = await loadProcessingStockLots(c.env.DB, mill.id);
-  const inputCheck = validateInputAllocations({ allocations: savedAllocations, requiredTotalBase: Number(run.planned_input_base), lotsById: new Map(sourceLots.map((lot) => [lot.id, lot])) });
+  const firstStepMeta = await c.env.DB.prepare(`SELECT process_type_id, process_type_name FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(id, mill.id).first<{ process_type_id: string; process_type_name: string | null }>();
+  const firstInputs = await c.env.DB.prepare(`SELECT item_id FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND line_type = 'INPUT' AND active = 1`).bind(firstStepMeta?.process_type_id ?? '', mill.id).all<{ item_id: string }>();
+  const inputCheck = validateInputAllocations({
+    allocations: savedAllocations,
+    requiredTotalBase: Number(run.planned_input_base),
+    lotsById: new Map(sourceLots.map((lot) => [lot.id, lot])),
+    allowedItemIds: new Set(firstInputs.results.map((line) => line.item_id).filter(Boolean)),
+    processName: firstStepMeta?.process_type_name,
+  });
   if (!inputCheck.ok) return c.json({ error: inputCheck.error }, 400);
   const firstStep = await c.env.DB.prepare(`SELECT id FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? ORDER BY step_number LIMIT 1`).bind(id, mill.id).first<{ id: string }>();
   if (!firstStep) return c.json({ error: 'run has no steps' }, 400);
@@ -2161,11 +2172,14 @@ api.get('/chain-runs/:id/available-inputs', async (c) => {
     `SELECT item_id FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND line_type = 'INPUT' AND active = 1`,
   ).bind(runStep.process_type_id, mill.id).all<{ item_id: string | null }>();
   const allowedItemIds = new Set(inputLines.results.map((l) => l.item_id).filter(Boolean) as string[]);
-  const permissive = allowedItemIds.size === 0;
+  const needsConfiguration = allowedItemIds.size === 0;
   const stockLots = await loadProcessingStockLots(c.env.DB, mill.id, {
     itemId: itemFilter || undefined,
     godownId: godownFilter || undefined,
   });
+  const configuration_error = needsConfiguration
+    ? `${String(runStep.process_type_name ?? 'This process')} has no accepted input items. Open All processes and assign input lines before selecting stock.`
+    : null;
   const eligibleLots: StockLotRow[] = [];
   const forReuseLots: StockLotRow[] = [];
   const ineligible: { lot: StockLotRow; reason: string }[] = [];
@@ -2177,13 +2191,22 @@ api.get('/chain-runs/:id/available-inputs', async (c) => {
       .bind(chainRunId, mill.id, Number(runStep.step_number) - 1).all<{ lot_id: string }>();
     previousLotIds = new Set(previous.results.map((line) => line.lot_id));
   }
-  for (const lot of stockLots) {
-    if (previousLotIds && !previousLotIds.has(lot.id)) continue;
-    const disposition = String(lot.disposition ?? 'STOCK');
-    const isAllowed = permissive || allowedItemIds.has(lot.item_id);
-    if (!isAllowed) ineligible.push({ lot, reason: 'This item is not accepted by this process' });
-    else if (disposition === 'FOR_REUSE') forReuseLots.push(lot);
-    else eligibleLots.push(lot);
+  if (!needsConfiguration) {
+    for (const lot of stockLots) {
+      if (previousLotIds && !previousLotIds.has(lot.id)) {
+        ineligible.push({ lot, reason: 'Only output lots from the immediately previous posted step are accepted here' });
+        continue;
+      }
+      const disposition = String(lot.disposition ?? 'STOCK');
+      const isAllowed = allowedItemIds.has(lot.item_id);
+      if (!isAllowed) ineligible.push({ lot, reason: `${lot.item_name} is not accepted by ${String(runStep.process_type_name ?? 'this process')}` });
+      else if (disposition === 'FOR_REUSE') forReuseLots.push(lot);
+      else eligibleLots.push(lot);
+    }
+  } else {
+    for (const lot of stockLots) {
+      ineligible.push({ lot, reason: configuration_error ?? 'Input items are not configured for this process' });
+    }
   }
   const groups = groupStockLots(eligibleLots);
   const reuseGroups = groupStockLots(forReuseLots);
@@ -2193,7 +2216,8 @@ api.get('/chain-runs/:id/available-inputs', async (c) => {
     eligible: eligibleLots,
     for_reuse: forReuseLots,
     ineligible,
-    permissive,
+    needs_configuration: needsConfiguration,
+    configuration_error,
   });
 });
 
@@ -2227,7 +2251,11 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
     `SELECT item_id FROM process_type_lines WHERE process_type_id = ? AND mill_id = ? AND line_type = 'INPUT' AND active = 1`,
   ).bind(runStep.process_type_id, mill.id).all<{ item_id: string | null }>();
   const allowedItemIds = new Set(inputLines.results.map((l) => l.item_id).filter(Boolean) as string[]);
-  const permissiveItems = allowedItemIds.size === 0;
+  if (allowedItemIds.size === 0) {
+    return c.json({
+      error: `${String(runStep.process_type_name ?? 'This process')} has no accepted input items configured. Open All processes and assign input lines before posting.`,
+    }, 400);
+  }
 
   const stockLots = await loadProcessingStockLots(c.env.DB, mill.id);
   const lotsById = new Map(stockLots.map((lot) => [lot.id, lot]));
@@ -2247,7 +2275,7 @@ api.post('/chain-runs/:id/steps/:stepId/actuals', async (c) => {
     requiredTotalBase: inputBase,
     lotsById,
     allowedItemIds,
-    permissiveItems,
+    processName: String(runStep.process_type_name ?? ''),
   });
   if (!allocationCheck.ok) return c.json({ error: allocationCheck.error }, 400);
 
@@ -2415,23 +2443,9 @@ api.post('/chain-runs/:id/steps/:stepId/skip', async (c) => {
   const runStep = await c.env.DB.prepare(`SELECT * FROM processing_chain_run_steps WHERE id = ? AND chain_run_id = ? AND mill_id = ?`).bind(runStepId, chainRunId, mill.id).first<Record<string, unknown>>();
   if (!runStep) return c.json({ error: 'run step not found' }, 404);
   if (runStep.status !== 'ACTIVE') return c.json({ error: 'only the active step can be skipped' }, 409);
-  const stepNumber = Number(runStep.step_number);
-  const nextStep = await c.env.DB.prepare(
-    `SELECT id FROM processing_chain_run_steps WHERE chain_run_id = ? AND mill_id = ? AND step_number = ?`,
-  ).bind(chainRunId, mill.id, stepNumber + 1).first<{ id: string }>();
-  const statements: D1PreparedStatement[] = [
-    c.env.DB.prepare(`UPDATE processing_chain_run_steps SET status = 'SKIPPED' WHERE id = ? AND mill_id = ?`).bind(runStepId, mill.id),
-  ];
-  if (nextStep) {
-    statements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET current_run_step_id = ? WHERE id = ? AND mill_id = ?`).bind(nextStep.id, chainRunId, mill.id));
-    statements.push(c.env.DB.prepare(`UPDATE processing_chain_run_steps SET status = 'ACTIVE' WHERE id = ? AND mill_id = ?`).bind(nextStep.id, mill.id));
-  } else {
-    statements.push(c.env.DB.prepare(`UPDATE processing_chain_runs SET status = 'COMPLETED', end_date = ?, current_run_step_id = NULL WHERE id = ? AND mill_id = ?`).bind(istToday(), chainRunId, mill.id));
-  }
-  await c.env.DB.batch(statements);
-  await audit(c, 'chain_run', chainRunId, 'SKIP', `Skipped step ${stepNumber}`);
-  const detail = await loadChainRunDetail(c.env.DB, mill.id, chainRunId);
-  return c.json(detail);
+  return c.json({
+    error: 'Skip step is not available for linear chain runs. Each step must receive the output lot from the previous posted step. Post actual results or void the run instead.',
+  }, 400);
 });
 
 api.post('/chain-runs/:id/advance', async (c) => {

@@ -85,6 +85,8 @@ export type AvailableLot = {
   sauda_id?: string | null;
   sauda_code?: string | null;
   gate_entry_id?: string | null;
+  gate_token_no?: string | null;
+  supplier_name?: string | null;
   received_qty_kg?: number | null;
   consumed_qty_kg?: number | null;
   disposition?: string;
@@ -203,7 +205,7 @@ export function massBalanceForStep(
   return computeStepMassBalance(step.forecast_input_base, unit, mainDisplay, byproductDisplays);
 }
 
-export type ActualsValidation = { ok: true } | { ok: false; message: string };
+export type ActualsValidation = { ok: true } | { ok: false; message: string; fieldErrors?: Record<string, string> };
 
 export function validateStepActuals(params: {
   step: ChainRunStep;
@@ -214,6 +216,7 @@ export function validateStepActuals(params: {
   godowns: Godown[];
   requireInputLot?: boolean;
   availableLots?: AvailableLot[];
+  needsInputConfiguration?: boolean;
 }): ActualsValidation {
   const {
     step,
@@ -224,17 +227,27 @@ export function validateStepActuals(params: {
     godowns,
     requireInputLot = true,
     availableLots = [],
+    needsInputConfiguration = false,
   } = params;
+  const fieldErrors: Record<string, string> = {};
   const qtyByLineId = Object.fromEntries(Object.entries(actualDraft).map(([id, entry]) => [id, entry.qty]));
   const balance = massBalanceForStep(step, unit, qtyByLineId);
 
   const inputDisplay = parseDisplayQty(actualDraft.__input__?.qty) ?? baseToDisplay(step.forecast_input_base, unit);
   const inputBase = displayToBase(inputDisplay, unit);
 
+  if (needsInputConfiguration) {
+    return {
+      ok: false,
+      message: 'Configure accepted input items for this process before posting.',
+      fieldErrors: { __input__: 'Configure accepted input items in All processes before selecting stock.' },
+    };
+  }
+
   if (requireInputLot) {
     const hasAllocations = inputAllocations.some((entry) => parseDisplayQty(entry.quantity_display) != null);
     if (!hasAllocations && !selectedInputLotId) {
-      return { ok: false, message: 'Select stock lots from Available materials on the left.' };
+      fieldErrors.__input__ = 'Select stock lots from Available materials on the left.';
     }
     const lotsById = new Map(availableLots.map((lot) => [lot.id, lot]));
     let allocatedBase = 0;
@@ -247,60 +260,63 @@ export function validateStepActuals(params: {
     for (const entry of drafts) {
       const qty = parseDisplayQty(entry.quantity_display);
       if (qty == null || qty <= 0) {
-        return { ok: false, message: 'Each selected godown allocation must have a quantity greater than zero.' };
+        fieldErrors.__input__ = 'Each selected godown allocation must have a quantity greater than zero.';
+        break;
       }
       const lot = lotsById.get(entry.lot_id);
-      if (!lot) return { ok: false, message: 'One of the selected stock lots is no longer available.' };
+      if (!lot) {
+        fieldErrors.__input__ = 'One of the selected stock lots is no longer available.';
+        break;
+      }
       const qtyBase = displayToBase(qty, unit);
       if (qtyBase > lot.qty_kg) {
-        return { ok: false, message: `${lot.code} in ${lot.godown_name ?? 'storage'} only has ${baseToDisplay(lot.qty_kg, unit)} ${unit.toLowerCase()} available.` };
+        fieldErrors.__input__ = `${lot.code} in ${lot.godown_name ?? 'storage'} only has ${baseToDisplay(lot.qty_kg, unit)} ${unit.toLowerCase()} available.`;
+        break;
       }
       if (itemId && itemId !== lot.item_id) {
-        return { ok: false, message: 'All input allocations must use the same material.' };
+        fieldErrors.__input__ = 'All input allocations must use the same material.';
+        break;
       }
       itemId = lot.item_id;
       allocatedBase += qtyBase;
     }
-    if (Math.abs(allocatedBase - inputBase) > 0.000001) {
-      return {
-        ok: false,
-        message: `Allocated total (${baseToDisplay(allocatedBase, unit)} ${unit.toLowerCase()}) must equal processing input (${inputDisplay} ${unit.toLowerCase()}).`,
-      };
+    if (!fieldErrors.__input__ && drafts.length && Math.abs(allocatedBase - inputBase) > 0.000001) {
+      fieldErrors.__input__ = `Allocated total (${baseToDisplay(allocatedBase, unit)} ${unit.toLowerCase()}) must equal processing input (${inputDisplay} ${unit.toLowerCase()}).`;
     }
   }
 
   const mainLine = step.lines.find((line) => line.kind === 'main');
   const mainQty = mainLine ? parseDisplayQty(actualDraft[mainLine.id]?.qty) : null;
   if (mainQty == null) {
-    return { ok: false, message: 'Enter a valid main output quantity (0 or more).' };
+    if (mainLine) fieldErrors[mainLine.id] = 'Enter a valid main output quantity (0 or more).';
   }
 
   for (const line of step.lines.filter((entry) => entry.kind !== 'loss')) {
     const qty = parseDisplayQty(actualDraft[line.id]?.qty);
     if (qty == null) {
       const label = line.kind === 'main' ? 'main output' : (line.item_name ?? 'by-product');
-      return { ok: false, message: `Enter a valid quantity for ${label} (0 or more).` };
+      fieldErrors[line.id] = `Enter a valid quantity for ${label} (0 or more).`;
+      continue;
     }
     if (qty > 0 && !line.item_id) {
-      return {
-        ok: false,
-        message: `"${line.item_name ?? line.kind}" is not linked to an inventory item. Open All processes, edit "${step.process_type_name ?? 'this process'}", and assign an item to each output line.`,
-      };
+      fieldErrors[line.id] = `"${line.item_name ?? line.kind}" is not linked to an inventory item. Open All processes, edit "${step.process_type_name ?? 'this process'}", and assign an item to each output line.`;
     }
     if (line.kind === 'byproduct' && qty > 0 && !actualDraft[line.id]?.godownId) {
-      return { ok: false, message: `Choose a godown for ${line.item_name ?? 'by-product'}.` };
+      fieldErrors[line.id] = `Choose a godown for ${line.item_name ?? 'by-product'}.`;
     }
   }
 
   if (balance.overInput) {
-    return {
-      ok: false,
-      message: `Output and by-products total ${balance.totalOutDisplay} ${unit.toLowerCase()}, but only ${balance.inputDisplay} ${unit.toLowerCase()} went in. Lower the quantities or check the input amount.`,
-    };
+    fieldErrors.__balance__ = `Output and by-products total ${balance.totalOutDisplay} ${unit.toLowerCase()}, but only ${balance.inputDisplay} ${unit.toLowerCase()} went in. Lower the quantities or check the input amount.`;
   }
 
   if (!godowns.length && step.lines.some((line) => line.kind === 'byproduct' && (parseDisplayQty(actualDraft[line.id]?.qty) ?? 0) > 0)) {
-    return { ok: false, message: 'No godowns are set up. Add a godown before posting by-products to inventory.' };
+    const byproductLine = step.lines.find((line) => line.kind === 'byproduct' && (parseDisplayQty(actualDraft[line.id]?.qty) ?? 0) > 0);
+    if (byproductLine) fieldErrors[byproductLine.id] = 'No godowns are set up. Add a godown before posting by-products to inventory.';
+  }
+
+  if (Object.keys(fieldErrors).length) {
+    return { ok: false, message: fieldErrors.__input__ ?? fieldErrors.__balance__ ?? Object.values(fieldErrors)[0], fieldErrors };
   }
 
   return { ok: true };
@@ -378,6 +394,8 @@ export async function loadAvailableInputs(runId: string, stepId: string, filters
     eligible: AvailableLot[];
     for_reuse: AvailableLot[];
     ineligible: { lot: AvailableLot; reason: string }[];
+    needs_configuration?: boolean;
+    configuration_error?: string | null;
   }>(`/api/chain-runs/${encodeURIComponent(runId)}/available-inputs?${params}`);
 }
 

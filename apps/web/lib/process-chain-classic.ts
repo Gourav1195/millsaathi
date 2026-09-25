@@ -34,6 +34,8 @@ export type ClassifiedMaterials = {
   for_reuse: AvailableLot[];
   ineligible: { lot: AvailableLot; reason: string }[];
   permissive: boolean;
+  needsConfiguration: boolean;
+  configurationMessage?: string;
 };
 
 export type CatalogItem = {
@@ -70,48 +72,98 @@ export function allowedInputItemIds(type?: CatalogProcessType | null) {
   return new Set(ids);
 }
 
+export function acceptedInputItemNames(type?: CatalogProcessType | null) {
+  return (type?.template_lines ?? [])
+    .filter((line) => line.line_type === 'INPUT' && line.item_name)
+    .map((line) => String(line.item_name));
+}
+
+export function acceptedInputLabel(type?: CatalogProcessType | null, fallback = 'stock') {
+  const names = acceptedInputItemNames(type);
+  if (!names.length) return fallback;
+  return names.join(' or ');
+}
+
+export function processNeedsInputConfiguration(type?: CatalogProcessType | null) {
+  return allowedInputItemIds(type).size === 0;
+}
+
+export function inputConfigurationMessage(processName?: string | null) {
+  return `${processName ?? 'This process'} has no accepted input items. Open All processes, edit the process, and assign at least one input line before selecting stock.`;
+}
+
+export function mainOutputItemName(
+  step: { lines?: { kind: string; item_name?: string | null }[] },
+  type?: CatalogProcessType | null,
+) {
+  const fromStep = step.lines?.find((line) => line.kind === 'main')?.item_name;
+  if (fromStep) return fromStep;
+  const fromTemplate = type?.template_lines?.find((line) => line.line_type === 'OUTPUT' && line.semantic_type === 'main')?.item_name;
+  return fromTemplate ?? 'Main output';
+}
+
+export function formatLotProvenance(lot: AvailableLot) {
+  return [
+    lot.item_name,
+    lot.supplier_name,
+    lot.sauda_code,
+    lot.gate_token_no ? `truck ${lot.gate_token_no}` : null,
+    lot.godown_name,
+  ].filter(Boolean).join(' · ');
+}
+
 export function classifyLotsForProcess(type: CatalogProcessType | undefined, lots: AvailableLot[]): ClassifiedMaterials {
   const allowed = allowedInputItemIds(type);
-  const permissive = allowed.size === 0;
+  const needsConfiguration = allowed.size === 0;
+  if (needsConfiguration) {
+    return {
+      eligible: [],
+      for_reuse: [],
+      ineligible: lots.map((lot) => ({ lot, reason: 'Input items are not configured for this process' })),
+      permissive: false,
+      needsConfiguration: true,
+      configurationMessage: inputConfigurationMessage(type?.name),
+    };
+  }
   const eligible: AvailableLot[] = [];
   const forReuse: AvailableLot[] = [];
   const ineligible: { lot: AvailableLot; reason: string }[] = [];
 
   for (const lot of lots) {
-    const isAllowed = permissive || allowed.has(lot.item_id);
-    if (!isAllowed) {
-      ineligible.push({ lot, reason: 'This item is not accepted by this process' });
+    if (!allowed.has(lot.item_id)) {
+      ineligible.push({ lot, reason: `${lot.item_name} is not accepted by ${type?.name ?? 'this process'}` });
       continue;
     }
     if (lot.disposition === 'FOR_REUSE' || lot.for_reuse) forReuse.push(lot);
     else eligible.push(lot);
   }
 
-  return { eligible, for_reuse: forReuse, ineligible, permissive };
+  return { eligible, for_reuse: forReuse, ineligible, permissive: false, needsConfiguration: false };
 }
 
 export function lotMatchesProcessInput(type: CatalogProcessType | undefined, lot: AvailableLot) {
   const allowed = allowedInputItemIds(type);
-  return allowed.size === 0 || allowed.has(lot.item_id);
+  return allowed.size > 0 && allowed.has(lot.item_id);
 }
 
 export function classifyItemsForProcess(type: CatalogProcessType | undefined, items: CatalogItem[]): ClassifiedItems {
   const allowed = allowedInputItemIds(type);
-  const permissive = allowed.size === 0;
+  const needsConfiguration = allowed.size === 0;
   const eligible: CatalogItem[] = [];
   const ineligible: { item: CatalogItem; reason: string }[] = [];
 
   for (const item of items) {
-    if (permissive || allowed.has(item.id)) eligible.push(item);
+    if (needsConfiguration) ineligible.push({ item, reason: 'Input items are not configured for this process' });
+    else if (allowed.has(item.id)) eligible.push(item);
     else ineligible.push({ item, reason: 'This item is not accepted by this process' });
   }
 
-  return { eligible, ineligible, permissive };
+  return { eligible, ineligible, permissive: false };
 }
 
 export function itemMatchesProcessInput(type: CatalogProcessType | undefined, itemId: string) {
   const allowed = allowedInputItemIds(type);
-  return allowed.size === 0 || allowed.has(itemId);
+  return allowed.size > 0 && allowed.has(itemId);
 }
 
 /** Legacy rice-mill yield defaults keyed by process name. */

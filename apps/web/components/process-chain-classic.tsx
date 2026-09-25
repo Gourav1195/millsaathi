@@ -8,12 +8,17 @@ import { can } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import {
-  chainInputLabel,
+  acceptedInputLabel,
   classifyItemsForProcess,
   classifyLotsForProcess,
   classicUnits,
   computeClassicForecast,
+  formatLotProvenance,
+  inputConfigurationMessage,
   itemMatchesProcessInput,
+  lotMatchesProcessInput,
+  mainOutputItemName,
+  processNeedsInputConfiguration,
   roundClassicQty,
   type CatalogItem,
 } from '../lib/process-chain-classic';
@@ -31,7 +36,6 @@ import {
   patchChainRun,
   patchChainRunSteps,
   postStepActuals,
-  skipRunStep,
   splitLot,
   startChainRun,
   validateStepActuals,
@@ -59,6 +63,16 @@ const CHAIN_RUN_COLUMNS_BASE = [
 ];
 const ITEM_DRAG_TYPE = 'application/millsaathi-classic-item';
 const STOCK_DRAG_TYPE = 'application/millsaathi-stock-lots';
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 7h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M6 7l1 14h10l1-14" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 type StepInputAssignment = {
   itemId: string;
@@ -155,8 +169,153 @@ function MaterialCard({
         <b>{selected ? 'Added' : readOnly ? '' : 'Use'}</b>
       </span>
       <span className="process-material-qty">{(lot.qty_kg / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} quintal available</span>
-      <small>{lot.godown_name ?? 'No godown'}{lot.sauda_code ? ` · ${lot.sauda_code}` : ''}{lot.for_reuse ? ' · For reuse' : ''}</small>
+      <small>{formatLotProvenance(lot)}{lot.for_reuse ? ' · For reuse' : ''}</small>
     </button>
+  );
+}
+
+function FlowArrow({
+  label,
+  forecastQty,
+  actualQty,
+  unit,
+  posted,
+}: {
+  label: string;
+  forecastQty: number;
+  actualQty: number | null;
+  unit: string;
+  posted: boolean;
+}) {
+  const qtyLabel = posted && actualQty != null
+    ? `Actual ${actualQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })} ${unit.toLowerCase()}`
+    : `Forecast ${forecastQty.toLocaleString('en-IN', { maximumFractionDigits: 3 })} ${unit.toLowerCase()}`;
+  return (
+    <div className="chain-map-arrow" aria-label={`${label}: ${qtyLabel}`}>
+      <b>{label}</b>
+      <small>{qtyLabel}</small>
+      <i aria-hidden="true">→</i>
+    </div>
+  );
+}
+
+function StepInputSlot({
+  step,
+  processType,
+  unit,
+  inputLabel,
+  inputAllocations,
+  selectedInputLotId,
+  availableLots,
+  canEdit,
+  fieldError,
+  onDropStock,
+  onClearAll,
+  onToggleAllocation,
+  onSelectLot,
+  onConfigureProcess,
+}: {
+  step: ChainRunStep;
+  processType?: CatalogProcessType;
+  unit: string;
+  inputLabel: string;
+  inputAllocations: InputAllocationDraft[];
+  selectedInputLotId: string;
+  availableLots: AvailableLot[];
+  canEdit: boolean;
+  fieldError?: string;
+  onDropStock: (event: React.DragEvent) => void;
+  onClearAll: () => void;
+  onToggleAllocation: (lotId: string, maxDisplay: number, enabled: boolean, quantityDisplay?: string) => void;
+  onSelectLot: (lotId: string) => void;
+  onConfigureProcess?: () => void;
+}) {
+  const needsConfiguration = processNeedsInputConfiguration(processType);
+  const isFirstStep = step.step_number === 1;
+  const selectedLot = selectedInputLotId ? availableLots.find((lot) => lot.id === selectedInputLotId) : null;
+  const inputDisplay = baseToDisplay(step.actual_input_base ?? step.forecast_input_base, unit);
+
+  return (
+    <div
+      className={`chain-map-input-slot-panel${fieldError ? ' chain-map-input-slot-panel--error' : ''}`}
+      onDrop={onDropStock}
+      onDragOver={(event) => {
+        if (canEdit && event.dataTransfer.types.includes(STOCK_DRAG_TYPE)) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'copy';
+        }
+      }}
+    >
+      <div className="chain-map-input-head">
+        <span className="chain-map-input-title">
+          {needsConfiguration ? 'Input not configured' : `Drop ${inputLabel} here`}
+        </span>
+        {canEdit && inputAllocations.length > 0 ? (
+          <button type="button" className="chain-map-input-clear-all" onClick={onClearAll}>Remove all</button>
+        ) : null}
+      </div>
+      {needsConfiguration ? (
+        <div className="chain-config-action">
+          <p>{inputConfigurationMessage(processType?.name)}</p>
+          {onConfigureProcess ? (
+            <Button type="button" className="secondary" onClick={onConfigureProcess}>
+              Configure {processType?.name ?? 'process'}
+            </Button>
+          ) : (
+            <p className="muted">Ask an admin to configure accepted input items in All processes.</p>
+          )}
+        </div>
+      ) : isFirstStep ? (
+        <>
+          {inputAllocations.length ? null : (
+            <b className="chain-map-input-placeholder">Click a lot in Available materials or drag stock here</b>
+          )}
+          {inputAllocations.map((entry) => {
+            const lot = availableLots.find((candidate) => candidate.id === entry.lot_id);
+            const maxDisplay = lot ? baseToDisplay(lot.qty_kg, unit) : 0;
+            const remainingDisplay = lot ? baseToDisplay(lot.qty_kg - displayToBase(Number(entry.quantity_display), unit), unit) : null;
+            return (
+              <div key={entry.lot_id} className="chain-stock-selection">
+                <div className="chain-stock-selection-head">
+                  <span className="chain-stock-selection-name">{formatLotProvenance(lot ?? { id: entry.lot_id, code: entry.lot_id, item_id: '', item_name: 'Selected stock', qty_kg: 0 })}</span>
+                  {canEdit ? (
+                    <button type="button" className="chain-stock-selection-delete" aria-label="Remove stock lot" onClick={() => onToggleAllocation(entry.lot_id, 0, false)}>
+                      <TrashIcon />
+                    </button>
+                  ) : null}
+                </div>
+                <label className="chain-stock-selection-qty">
+                  <span>Entered</span>
+                  <input type="number" min="0" step="0.01" max={maxDisplay || undefined} disabled={!canEdit} value={entry.quantity_display}
+                    aria-label={`Quantity from ${lot?.code ?? entry.lot_id}`}
+                    onChange={(event) => onToggleAllocation(entry.lot_id, maxDisplay, true, event.target.value)} />
+                  <span className="chain-stock-selection-unit">{unit}</span>
+                </label>
+                <small>Available {maxDisplay} {unit} · Remaining after posting {remainingDisplay ?? '—'} {unit}</small>
+              </div>
+            );
+          })}
+        </>
+      ) : selectedLot ? (
+        <div className="chain-stock-selection">
+          <div className="chain-stock-selection-head">
+            <span className="chain-stock-selection-name">{formatLotProvenance(selectedLot)}</span>
+            {canEdit ? (
+              <button type="button" className="chain-stock-selection-delete" aria-label="Clear selected lot" onClick={() => onSelectLot('')}>
+                <TrashIcon />
+              </button>
+            ) : null}
+          </div>
+          <small>Lot {selectedLot.code} · Available {baseToDisplay(selectedLot.qty_kg, unit)} {unit}</small>
+          <small>Entered {inputDisplay} {unit} · Remaining after posting {baseToDisplay(Math.max(0, selectedLot.qty_kg - displayToBase(inputDisplay, unit)), unit)} {unit}</small>
+        </div>
+      ) : (
+        <b className="chain-map-input-placeholder">Select the previous step output lot from Available materials</b>
+      )}
+      {fieldError ? <small className="chain-field-error">{fieldError}</small> : null}
+      {!needsConfiguration ? <small>Draft saves do not consume stock. Inventory is deducted when you post this step.</small> : null}
+    </div>
   );
 }
 
@@ -219,7 +378,7 @@ function GroupedStockCard({
                     event.dataTransfer.setData(STOCK_DRAG_TYPE, JSON.stringify([allocation.lot_id]));
                     event.dataTransfer.effectAllowed = 'copy';
                   }}>{allocation.godown_name ?? 'No godown'}</strong>
-                  <small>{allocation.lot_code} · {maxDisplay.toLocaleString('en-IN', { maximumFractionDigits: 2 })} {unit.toLowerCase()} available</small>
+                  <small>{allocation.lot_code} · {maxDisplay.toLocaleString('en-IN', { maximumFractionDigits: 2 })} {unit.toLowerCase()} available · {group.sauda_code ?? 'Unlinked'}{group.item_name ? ` · ${group.item_name}` : ''}</small>
                 </span>
                 {selected && !readOnly ? (
                   <input
@@ -302,13 +461,14 @@ function StepNode({
     ? (lineQtys[mainLine?.id ?? ''] ?? '')
     : (mainOverride ?? mainActual ?? mainForecast);
   const inputDisplay = baseToDisplay(step.actual_input_base ?? step.forecast_input_base, unit);
+  const inputPosted = step.actual_input_base != null;
   const tone = mainLine && !blankPlanning ? varianceTone(Number(displayMain), mainLine.expected_min_pct, mainLine.expected_max_pct) : 'neutral';
   const statusLabel = planningMode && !inputSatisfied
     ? 'Needs input'
     : step.status === 'ACTIVE'
-      ? 'Running'
+      ? 'Current step'
       : step.status === 'COMPLETED'
-        ? 'Done'
+        ? 'Posted'
         : step.status === 'SKIPPED'
           ? 'Skipped'
           : planningMode && inputSatisfied
@@ -358,7 +518,7 @@ function StepNode({
             </div>
           ) : (
             <span className={`chain-map-metric${massBalance?.overInput ? ' chain-input-over' : ''}`}>
-              Input <b>{assignedInput ? assignedInput.itemName : `${inputDisplay} ${unit}`}</b>
+              {inputPosted ? 'Actual input' : 'Forecast input'} <b>{assignedInput ? assignedInput.itemName : `${inputDisplay} ${unit}`}</b>
               {assignedInput?.lotCode ? <small className="chain-map-assigned-lot">{assignedInput.lotCode}</small> : null}
               {massBalance?.overInput ? <small className="chain-input-over-hint">Exceeds input</small> : null}
             </span>
@@ -370,7 +530,7 @@ function StepNode({
           )}
           {showSideOutputs && (
             <span className="chain-map-metric editable">
-              {step.status === 'COMPLETED' ? 'Actual output' : 'Output'}
+              {step.status === 'COMPLETED' ? 'Actual output' : 'Forecast output'}
               <span className="chain-map-output-field">
                 {editable && (!planningMode || inputSatisfied) ? (
                   <input
@@ -421,7 +581,7 @@ function StepNode({
                 <span className="chain-map-byproduct-arrow" aria-hidden="true" />
                 <div className={`chain-map-byproduct-pill${tone === 'high' ? ' chain-variance-high' : ''}${tone === 'low' ? ' chain-variance-low' : ''}`}>
                   <b>{line.item_name ?? line.kind}</b>
-                  <span className="chain-map-byproduct-kind">{isComputedLoss ? 'Waste (calculated)' : lineKindLabel(line.kind)}</span>
+                  <span className="chain-map-byproduct-kind">{isComputedLoss ? 'Waste (calculated)' : line.kind === 'byproduct' ? 'By-product · to stock' : lineKindLabel(line.kind)}</span>
                   {lossEditable ? (
                     <span className="chain-map-byproduct-qty">
                       <input
@@ -466,12 +626,16 @@ function ClassicChainMap({
   types,
   preferredUnit,
   canStartRun,
+  canConfigureProcesses,
+  onConfigureProcess,
   onError,
 }: {
   chain: ProcessingChainRecord;
   types: CatalogProcessType[];
   preferredUnit?: string | null;
   canStartRun: boolean;
+  canConfigureProcesses?: boolean;
+  onConfigureProcess?: (processTypeId: string) => void;
   onError: (message: string | null) => void;
 }) {
   const { session } = useSession();
@@ -509,6 +673,7 @@ function ClassicChainMap({
   const [stepAssignments, setStepAssignments] = useState<Record<string, StepInputAssignment>>({});
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [workspaceLots, setWorkspaceLots] = useState<AvailableLot[]>([]);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const run = runDetail?.chain_run ?? null;
   const runSteps = runDetail?.run_steps ?? [];
@@ -552,7 +717,6 @@ function ClassicChainMap({
   const isDraft = run?.status === 'DRAFT';
   const isRunning = run?.status === 'IN_PROGRESS';
   const isReadOnly = run?.status === 'COMPLETED' || run?.status === 'VOID';
-  const canSelectStock = canStartRun && !busy && !isReadOnly && (!isRunning || steps[0]?.status === 'ACTIVE');
 
   const refreshRun = useCallback(async (runId: string) => {
     const detail = await loadChainRun(runId);
@@ -624,9 +788,21 @@ function ClassicChainMap({
   }, [chain.id, loadRecentRuns]);
 
   const selectedProcessType = useMemo(
-    () => types.find((type) => type.id === (isRunning ? selectedStep : steps[0])?.process_type_id),
-    [types, selectedStep?.process_type_id, steps[0]?.process_type_id, isRunning],
+    () => types.find((type) => type.id === selectedStep?.process_type_id),
+    [types, selectedStep?.process_type_id],
   );
+  const planningMode = editMode && !isRunning && !isReadOnly;
+  const canSelectStock = canStartRun && !busy && !isReadOnly && !planningMode && Boolean(selectedStep) && (
+    (selectedStep!.step_number === 1 && (!isRunning || selectedStep!.status === 'ACTIVE' || isDraft)) ||
+    (selectedStep!.step_number > 1 && isRunning && selectedStep!.status === 'ACTIVE')
+  );
+  const needsInputConfiguration = processNeedsInputConfiguration(selectedProcessType);
+
+  function configureSelectedProcess() {
+    const processTypeId = selectedProcessType?.id ?? selectedStep?.process_type_id;
+    if (!processTypeId || !onConfigureProcess) return;
+    onConfigureProcess(processTypeId);
+  }
 
   const assignedItemIds = useMemo(
     () => new Set(Object.values(stepAssignments).map((assignment) => assignment.itemId)),
@@ -643,23 +819,62 @@ function ClassicChainMap({
     [materials],
   );
 
+  function selectInputLot(lotId: string) {
+    if (!canSelectStock) return;
+    if (!lotId) {
+      setSelectedInputLotId('');
+      return;
+    }
+    const lot = availableLots.find((entry) => entry.id === lotId);
+    if (!lot) {
+      onError('This lot is no longer available.');
+      return;
+    }
+    if (!lotMatchesProcessInput(selectedProcessType, lot)) {
+      onError(`${lot.item_name} is not accepted by ${selectedStep?.process_type_name ?? 'this process'}.`);
+      return;
+    }
+    onError(null);
+    setFieldErrors((current) => { const next = { ...current }; delete next.__input__; return next; });
+    setSelectedInputLotId(lotId);
+  }
+
   function toggleInputAllocation(lotId: string, maxDisplay: number, enabled: boolean, quantityDisplay?: string) {
     if (!canSelectStock) return;
+    if (needsInputConfiguration) {
+      onError(inputConfigurationMessage(selectedProcessType?.name));
+      return;
+    }
     const lot = availableLots.find((entry) => entry.id === lotId);
+    if (enabled && lot && !lotMatchesProcessInput(selectedProcessType, lot)) {
+      onError(`${lot.item_name} is not accepted by ${selectedStep?.process_type_name ?? 'this process'}.`);
+      return;
+    }
     if (enabled && inputAllocations.some((entry) => availableLots.find((candidate) => candidate.id === entry.lot_id)?.item_id !== lot?.item_id)) {
       onError('Choose stock lots of the same material. Remove the current selection to change material.');
       return;
     }
     onError(null);
     setInputAllocations((current) => {
-      const existing = current.filter((entry) => entry.lot_id !== lotId);
-      if (!enabled) return existing;
+      if (!enabled) return current.filter((entry) => entry.lot_id !== lotId);
       const nextQty = quantityDisplay ?? String(maxDisplay);
-      return [...existing, { lot_id: lotId, quantity_display: nextQty }];
+      const existingIndex = current.findIndex((entry) => entry.lot_id === lotId);
+      if (existingIndex >= 0) {
+        return current.map((entry) => (
+          entry.lot_id === lotId ? { ...entry, quantity_display: nextQty } : entry
+        ));
+      }
+      return [...current, { lot_id: lotId, quantity_display: nextQty }];
     });
     if (enabled && quantityDisplay == null) {
       setSelectedInputLotId(lotId);
     }
+  }
+
+  function clearAllInputAllocations() {
+    if (!canSelectStock || !inputAllocations.length) return;
+    onError(null);
+    setInputAllocations([]);
   }
 
   function toggleExpandedGroup(groupKey: string) {
@@ -682,20 +897,41 @@ function ClassicChainMap({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.classList.remove('drag-over');
+    if (needsInputConfiguration) {
+      onError(inputConfigurationMessage(selectedProcessType?.name));
+      return;
+    }
     try {
       const ids: unknown = JSON.parse(raw);
       if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return;
+      if (selectedStep && selectedStep.step_number > 1) {
+        if (ids.length !== 1) {
+          onError('Drop one output lot from the previous posted step.');
+          return;
+        }
+        selectInputLot(String(ids[0]));
+        return;
+      }
       const lots = ids.map((id) => availableLots.find((lot) => lot.id === id));
-      if (lots.some((lot) => !lot) || new Set([...lots.map((lot) => lot!.item_id), ...inputAllocations.map((entry) => availableLots.find((lot) => lot.id === entry.lot_id)?.item_id)]).size > 1) {
+      if (lots.some((lot) => !lot)) {
+        onError('One of the dropped lots is no longer available.');
+        return;
+      }
+      for (const lot of lots) {
+        if (!lotMatchesProcessInput(selectedProcessType, lot!)) {
+          onError(`${lot!.item_name} is not accepted by ${selectedStep?.process_type_name ?? 'this process'}.`);
+          return;
+        }
+      }
+      if (new Set([...lots.map((lot) => lot!.item_id), ...inputAllocations.map((entry) => availableLots.find((lot) => lot.id === entry.lot_id)?.item_id)]).size > 1) {
         onError('Choose available stock of the same material.');
         return;
       }
       setInputAllocations((current) => [...current, ...lots.filter((lot) => !current.some((entry) => entry.lot_id === lot!.id)).map((lot) => ({ lot_id: lot!.id, quantity_display: String(baseToDisplay(lot!.qty_kg, unit)) }))]);
+      setFieldErrors((current) => { const next = { ...current }; delete next.__input__; return next; });
       onError(null);
     } catch { onError('Drag a stock card from Available materials.'); }
   }
-
-  const planningMode = editMode && !isRunning && !isReadOnly;
 
   const stockGroups = materials?.groups ?? [];
   const reuseStockGroups = materials?.reuse_groups ?? [];
@@ -755,7 +991,7 @@ function ClassicChainMap({
 
   useEffect(() => {
     let cancelled = false;
-    const materialStep = isRunning ? selectedStep : steps[0];
+    const materialStep = selectedStep ?? steps[0];
     if (!materialStep?.id) {
       setMaterials(null);
       setWorkspaceLots([]);
@@ -770,7 +1006,16 @@ function ClassicChainMap({
 
     if (run?.id) {
       void loadAvailableInputs(run.id, materialStep.id)
-        .then((body) => { if (!cancelled) setMaterials(body); })
+        .then((body) => {
+          if (cancelled) return;
+          setMaterials({
+            groups: body.groups,
+            reuse_groups: body.reuse_groups,
+            eligible: body.eligible,
+            for_reuse: body.for_reuse,
+            ineligible: body.ineligible,
+          });
+        })
         .catch((cause: unknown) => onError(cause instanceof Error ? cause.message : 'Could not load materials'));
       setWorkspaceLots([]);
       return () => { cancelled = true; };
@@ -952,11 +1197,14 @@ function ClassicChainMap({
       selectedInputLotId: selectedStep.step_number === 1 ? '' : selectedInputLotId,
       godowns,
       availableLots,
+      needsInputConfiguration,
     });
     if (!validation.ok) {
+      setFieldErrors(validation.fieldErrors ?? {});
       onError(validation.message);
       return;
     }
+    setFieldErrors({});
     setBusy(true);
     onError(null);
     try {
@@ -993,20 +1241,6 @@ function ClassicChainMap({
       if (detail.chain_run.status === 'COMPLETED') await loadRecentRuns();
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not post actuals');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleSkipStep() {
-    if (!run?.id || !selectedStep) return;
-    setBusy(true);
-    try {
-      const detail = await skipRunStep(run.id, selectedStep.id);
-      setRunDetail(detail);
-      if (detail.chain_run.status === 'COMPLETED') await loadRecentRuns();
-    } catch (cause) {
-      onError(cause instanceof Error ? cause.message : 'Could not skip step');
     } finally {
       setBusy(false);
     }
@@ -1063,7 +1297,13 @@ function ClassicChainMap({
       await splitLot(lotId, Number(qty), unit, disposition);
       if (run?.id && selectedStep?.id) {
         const mats = await loadAvailableInputs(run.id, selectedStep.id);
-        setMaterials(mats);
+        setMaterials({
+          groups: mats.groups,
+          reuse_groups: mats.reuse_groups,
+          eligible: mats.eligible,
+          for_reuse: mats.for_reuse,
+          ineligible: mats.ineligible,
+        });
       }
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'Could not update lot');
@@ -1098,17 +1338,42 @@ function ClassicChainMap({
     return variances as { name: string; delta: number; expected: number; actual: number }[];
   }, [runDetail]);
 
+  const workflowStatus = useMemo(() => {
+    if (isReadOnly) return { title: 'Completed run', detail: 'Read-only audit trail. Stock movements stay linked in the ledger.' };
+    if (planningMode) return { title: 'Editing chain layout', detail: 'Assign items to each step and adjust forecast outputs. Stock is not used in edit mode.' };
+    if (isRunning && selectedStep?.status === 'ACTIVE') {
+      return {
+        title: `Step ${selectedStep.step_number}: ${selectedStep.process_type_name ?? 'Active step'}`,
+        detail: 'Next action: record actual output and by-products, then post this step. Inventory is consumed when you post.',
+      };
+    }
+    if (isDraft) {
+      return {
+        title: `Draft${run?.code ? ` · ${run.code}` : ''}`,
+        detail: inputAllocations.length
+          ? 'Next action: start the run when ready. Saving a draft does not consume stock.'
+          : 'Next action: select step 1, choose eligible stock lots, then save a draft or start the run.',
+      };
+    }
+    return {
+      title: 'New chain run',
+      detail: 'Select step 1, choose stock from Available materials, then save a draft without consuming inventory.',
+    };
+  }, [isReadOnly, planningMode, isRunning, selectedStep, isDraft, run?.code, inputAllocations.length]);
+
+  function showInputSlotForStep(step: ChainRunStep) {
+    if (isReadOnly || planningMode || selectedStep?.id !== step.id) return false;
+    if (step.step_number === 1) return !isRunning || step.status === 'ACTIVE' || isDraft;
+    return isRunning && step.status === 'ACTIVE';
+  }
+
   return (
     <div ref={cardRef} className={`chain-map-card${fullscreen ? ' chain-map-card--fullscreen' : ''}`}>
       <div className="chain-map-head">
         <div>
           <h3 className="chain-map-title">{chain.name}{run?.code ? ` · ${run.code}` : ''}</h3>
           <p className="muted">
-            {planningMode && 'Edit mode — assign items to each step, drag processes from the library, then enter expected outputs.'}
-            {!editMode && isDraft && !isRunning && 'Draft — select stock, adjust each lot quantity, then save or start the run.'}
-            {isRunning && 'Running — enter actuals for the active step.'}
-            {isReadOnly && 'Completed run — read-only audit trail.'}
-            {!editMode && !run && !isRunning && 'Drag stock before the first step, or expand a stock card and select its godown lots.'}
+            <strong>{workflowStatus.title}.</strong> {workflowStatus.detail}
           </p>
         </div>
         <div className="chain-map-controls">
@@ -1137,7 +1402,14 @@ function ClassicChainMap({
           </label>
           {(!run || isDraft) && !isRunning && !isReadOnly && (
             editMode ? (
-              <Button type="button" className="secondary" onClick={exitEditMode}>Done editing</Button>
+              <>
+                {canConfigureProcesses && needsInputConfiguration && selectedProcessType ? (
+                  <Button type="button" className="secondary" onClick={configureSelectedProcess}>
+                    Configure {selectedProcessType.name}
+                  </Button>
+                ) : null}
+                <Button type="button" className="secondary" onClick={exitEditMode}>Done editing</Button>
+              </>
             ) : (
               <Button type="button" className="secondary" onClick={() => void handleCreateOrEdit()}>
                 Edit chain
@@ -1154,13 +1426,13 @@ function ClassicChainMap({
             </Button>
           )}
           {canStartRun && isDraft && (
-            <Button type="button" disabled={busy || !steps.length || !inputAllocations.length || allocatedInputDisplay <= 0} onClick={() => void handleStartRun()}>
+            <Button type="button" disabled={busy || !steps.length || !inputAllocations.length || allocatedInputDisplay <= 0 || needsInputConfiguration} onClick={() => void handleStartRun()} title="Begin the run. Stock is not consumed until you post step 1.">
               {busy ? 'Starting…' : 'Start run'}
             </Button>
           )}
           {canStartRun && !run && (
-            <Button type="button" disabled={busy} onClick={() => void saveInputDraft()}>
-              {busy ? 'Creating…' : 'New draft run'}
+            <Button type="button" disabled={busy || needsInputConfiguration} onClick={() => void saveInputDraft()} title="Save lot selections without consuming stock.">
+              {busy ? 'Saving…' : 'Save draft (no stock use)'}
             </Button>
           )}
           {canStartRun && run && (isReadOnly || isRunning) && (
@@ -1168,7 +1440,11 @@ function ClassicChainMap({
               {busy ? 'Creating…' : 'New draft run'}
             </Button>
           )}
-          {canStartRun && isDraft && <Button type="button" disabled={busy} onClick={() => void saveInputDraft()}>Save input draft</Button>}
+          {canStartRun && isDraft && run && (
+            <Button type="button" disabled={busy || needsInputConfiguration} onClick={() => void saveInputDraft()} title="Save lot selections without consuming stock.">
+              Save draft (no stock use)
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1186,14 +1462,25 @@ function ClassicChainMap({
             <ChainLibraryPanel
               title="Available materials"
               hint={
-                selectedStep?.step_number === 1
-                  ? `Select stock from Stocks & Lots for ${selectedStep?.process_type_name ?? 'the first step'}.`
-                  : isRunning
-                    ? `Output lots from the previous step for ${selectedStep?.process_type_name ?? 'selected step'}.`
-                    : `Stock available for ${selectedStep?.process_type_name ?? 'the selected step'}.`
+                needsInputConfiguration
+                  ? inputConfigurationMessage(selectedProcessType?.name)
+                  : selectedStep?.step_number === 1
+                    ? `Only stock accepted by ${selectedStep?.process_type_name ?? 'the selected step'} is shown.`
+                    : isRunning && selectedStep?.step_number > 1
+                      ? `Only output lots from the previous posted step are shown for ${selectedStep?.process_type_name ?? 'this step'}.`
+                      : `Stock available for ${selectedStep?.process_type_name ?? 'the selected step'}.`
               }
             >
-              {!isRunning || selectedStep?.step_number === 1 ? (
+              {needsInputConfiguration ? (
+                <div className="chain-config-action">
+                  <p>{inputConfigurationMessage(selectedProcessType?.name)}</p>
+                  {canConfigureProcesses && onConfigureProcess ? (
+                    <Button type="button" className="secondary" onClick={configureSelectedProcess}>
+                      Configure {selectedProcessType?.name ?? 'process'}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : !isRunning || selectedStep?.step_number === 1 ? (
                 <>
                   <div className="chain-materials-filters">
                     <Select value={materialItemFilter} onChange={(event) => setMaterialItemFilter(event.target.value)} aria-label="Filter by material">
@@ -1243,18 +1530,18 @@ function ClassicChainMap({
                     <MaterialCard
                       key={lot.id}
                       lot={lot}
-                      readOnly={!isRunning}
+                      readOnly={!canSelectStock}
                       selected={selectedInputLotId === lot.id}
-                      onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
+                      onSelect={() => selectInputLot(lot.id)}
                     />
                   )) : null}
                   {materials?.eligible.length ? materials.eligible.map((lot) => (
                     <MaterialCard
                       key={lot.id}
                       lot={lot}
-                      readOnly={!isRunning}
+                      readOnly={!canSelectStock}
                       selected={selectedInputLotId === lot.id}
-                      onSelect={() => isRunning && setSelectedInputLotId(lot.id)}
+                      onSelect={() => selectInputLot(lot.id)}
                     />
                   )) : <p className="muted">{isRunning ? 'No eligible lots.' : 'No eligible lots for this step.'}</p>}
                 </div>
@@ -1278,58 +1565,66 @@ function ClassicChainMap({
           onDrop={(e) => void handleDropProcess(e)}
         >
           <div className="chain-map-main">
-            <div className="chain-map-input" onDrop={dropStock} onDragOver={(event) => {
-              if (canSelectStock && event.dataTransfer.types.includes(STOCK_DRAG_TYPE)) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; }
-            }}>
-              {chainInputLabel(chain)}
-              <b>{plannedInput > 0 ? `${plannedInput} ${unit}` : 'Drop stock here before the first step'}</b>
-              {inputAllocations.map((entry) => {
-                const lot = availableLots.find((candidate) => candidate.id === entry.lot_id);
-                return <label key={entry.lot_id} className="chain-stock-selection">
-                  <span>{lot?.item_name ?? 'Selected stock'} · {lot?.godown_name ?? lot?.code ?? entry.lot_id}</span>
-                  <input type="number" min="0" step="0.01" max={lot ? baseToDisplay(lot.qty_kg, unit) : undefined}
-                    disabled={!canSelectStock} value={entry.quantity_display}
-                    aria-label={`Input quantity from ${lot?.code ?? entry.lot_id}`}
-                    onChange={(event) => toggleInputAllocation(entry.lot_id, lot ? baseToDisplay(lot.qty_kg, unit) : 0, true, event.target.value)} />
-                  <small>{unit} · Remaining after posting: {lot ? baseToDisplay(lot.qty_kg - displayToBase(Number(entry.quantity_display), unit), unit) : '—'}</small>
-                  {canSelectStock && <button type="button" onClick={() => toggleInputAllocation(entry.lot_id, 0, false)}>Remove</button>}
-                </label>;
-              })}
-              <small>Save draft to keep selections. Stock is deducted when you post the step.</small>
-            </div>
-            {steps.map((step) => {
+            {steps.map((step, index) => {
+              const stepType = types.find((type) => type.id === step.process_type_id);
+              const previousStep = index > 0 ? steps[index - 1] : null;
+              const previousType = previousStep ? types.find((type) => type.id === previousStep.process_type_id) : null;
+              const flowLabel = previousStep ? mainOutputItemName(previousStep, previousType) : '';
               const lineQtys: Record<string, string> = {};
               for (const line of step.lines) lineQtys[line.id] = lineQtyForStep(step, line);
-              const inputSatisfied = inputAllocations.length > 0;
+              const inputSatisfied = step.step_number === 1 ? inputAllocations.length > 0 : Boolean(selectedInputLotId);
               const linesEditable = planningMode
                 ? inputSatisfied
                 : (!run || (isDraft && !isReadOnly) || step.status === 'ACTIVE');
-              const stepMassBalance = massBalanceForStep(
-                step,
-                unit,
-                lineQtys,
-                mainOverrides[step.id],
-              );
+              const stepMassBalance = massBalanceForStep(step, unit, lineQtys, mainOverrides[step.id]);
               return (
-                <StepNode
-                  key={step.id}
-                  step={step}
-                  unit={unit}
-                  selected={step.id === (selectedStep?.id ?? '')}
-                  editable={planningMode ? inputSatisfied : (!run || (isDraft && !isReadOnly))}
-                  linesEditable={linesEditable}
-                  planningMode={planningMode}
-                  inputSatisfied={inputSatisfied}
-                  assignedInput={stepAssignments[step.id] ?? null}
-                  mainOverride={mainOverrides[step.id]}
-                  lineQtys={lineQtys}
-                  massBalance={stepMassBalance}
-                  onSelect={() => setSelectedStepId(step.id)}
-                  onMainChange={(value) => setMainOverrides((current) => ({ ...current, [step.id]: value }))}
-                  onLineQtyChange={(lineId, value) => updateLineQty(step, lineId, value)}
-                  onAssignItem={(itemId) => assignItemToStep(step.id, itemId)}
-                  onClearInput={() => clearStepInput(step.id)}
-                />
+                <div key={step.id} className="chain-map-step-segment">
+                  {index > 0 && previousStep ? (
+                    <FlowArrow
+                      label={flowLabel}
+                      forecastQty={baseToDisplay(step.forecast_input_base, unit)}
+                      actualQty={previousStep.actual_main_base != null ? baseToDisplay(previousStep.actual_main_base, unit) : null}
+                      unit={unit}
+                      posted={previousStep.status === 'COMPLETED'}
+                    />
+                  ) : null}
+                  {showInputSlotForStep(step) ? (
+                    <StepInputSlot
+                      step={step}
+                      processType={stepType}
+                      unit={unit}
+                      inputLabel={acceptedInputLabel(stepType, 'stock')}
+                      inputAllocations={inputAllocations}
+                      selectedInputLotId={selectedInputLotId}
+                      availableLots={availableLots}
+                      canEdit={canSelectStock}
+                      fieldError={fieldErrors.__input__}
+                      onDropStock={dropStock}
+                      onClearAll={clearAllInputAllocations}
+                      onToggleAllocation={toggleInputAllocation}
+                      onSelectLot={selectInputLot}
+                      onConfigureProcess={canConfigureProcesses && onConfigureProcess && stepType ? () => onConfigureProcess(stepType.id) : undefined}
+                    />
+                  ) : null}
+                  <StepNode
+                    step={step}
+                    unit={unit}
+                    selected={step.id === (selectedStep?.id ?? '')}
+                    editable={planningMode ? inputSatisfied : (!run || (isDraft && !isReadOnly))}
+                    linesEditable={linesEditable}
+                    planningMode={planningMode}
+                    inputSatisfied={inputSatisfied}
+                    assignedInput={stepAssignments[step.id] ?? null}
+                    mainOverride={mainOverrides[step.id]}
+                    lineQtys={lineQtys}
+                    massBalance={stepMassBalance}
+                    onSelect={() => setSelectedStepId(step.id)}
+                    onMainChange={(value) => setMainOverrides((current) => ({ ...current, [step.id]: value }))}
+                    onLineQtyChange={(lineId, value) => updateLineQty(step, lineId, value)}
+                    onAssignItem={(itemId) => assignItemToStep(step.id, itemId)}
+                    onClearInput={() => clearStepInput(step.id)}
+                  />
+                </div>
               );
             })}
             {editMode && !isRunning && (isDraft || !run) && <div className="chain-map-drop">Drop process here</div>}
@@ -1368,10 +1663,11 @@ function ClassicChainMap({
       {selectedStep && isRunning && selectedStep.status === 'ACTIVE' && (
         <div className="chain-actuals-panel">
           <div className="chain-actuals-form">
-            <h5>Enter actuals — {selectedStep.process_type_name ?? 'active step'}</h5>
+            <h5>Record and post actuals — {selectedStep.process_type_name ?? 'active step'}</h5>
             <p className="muted chain-actuals-hint">
-              Enter main output and by-products only. Waste is calculated as input minus what you accounted for.
+              Enter main output and by-products only. Waste is calculated as input minus what you accounted for. Inventory is consumed when you post.
             </p>
+            {fieldErrors.__input__ ? <p className="chain-field-error">{fieldErrors.__input__}</p> : null}
             {selectedStep.step_number === 1 ? (
               <label className="chain-actual-line">
                 <span><strong>Processing input</strong> from selected stock lots</span>
@@ -1400,17 +1696,20 @@ function ClassicChainMap({
                 })}
               </div>
             ) : selectedInputLotId ? (
-              <p className="chain-actuals-lot muted">Input lot selected from materials.</p>
+              <p className="chain-actuals-lot muted">
+                {formatLotProvenance(availableLots.find((lot) => lot.id === selectedInputLotId) ?? { id: selectedInputLotId, code: selectedInputLotId, item_id: '', item_name: 'Selected lot', qty_kg: 0 })}
+              </p>
             ) : (
-              <p className="chain-actuals-lot chain-input-over">Select stock lots from Available materials.</p>
+              <p className={`chain-actuals-lot${fieldErrors.__input__ ? ' chain-input-over' : ''}`}>Select stock lots from Available materials.</p>
             )}
-            {activeMassBalance?.overInput ? (
+            {fieldErrors.__balance__ ? <p className="chain-field-error">{fieldErrors.__balance__}</p> : null}
+            {activeMassBalance?.overInput && !fieldErrors.__balance__ ? (
               <p className="chain-actuals-warning">
                 Output and by-products ({activeMassBalance.totalOutDisplay} {unit.toLowerCase()}) exceed input ({activeMassBalance.inputDisplay} {unit.toLowerCase()}).
               </p>
             ) : null}
             {selectedStep.lines.filter((line) => line.kind !== 'loss').map((line) => (
-              <label key={line.id} className="chain-actual-line">
+              <label key={line.id} className={`chain-actual-line${fieldErrors[line.id] ? ' chain-actual-line--error' : ''}`}>
                 <span>
                   <strong>{lineKindLabel(line.kind)}</strong>
                   {' '}{line.item_name ?? line.kind}
@@ -1421,27 +1720,36 @@ function ClassicChainMap({
                     min="0"
                     step="0.001"
                     value={actualDraft[line.id]?.qty ?? ''}
-                    onChange={(event) => setActualDraft((current) => ({
-                      ...current,
-                      [line.id]: { ...current[line.id], qty: event.target.value, godownId: current[line.id]?.godownId ?? '' },
-                    }))}
+                    onChange={(event) => {
+                      setFieldErrors((current) => { const next = { ...current }; delete next[line.id]; delete next.__balance__; return next; });
+                      setActualDraft((current) => ({
+                        ...current,
+                        [line.id]: { ...current[line.id], qty: event.target.value, godownId: current[line.id]?.godownId ?? '' },
+                      }));
+                    }}
                     aria-label={`${lineKindLabel(line.kind)} quantity for ${line.item_name ?? line.kind}`}
+                    aria-invalid={Boolean(fieldErrors[line.id])}
                   />
                   <span>{unit.toLowerCase()}</span>
                   {line.kind === 'byproduct' && (
                     <Select
                       value={actualDraft[line.id]?.godownId ?? ''}
-                      onChange={(event) => setActualDraft((current) => ({
-                        ...current,
-                        [line.id]: { ...current[line.id], godownId: event.target.value, qty: current[line.id]?.qty ?? '' },
-                      }))}
+                      onChange={(event) => {
+                        setFieldErrors((current) => { const next = { ...current }; delete next[line.id]; return next; });
+                        setActualDraft((current) => ({
+                          ...current,
+                          [line.id]: { ...current[line.id], godownId: event.target.value, qty: current[line.id]?.qty ?? '' },
+                        }));
+                      }}
                       aria-label={`Godown for ${line.item_name}`}
+                      aria-invalid={Boolean(fieldErrors[line.id])}
                     >
                       <option value="">Choose godown</option>
                       {godowns.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                     </Select>
                   )}
                 </div>
+                {fieldErrors[line.id] ? <small className="chain-field-error">{fieldErrors[line.id]}</small> : null}
               </label>
             ))}
             {selectedStep.lines.some((line) => line.kind === 'loss') && activeMassBalance ? (
@@ -1450,8 +1758,9 @@ function ClassicChainMap({
               </p>
             ) : null}
             <div className="chain-actuals-actions">
-              <Button type="button" disabled={busy || activeMassBalance?.overInput} onClick={() => void handlePostActuals()}>Post step</Button>
-              <Button type="button" className="secondary" disabled={busy} onClick={() => void handleSkipStep()}>Skip step</Button>
+              <Button type="button" disabled={busy || activeMassBalance?.overInput} onClick={() => void handlePostActuals()} title="Record consumption, outputs, and by-products for this step.">
+                {busy ? 'Posting…' : 'Record and post actuals'}
+              </Button>
             </div>
           </div>
         </div>
@@ -1538,12 +1847,16 @@ export function ProcessChainClassic({
   types,
   preferredUnit,
   canStartRun,
+  canConfigureProcesses,
+  onConfigureProcess,
   onError,
 }: {
   chains: ProcessingChainRecord[];
   types: CatalogProcessType[];
   preferredUnit?: string | null;
   canStartRun: boolean;
+  canConfigureProcesses?: boolean;
+  onConfigureProcess?: (processTypeId: string) => void;
   onError: (message: string | null) => void;
 }) {
   const [selectedChainId, setSelectedChainId] = useState(chains[0]?.id ?? '');
@@ -1583,6 +1896,8 @@ export function ProcessChainClassic({
           types={types}
           preferredUnit={preferredUnit}
           canStartRun={canStartRun}
+          canConfigureProcesses={canConfigureProcesses}
+          onConfigureProcess={onConfigureProcess}
           onError={onError}
         />
       )}
