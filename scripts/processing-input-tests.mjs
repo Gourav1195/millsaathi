@@ -18,6 +18,8 @@ function lot(overrides) {
     item_id: overrides.item_id,
     item_name: overrides.item_name ?? 'Paddy',
     qty_kg: overrides.qty_kg,
+    tracking_mode: overrides.tracking_mode ?? null,
+    bag_count: overrides.bag_count ?? null,
     godown_id: overrides.godown_id ?? null,
     godown_name: overrides.godown_name ?? null,
     sauda_id: overrides.sauda_id ?? null,
@@ -82,6 +84,25 @@ function lot(overrides) {
     lotsById,
   });
   assert.equal(ok.ok, true);
+}
+
+// Variable-bag lots must be consumed in full.
+{
+  const lotsById = new Map([
+    ['l1', lot({ id: 'l1', item_id: 'paddy', qty_kg: 6250, tracking_mode: 'VARIABLE_BAG', bag_count: 100 })],
+  ]);
+  const whole = validateInputAllocations({
+    allocations: [{ lot_id: 'l1', quantity_base: 6250 }],
+    requiredTotalBase: 6250,
+    lotsById,
+  });
+  assert.equal(whole.ok, true);
+  const partial = validateInputAllocations({
+    allocations: [{ lot_id: 'l1', quantity_base: 3000 }],
+    requiredTotalBase: 3000,
+    lotsById,
+  });
+  assert.equal(partial.ok, false);
 }
 
 // Processing from multiple godowns must match total.

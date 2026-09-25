@@ -1,11 +1,11 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { canAccessNav, type NavModule } from '../lib/permissions';
 import { useOperationalCounts } from '../lib/operational-counts';
-import type { Session } from '../lib/session';
+import { useSession, type Session } from '../lib/session';
 
 type IconName = 'dashboard' | 'gate' | 'purchase' | 'stock' | 'parties' | 'items' | 'processing' | 'billing' | 'team' | 'documents' | 'digest' | 'settings';
 type NavigationLink = { label: string; href: string; icon: IconName; module: NavModule };
@@ -73,11 +73,23 @@ function SidebarCollapseIcon() {
   );
 }
 
+function LogoutIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16 17l5-5-5-5M21 12H9" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function AppHeader({ session }: { session: Session }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { setSession } = useSession();
   const { pendingStockReceipts } = useOperationalCounts();
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const user = { role: session.role, role_code: session.role };
   const visibleSections = navigationSections
@@ -92,6 +104,18 @@ export function AppHeader({ session }: { session: Session }) {
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const collapseSidebar = useCallback(() => setSidebarCollapsed(true), []);
   const expandSidebar = useCallback(() => setSidebarCollapsed(false), []);
+  const logout = useCallback(async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      setSession(null);
+      closeMenu();
+      router.push('/app');
+    } catch {
+      setLoggingOut(false);
+    }
+  }, [closeMenu, loggingOut, router, setSession]);
 
   useEffect(() => {
     try {
@@ -258,6 +282,16 @@ export function AppHeader({ session }: { session: Session }) {
           <div className="app-sidebar-user-name">{session.name}</div>
           <div className="app-sidebar-user-role">{(session.role_label ?? session.role).replaceAll('_', ' ')}</div>
         </div>
+        <button
+          type="button"
+          className="app-sidebar-logout-btn"
+          aria-label="Log out"
+          title="Log out"
+          disabled={loggingOut}
+          onClick={() => void logout()}
+        >
+          <LogoutIcon />
+        </button>
       </div>
       </aside>
     </>

@@ -30,6 +30,15 @@ import {
 import { registerMillIntelligenceRoutes } from './mill-intelligence';
 import { normalizeVehicleNumber, VEHICLE_NUMBER_ERROR } from '../shared/vehicle-number';
 import {
+  gateRequiresBagCount,
+  isTrackingMode,
+  normalizeCommercialQuantityInput,
+  normalizeItemQuantityInput,
+  normalizeItemTrackingPayload,
+  type ItemTrackingConfig,
+  type TrackingMode,
+} from '../shared/quantity';
+import {
   buildStepProfile,
   loadChainRunDetail,
   materializeChainRunSteps,
@@ -38,10 +47,13 @@ import {
   roundClassicQty,
 } from './chainRunExecution';
 import { ensureRiceMillChainTemplates } from './chainBatch';
+import { settleGateIntake, type SettlementLineInput } from './gateIntakeSettlement';
 import {
+  gateAllocatedKg,
   groupStockLots,
   loadProcessingStockLots,
   syncGateStockStatus,
+  undoGateLotAccept,
   validateInputAllocations,
   type StockLotRow,
 } from './stockLotProcessing';
@@ -123,16 +135,53 @@ function normalizeQuality(body: Record<string, unknown>): { json: string | null;
   return { json: Object.keys(quality).length ? JSON.stringify(quality) : null };
 }
 
-async function normalizeItemQuantity(db: D1Database, millId: string, itemId: unknown, quantity: unknown, unit: unknown) {
-  const normalizedUnit = String(unit ?? 'KG').trim().toUpperCase();
-  const item = await db.prepare(`SELECT base_unit, package_unit, package_quantity_base FROM items WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`).bind(itemId, millId).first<{ base_unit: string | null; package_unit: string | null; package_quantity_base: number | null }>();
+type ItemQuantityRow = {
+  base_unit: string | null;
+  package_unit: string | null;
+  package_quantity_base: number | null;
+  tracking_mode: string | null;
+  gate_bag_count_required: number | null;
+  display_unit: string | null;
+  default_rate_unit: string | null;
+};
+
+async function loadItemTrackingConfig(db: D1Database, millId: string, itemId: unknown): Promise<ItemTrackingConfig | null> {
+  const item = await db.prepare(
+    `SELECT base_unit, package_unit, package_quantity_base, tracking_mode, gate_bag_count_required, display_unit, default_rate_unit
+     FROM items WHERE id = ? AND mill_id = ? AND deleted_at IS NULL`,
+  ).bind(itemId, millId).first<ItemQuantityRow>();
   if (!item) return null;
-  const direct = normalizeQuantity(quantity, normalizedUnit);
-  if (direct) return direct;
-  if (!['BAG', 'PIECE'].includes(normalizedUnit) || String(item.package_unit ?? '').toUpperCase() !== normalizedUnit || !(Number(item.package_quantity_base) > 0)) return null;
-  const value = Number(quantity);
-  if (!Number.isFinite(value) || value < 0) return null;
-  return { quantity: Math.round(value * 1000) / 1000, unit: normalizedUnit, base: Math.round(value * Number(item.package_quantity_base) * 1000) / 1000, baseUnit: item.base_unit || 'KG' };
+  const mode = isTrackingMode(item.tracking_mode) ? item.tracking_mode : 'WEIGHT_ONLY';
+  return {
+    tracking_mode: mode,
+    display_unit: item.display_unit,
+    package_unit: item.package_unit,
+    package_quantity_base: item.package_quantity_base,
+    gate_bag_count_required: item.gate_bag_count_required,
+    default_rate_unit: item.default_rate_unit,
+  };
+}
+
+type NormalizedItemQty = {
+  quantity: number;
+  unit: string;
+  base: number;
+  baseUnit: string;
+  bagCount?: number | null;
+};
+
+async function normalizeItemQuantity(db: D1Database, millId: string, itemId: unknown, quantity: unknown, unit: unknown): Promise<NormalizedItemQty | null> {
+  const item = await loadItemTrackingConfig(db, millId, itemId);
+  if (!item) return null;
+  const normalized = normalizeItemQuantityInput(item, quantity, unit);
+  if (!normalized) return null;
+  return {
+    quantity: normalized.quantity,
+    unit: normalized.unit,
+    base: normalized.base,
+    baseUnit: normalized.baseUnit,
+    bagCount: normalized.bagCount ?? null,
+  };
 }
 
 async function audit(c: any, entityType: string, entityId: string, action: string, reason?: string) {
@@ -388,7 +437,14 @@ api.get('/overview', async (c) => {
         ? db.prepare(
             `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
                     s.name AS supplier_name, i.name AS item_name,
-                    sa.code AS sauda_code, sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl
+                    sa.code AS sauda_code, sa.rate_paise_per_qtl AS sauda_rate_paise_per_qtl,
+                    g.rate_paise_per_qtl AS gate_rate_paise_per_qtl,
+                    i.package_unit, i.package_quantity_base, i.tracking_mode, i.gate_bag_count_required,
+                    g.observed_bag_count, g.stock_status,
+                    (SELECT COALESCE(SUM(l.received_qty_kg), 0)
+                     FROM lots l WHERE l.gate_entry_id = g.id AND l.mill_id = g.mill_id) AS allocated_qty_kg,
+                    (SELECT COALESCE(SUM(l.received_bag_count), 0)
+                     FROM lots l WHERE l.gate_entry_id = g.id AND l.mill_id = g.mill_id) AS allocated_bag_count
              FROM gate_entries g
              LEFT JOIN suppliers s ON s.id = g.supplier_id
              LEFT JOIN items i ON i.id = g.item_id
@@ -396,9 +452,8 @@ api.get('/overview', async (c) => {
              WHERE g.mill_id = ?1
                AND g.direction = 'in'
                AND g.status = 'done'
-               AND g.stock_status = 'pending'
+               AND g.stock_status IN ('pending', 'partial')
                AND COALESCE(g.gross_kg,0) > COALESCE(g.tare_kg,0)
-               AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
              ORDER BY g.entry_date DESC, g.updated_at DESC
              LIMIT 20`,
           ).bind(mill.id)
@@ -406,16 +461,26 @@ api.get('/overview', async (c) => {
       hasStockReceiptFields
         ? db.prepare(
             `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
-                    s.name AS supplier_name, i.name AS item_name
+                    s.name AS supplier_name, i.name AS item_name, g.stock_note, g.updated_at,
+                    CASE
+                      WHEN g.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
+                       AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
+                      THEN 1 ELSE 0
+                    END AS can_reopen
              FROM gate_entries g
              LEFT JOIN suppliers s ON s.id = g.supplier_id
              LEFT JOIN items i ON i.id = g.item_id
              WHERE g.mill_id = ?
                AND g.direction = 'in'
                AND g.status = 'done'
-               AND g.stock_status = 'skipped'
+               AND (
+                 g.stock_status = 'skipped'
+                 OR EXISTS (
+                   SELECT 1 FROM gate_intake_lines gil
+                   WHERE gil.gate_entry_id = g.id AND gil.mill_id = g.mill_id AND gil.outcome = 'REJECTED'
+                 )
+               )
                AND g.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
-               AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
              ORDER BY g.updated_at DESC
              LIMIT 20`,
           ).bind(mill.id)
@@ -546,8 +611,13 @@ api.get('/overview', async (c) => {
   }
   for (const gd of godownsRes.results as Record<string, unknown>[]) {
     const cap = Number(gd.capacity_kg) || 0;
-    if (cap > 0 && (gd.stock_kg as number) / cap > 0.9) {
-      alerts.push({ level: 'amber', title: `${gd.name} is ${Math.round(((gd.stock_kg as number) / cap) * 100)}% full`, body: 'Plan dispatches or transfers before it blocks unloading.' });
+    if (cap > 0) {
+      const pct = Math.round(((gd.stock_kg as number) / cap) * 100);
+      if (pct > 100) {
+        alerts.push({ level: 'amber', title: `${gd.name} is overloaded (${pct}%)`, body: 'Stock exceeds rated capacity. Plan transfers or dispatches when you can.' });
+      } else if (pct > 90) {
+        alerts.push({ level: 'amber', title: `${gd.name} is ${pct}% full`, body: 'Plan dispatches or transfers before space runs out.' });
+      }
     }
   }
   if (labPending > 0) alerts.push({ level: 'amber', title: `${labPending} lab test${labPending > 1 ? 's' : ''} pending`, body: 'Trucks are waiting on moisture results at the lab.' });
@@ -662,10 +732,19 @@ api.patch('/gate/:id', async (c) => {
   const denied = denyUnlessCapability(c, 'gate:edit'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
-  const currentGate = await c.env.DB.prepare(`SELECT direction, item_id, gross_kg, tare_kg, status FROM gate_entries WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ direction: string; item_id: string | null; gross_kg: number | null; tare_kg: number | null; status: string }>();
+  const currentGate = await c.env.DB.prepare(`SELECT direction, item_id, gross_kg, tare_kg, status, observed_bag_count FROM gate_entries WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ direction: string; item_id: string | null; gross_kg: number | null; tare_kg: number | null; status: string; observed_bag_count: number | null }>();
   if (!currentGate) return c.json({ error: 'not found' }, 404);
   if (currentGate.status === 'done' && (b.gross_kg != null || b.tare_kg != null)) return c.json({ error: 'completed gate weights are immutable; record a correction separately' }, 409);
   for (const field of ['gross_kg', 'tare_kg', 'moisture_pct'] as const) if (b[field] != null && (!Number.isFinite(Number(b[field])) || Number(b[field]) < 0)) return c.json({ error: `${field} must be non-negative` }, 400);
+  if (b.observed_bag_count != null) {
+    const bags = Number(b.observed_bag_count);
+    if (!Number.isInteger(bags) || bags <= 0) return c.json({ error: 'observed_bag_count must be a positive whole number' }, 400);
+  }
+  if (b.observed_package_count != null) {
+    const packs = Number(b.observed_package_count);
+    if (!Number.isInteger(packs) || packs <= 0) return c.json({ error: 'observed_package_count must be a positive whole number' }, 400);
+    b.observed_bag_count = packs;
+  }
   const quality = normalizeQuality(b);
   if (quality.error) return c.json({ error: quality.error }, 400);
   if (b.status === 'done' && currentGate.direction === 'out' && currentGate.item_id) {
@@ -680,8 +759,8 @@ api.patch('/gate/:id', async (c) => {
   }
   const sets: string[] = [];
   const vals: unknown[] = [];
-  for (const k of ['gross_kg', 'tare_kg', 'moisture_pct', 'rate_paise_per_qtl'] as const) {
-    if (b[k] != null && Number.isFinite(Number(b[k]))) { sets.push(`${k} = ?`); vals.push(Number(b[k])); }
+  for (const k of ['gross_kg', 'tare_kg', 'moisture_pct', 'rate_paise_per_qtl', 'observed_bag_count'] as const) {
+    if (b[k] != null && Number.isFinite(Number(b[k]))) { sets.push(`${k} = ?`); vals.push(Math.round(Number(b[k]))); }
   }
   if (quality.json !== null || ['broken_pct', 'foreign_matter_pct', 'damaged_pct', 'grade'].some((field) => b[field] != null)) { sets.push('quality_json = ?'); vals.push(quality.json); }
   if (typeof b.status === 'string') {
@@ -689,6 +768,15 @@ api.patch('/gate/:id', async (c) => {
     sets.push('status = ?'); vals.push(b.status);
   }
   if (!sets.length) return c.json({ error: 'nothing to update' }, 400);
+  if (b.status === 'done' && currentGate.direction === 'in' && currentGate.item_id) {
+    const itemConfig = await loadItemTrackingConfig(c.env.DB, mill.id, currentGate.item_id);
+    if (itemConfig && gateRequiresBagCount(itemConfig)) {
+      const bags = b.observed_bag_count != null ? Number(b.observed_bag_count) : currentGate.observed_bag_count;
+      if (bags == null || !Number.isInteger(bags) || bags <= 0) {
+        return c.json({ error: 'bag count is required before marking this truck done' }, 400);
+      }
+    }
+  }
   sets.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
   const res = await c.env.DB.prepare(`UPDATE gate_entries SET ${sets.join(', ')} WHERE id = ? AND mill_id = ?`)
     .bind(...vals, c.req.param('id'), mill.id)
@@ -711,10 +799,19 @@ api.post('/saudas', async (c) => {
   const agreedQuantity = b.quantity != null ? b.quantity : b.qty_kg;
   const agreedUnit = b.quantity != null ? (b.unit || 'QUINTAL') : 'KG';
   const agreedRate = Number(b.rate_paise_per_qtl);
-  const normalizedAgreement = b.item_id
-    ? await normalizeItemQuantity(c.env.DB, mill.id, b.item_id, agreedQuantity, agreedUnit)
+  const itemConfig = b.item_id ? await loadItemTrackingConfig(c.env.DB, mill.id, b.item_id) : null;
+  let normalizedAgreement = itemConfig
+    ? normalizeCommercialQuantityInput(itemConfig, agreedQuantity, agreedUnit)
     : normalizeQuantity(agreedQuantity, agreedUnit);
+  if ((!normalizedAgreement || normalizedAgreement.base <= 0) && b.item_id) {
+    normalizedAgreement = await normalizeItemQuantity(c.env.DB, mill.id, b.item_id, agreedQuantity, agreedUnit);
+  }
   if (!normalizedAgreement || normalizedAgreement.base <= 0) return c.json({ error: 'positive quantity and a supported unit are required' }, 400);
+  const canonicalQtyKg = normalizedAgreement.baseUnit === 'KG'
+    ? Math.round(normalizedAgreement.base)
+    : (normalizedAgreement.baseUnit === 'BAG' || normalizedAgreement.baseUnit === 'PIECE'
+      ? 0
+      : Math.round(normalizedAgreement.base));
   if (!Number.isFinite(agreedRate) || agreedRate < 0) return c.json({ error: 'rate_paise_per_qtl must be non-negative' }, 400);
   const commissionType = String(b.commission_type ?? '').trim().toLowerCase();
   if (commissionType && !['fixed', 'per_unit', 'percentage'].includes(commissionType)) return c.json({ error: 'invalid commission type' }, 400);
@@ -737,7 +834,7 @@ api.post('/saudas', async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(id, mill.id, code, direction, (b.supplier_id as string) || null, (b.buyer_id as string) || null, String(b.broker_name ?? 'Direct'),
-      (b.item_id as string) || null, Math.round(normalizedAgreement.base), normalizedAgreement.quantity, normalizedAgreement.unit, Math.round(agreedRate),
+      (b.item_id as string) || null, canonicalQtyKg, normalizedAgreement.quantity, normalizedAgreement.unit, Math.round(agreedRate),
       b.moisture_pct != null ? Number(b.moisture_pct) : null, Math.round(Number(b.advance_paise) || 0), (b.note as string) || null, String(b.agreement_date ?? istToday()), deliveryStart, deliveryEnd, deliveryTolerance, commissionType || null, commissionType === 'percentage' || commissionType === 'per_unit' ? commissionValue : null, commissionType === 'fixed' ? Math.round(commissionValue * 100) : null)
     .run();
   return c.json({ id, code }, 201);
@@ -761,12 +858,22 @@ api.post('/lots', async (c) => {
   const denied = denyUnlessCapability(c, 'stock:create'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>();
+  const itemConfig = b.item_id ? await loadItemTrackingConfig(c.env.DB, mill.id, b.item_id) : null;
+  let lotBagCount: number | null = b.bag_count != null ? Math.round(Number(b.bag_count)) : null;
+  let lotWeightSource: string | null = b.weight_source != null ? String(b.weight_source) : null;
   const requestedQuantity = b.quantity != null ? b.quantity : b.qty_kg;
   const requestedUnit = b.unit != null ? b.unit : 'KG';
-  const lotEntry = b.item_id
+  let lotEntry: NormalizedItemQty | ReturnType<typeof normalizeQuantity> | null = b.item_id
     ? await normalizeItemQuantity(c.env.DB, mill.id, b.item_id, requestedQuantity, requestedUnit)
     : normalizeQuantity(requestedQuantity, requestedUnit);
+  if (itemConfig?.tracking_mode === 'VARIABLE_BAG' && b.gate_entry_id && b.qty_kg != null) {
+    const qtyKg = Math.round(Number(b.qty_kg));
+    if (!Number.isInteger(qtyKg) || qtyKg <= 0) return c.json({ error: 'qty_kg must be positive' }, 400);
+    lotEntry = { quantity: qtyKg, unit: 'KG', base: qtyKg, baseUnit: 'KG', bagCount: lotBagCount };
+    lotWeightSource = lotWeightSource ?? 'WEIGHED';
+  }
   if (!lotEntry || lotEntry.base <= 0) return c.json({ error: 'positive quantity and a supported unit are required' }, 400);
+  if (lotBagCount == null && 'bagCount' in lotEntry && lotEntry.bagCount != null) lotBagCount = lotEntry.bagCount;
   const lotQuantity = lotEntry.base;
   const lotValue = b.value_paise == null ? 0 : Number(b.value_paise);
   if (!Number.isFinite(lotQuantity) || lotQuantity <= 0 || Math.round(lotQuantity) <= 0) return c.json({ error: 'qty_kg must be positive' }, 400);
@@ -820,17 +927,25 @@ api.post('/lots', async (c) => {
     columns.push('note');
     values.push((b.note as string) || null);
   }
+  if (lotColumns.has('bag_count') && lotBagCount != null) {
+    columns.push('bag_count', 'received_bag_count');
+    values.push(lotBagCount, lotBagCount);
+  }
+  if (lotColumns.has('weight_source') && lotWeightSource) {
+    columns.push('weight_source');
+    values.push(lotWeightSource);
+  }
   const inserts = c.env.DB.prepare(
     `INSERT INTO lots (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
   ).bind(...values);
   const stockInsert = b.item_id ? c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, movement_date, created_by) VALUES (?, ?, 'IN', ?, ?, ?, ?, ?, ?, ?, 'LOT', ?, ?, ?)`).bind(uuid(), mill.id, b.item_id, b.godown_id || null, id, lotEntry.quantity, lotEntry.unit, lotEntry.base, lotEntry.baseUnit, id, b.in_date || istToday(), c.get('session').user.id) : null;
   if (gateEntryId) {
     const gate = await c.env.DB.prepare(
-      `SELECT id, quality_json, sauda_id, COALESCE(gross_kg,0)-COALESCE(tare_kg,0) AS net_kg, stock_status
+      `SELECT id, quality_json, sauda_id, COALESCE(gross_kg,0)-COALESCE(tare_kg,0) AS net_kg, stock_status, observed_bag_count
        FROM gate_entries
        WHERE id = ?1 AND mill_id = ?2 AND direction = 'in' AND status = 'done'
          AND stock_status IN ('pending','partial')`,
-    ).bind(gateEntryId, mill.id).first<{ id: string; quality_json: string | null; sauda_id: string | null; net_kg: number; stock_status: string }>();
+    ).bind(gateEntryId, mill.id).first<{ id: string; quality_json: string | null; sauda_id: string | null; net_kg: number; stock_status: string; observed_bag_count: number | null }>();
     if (!gate) return c.json({ error: 'incoming truck is not pending for stock allocation' }, 400);
     const allocated = await c.env.DB.prepare(
       `SELECT COALESCE(SUM(received_qty_kg), 0) AS allocated FROM lots WHERE mill_id = ? AND gate_entry_id = ?`,
@@ -843,6 +958,27 @@ api.post('/lots', async (c) => {
       values[columns.indexOf('sauda_id')] = gate.sauda_id;
     }
     if (!lotQuality.json && gate.quality_json) values[columns.indexOf('quality_json')] = gate.quality_json;
+    if (itemConfig?.tracking_mode === 'VARIABLE_BAG' && lotColumns.has('bag_count')) {
+      const allocatedBags = await c.env.DB.prepare(
+        `SELECT COALESCE(SUM(received_bag_count), 0) AS allocated FROM lots WHERE mill_id = ? AND gate_entry_id = ?`,
+      ).bind(mill.id, gateEntryId).first<{ allocated: number }>();
+      const remainingBags = gate.observed_bag_count != null
+        ? Math.max(0, gate.observed_bag_count - (allocatedBags?.allocated ?? 0))
+        : null;
+      if (remainingBags != null) {
+        if (lotBagCount == null) lotBagCount = remainingBags;
+        const bagIdx = columns.indexOf('bag_count');
+        const recvIdx = columns.indexOf('received_bag_count');
+        if (bagIdx >= 0) values[bagIdx] = lotBagCount;
+        if (recvIdx >= 0) values[recvIdx] = lotBagCount;
+      }
+      if (lotColumns.has('weight_source') && !columns.includes('weight_source')) {
+        columns.push('weight_source');
+        values.push('WEIGHED');
+      } else if (columns.includes('weight_source')) {
+        values[columns.indexOf('weight_source')] = 'WEIGHED';
+      }
+    }
     await c.env.DB.batch([
       inserts, ...(stockInsert ? [stockInsert] : []),
       c.env.DB.prepare(`UPDATE sauda_deliveries SET lot_id = COALESCE(lot_id, ?), godown_id = COALESCE(godown_id, ?) WHERE mill_id = ? AND gate_entry_id = ? AND lot_id IS NULL`)
@@ -855,35 +991,65 @@ api.post('/lots', async (c) => {
   return c.json({ id, code }, 201);
 });
 
+api.post('/lots/:id/undo-accept', async (c) => {
+  const denied = denyUnlessCapability(c, 'stock:create'); if (denied) return denied;
+  const { mill, user } = c.get('session');
+  const result = await undoGateLotAccept(c.env.DB, mill.id, c.req.param('id'), user.id);
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  await audit(c, 'lot', c.req.param('id'), 'VOID', `Undid truck accept for ${result.code}`);
+  return c.json({ ok: true, gate_entry_id: result.gate_entry_id, code: result.code });
+});
+
 api.post('/saudas/:id/deliveries', async (c) => {
   const denied = denyUnlessCapability(c, 'saudas:edit'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
-  const sauda = await c.env.DB.prepare(`SELECT id, direction, item_id, qty_kg, delivery_tolerance_pct FROM saudas WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ id: string; direction: string; item_id: string | null; qty_kg: number; delivery_tolerance_pct: number }>();
+  const sauda = await c.env.DB.prepare(`SELECT id, direction, item_id, qty_kg, agreed_quantity, agreed_unit, delivery_tolerance_pct FROM saudas WHERE id = ? AND mill_id = ?`).bind(c.req.param('id'), mill.id).first<{ id: string; direction: string; item_id: string | null; qty_kg: number; agreed_quantity: number | null; agreed_unit: string | null; delivery_tolerance_pct: number }>();
   if (!sauda) return c.json({ error: 'sauda not found' }, 404);
+  let linkedGateWeight: number | null = null;
+  let linkedGateBags: number | null = null;
   if (b.gate_entry_id) {
-    const linkedGate = await c.env.DB.prepare(`SELECT id, sauda_id, direction, item_id FROM gate_entries WHERE id = ? AND mill_id = ?`).bind(b.gate_entry_id, mill.id).first<{ id: string; sauda_id: string | null; direction: string; item_id: string | null }>();
+    const linkedGate = await c.env.DB.prepare(`SELECT id, sauda_id, direction, item_id, COALESCE(gross_kg,0)-COALESCE(tare_kg,0) AS net_kg, observed_bag_count FROM gate_entries WHERE id = ? AND mill_id = ?`).bind(b.gate_entry_id, mill.id).first<{ id: string; sauda_id: string | null; direction: string; item_id: string | null; net_kg: number; observed_bag_count: number | null }>();
     if (!linkedGate) return c.json({ error: 'gate entry not found' }, 400);
     if (await c.env.DB.prepare(`SELECT id FROM sauda_deliveries WHERE gate_entry_id = ? AND mill_id = ?`).bind(b.gate_entry_id, mill.id).first()) return c.json({ error: 'this gate entry already has a Sauda delivery' }, 409);
     if (linkedGate.sauda_id && linkedGate.sauda_id !== sauda.id) return c.json({ error: 'gate entry belongs to another sauda' }, 400);
     if (linkedGate.direction !== sauda.direction || (sauda.item_id && linkedGate.item_id !== sauda.item_id)) return c.json({ error: 'gate entry does not match this sauda' }, 400);
+    linkedGateWeight = Math.max(0, Math.round(linkedGate.net_kg));
+    linkedGateBags = linkedGate.observed_bag_count;
   }
   if (b.godown_id && !await c.env.DB.prepare(`SELECT id FROM godowns WHERE id = ? AND mill_id = ? AND active = 1`).bind(b.godown_id, mill.id).first()) return c.json({ error: 'godown not found' }, 400);
-  const q = sauda.item_id
-    ? await normalizeItemQuantity(c.env.DB, mill.id, sauda.item_id, b.actual_qty, b.actual_unit || 'KG')
-    : normalizeQuantity(b.actual_qty, b.actual_unit || 'KG');
+  const itemConfig = sauda.item_id ? await loadItemTrackingConfig(c.env.DB, mill.id, sauda.item_id) : null;
+  const actualUnit = String(b.actual_unit ?? 'KG').trim().toUpperCase();
+  let q = itemConfig
+    ? normalizeCommercialQuantityInput(itemConfig, b.actual_qty, actualUnit)
+    : normalizeQuantity(b.actual_qty, actualUnit);
+  if ((!q || q.base <= 0) && sauda.item_id) {
+    q = await normalizeItemQuantity(c.env.DB, mill.id, sauda.item_id, b.actual_qty, actualUnit);
+  }
+  if ((!q || q.base <= 0) && actualUnit === 'BAG' && itemConfig?.tracking_mode === 'VARIABLE_BAG') {
+    const bags = b.actual_qty != null ? Math.round(Number(b.actual_qty)) : linkedGateBags;
+    if (bags == null || !Number.isInteger(bags) || bags <= 0) return c.json({ error: 'actual delivered bags are required' }, 400);
+    q = { quantity: bags, unit: 'BAG', base: bags, baseUnit: 'BAG', bagCount: bags };
+  }
   if (!q || q.base <= 0) return c.json({ error: 'actual_qty and a supported unit are required' }, 400);
-  if (b.actual_weight_kg != null && (!Number.isFinite(Number(b.actual_weight_kg)) || Number(b.actual_weight_kg) < 0)) return c.json({ error: 'actual_weight_kg must be non-negative' }, 400);
+  const actualWeightKg = b.actual_weight_kg == null
+    ? (actualUnit === 'BAG' && itemConfig?.tracking_mode === 'VARIABLE_BAG' ? linkedGateWeight : null)
+    : Math.round(Number(b.actual_weight_kg));
+  if (actualWeightKg != null && (!Number.isFinite(actualWeightKg) || actualWeightKg < 0)) return c.json({ error: 'actual_weight_kg must be non-negative' }, 400);
+  const agreedUnit = String(sauda.agreed_unit ?? 'KG').trim().toUpperCase();
+  const agreedBase = agreedUnit === 'BAG'
+    ? Number(sauda.agreed_quantity ?? 0)
+    : sauda.qty_kg;
   const delivered = await c.env.DB.prepare(`SELECT COALESCE(SUM(actual_qty_base),0) AS quantity FROM sauda_deliveries WHERE sauda_id = ? AND mill_id = ? AND status = 'POSTED'`).bind(sauda.id, mill.id).first<{ quantity: number }>();
   const fulfilled = (delivered?.quantity || 0) + q.base;
-  const warning = fulfilled > sauda.qty_kg * (1 + (sauda.delivery_tolerance_pct || 5) / 100);
+  const warning = fulfilled > agreedBase * (1 + (sauda.delivery_tolerance_pct || 5) / 100);
   const deliveryId = uuid();
   await c.env.DB.prepare(`INSERT INTO sauda_deliveries (id, mill_id, sauda_id, gate_entry_id, actual_qty, actual_unit, actual_qty_base, actual_weight_kg, actual_date, godown_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(deliveryId, mill.id, sauda.id, String(b.gate_entry_id ?? '') || null, q.quantity, q.unit, q.base, b.actual_weight_kg == null ? null : Math.round(Number(b.actual_weight_kg)), String(b.actual_date ?? istToday()), String(b.godown_id ?? '') || null, String(b.notes ?? '') || null).run();
-  const status = fulfilled >= sauda.qty_kg ? 'FULFILLED' : 'PARTIALLY_FULFILLED';
+    .bind(deliveryId, mill.id, sauda.id, String(b.gate_entry_id ?? '') || null, q.quantity, q.unit, q.base, actualWeightKg, String(b.actual_date ?? istToday()), String(b.godown_id ?? '') || null, String(b.notes ?? '') || null).run();
+  const status = fulfilled >= agreedBase ? 'FULFILLED' : 'PARTIALLY_FULFILLED';
   await c.env.DB.prepare(`UPDATE saudas SET fulfilment_status = ? WHERE id = ? AND mill_id = ?`).bind(status, sauda.id, mill.id).run();
   await audit(c, 'sauda_delivery', deliveryId, 'CREATE', warning ? 'Delivery exceeds configured tolerance' : undefined);
-  return c.json({ id: deliveryId, fulfilled_quantity_base: fulfilled, remaining_quantity_base: Math.max(0, sauda.qty_kg - fulfilled), warning, status }, 201);
+  return c.json({ id: deliveryId, fulfilled_quantity_base: fulfilled, remaining_quantity_base: Math.max(0, agreedBase - fulfilled), warning, status }, 201);
 });
 
 api.get('/saudas/:id/deliveries', async (c) => {
@@ -1095,37 +1261,187 @@ api.post('/lots/:id/split', async (c) => {
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
   const parent = await c.env.DB.prepare(`SELECT * FROM lots WHERE id = ? AND mill_id = ?`).bind(parentId, mill.id).first<Record<string, unknown>>();
   if (!parent) return c.json({ error: 'lot not found' }, 404);
-  const splitQty = await normalizeItemQuantity(c.env.DB, mill.id, parent.item_id, b.quantity, b.unit ?? 'QUINTAL');
-  if (!splitQty || splitQty.base <= 0 || !Number.isInteger(splitQty.base)) return c.json({ error: 'split quantity must be a positive whole number of kilograms' }, 400);
-  if (splitQty.base > Number(parent.qty_kg)) return c.json({ error: 'split quantity exceeds lot balance' }, 400);
+  const itemConfig = await loadItemTrackingConfig(c.env.DB, mill.id, parent.item_id);
+  const [lotColumnsRes] = await c.env.DB.batch([c.env.DB.prepare(`PRAGMA table_info(lots)`)]);
+  const lotColumns = new Set((lotColumnsRes.results as { name: string }[]).map((col) => col.name));
+
+  let splitBase = 0;
+  let splitQuantity = 0;
+  let splitUnit = 'KG';
+  let childBagCount: number | null = null;
+  let weightSource: string | null = 'MANUAL';
+
+  if (itemConfig?.tracking_mode === 'VARIABLE_BAG' && b.child_kg != null) {
+    splitBase = Math.round(Number(b.child_kg));
+    if (!Number.isInteger(splitBase) || splitBase <= 0) return c.json({ error: 'child_kg must be a positive whole number' }, 400);
+    if (splitBase >= Number(parent.qty_kg)) return c.json({ error: 'child weight must be less than the source lot remaining weight' }, 400);
+    childBagCount = Math.round(Number(b.child_bag_count));
+    if (!Number.isInteger(childBagCount) || childBagCount <= 0) return c.json({ error: 'child_bag_count must be a positive whole number' }, 400);
+    const parentBags = Number(parent.bag_count ?? 0);
+    if (parentBags > 0 && childBagCount > parentBags) return c.json({ error: 'child bag count exceeds source lot remaining bags' }, 400);
+    splitQuantity = splitBase;
+    splitUnit = 'KG';
+    weightSource = 'MANUAL';
+  } else {
+    const splitQty = await normalizeItemQuantity(c.env.DB, mill.id, parent.item_id, b.quantity, b.unit ?? 'QUINTAL');
+    if (!splitQty || splitQty.base <= 0 || !Number.isInteger(splitQty.base)) return c.json({ error: 'split quantity must be a positive whole number of kilograms' }, 400);
+    splitBase = splitQty.base;
+    splitQuantity = splitQty.quantity;
+    splitUnit = splitQty.unit;
+  }
+
+  if (splitBase > Number(parent.qty_kg)) return c.json({ error: 'split quantity exceeds lot balance' }, 400);
   const disposition = String(b.disposition ?? 'STOCK').trim().toUpperCase();
   if (!['STOCK', 'FOR_SALE', 'FOR_REUSE'].includes(disposition)) return c.json({ error: 'disposition must be STOCK, FOR_SALE, or FOR_REUSE' }, 400);
   const childId = uuid();
   const childCode = await nextCode(c.env.DB, mill.id, 'lot', 'LOT');
   const godownId = String(b.godown_id ?? parent.godown_id ?? '') || null;
+  const splitNote = String(b.note ?? '').trim() || `Split from ${parent.code}`;
+  const childColumns = ['id', 'mill_id', 'code', 'godown_id', 'item_id', 'qty_kg', 'in_date', 'note', 'disposition', 'parent_lot_id'];
+  const childValues: unknown[] = [childId, mill.id, childCode, godownId, parent.item_id, splitBase, istToday(), splitNote, disposition, parentId];
+  if (lotColumns.has('received_qty_kg')) { childColumns.push('received_qty_kg'); childValues.push(splitBase); }
+  if (lotColumns.has('consumed_qty_kg')) { childColumns.push('consumed_qty_kg'); childValues.push(0); }
+  if (lotColumns.has('bag_count') && childBagCount != null) {
+    childColumns.push('bag_count', 'received_bag_count');
+    childValues.push(childBagCount, childBagCount);
+  }
+  if (lotColumns.has('weight_source')) { childColumns.push('weight_source'); childValues.push(weightSource); }
+
+  const parentUpdates = [`qty_kg = qty_kg - ?`];
+  const parentVals: unknown[] = [splitBase];
+  if (lotColumns.has('bag_count') && childBagCount != null) {
+    parentUpdates.push('bag_count = bag_count - ?');
+    parentVals.push(childBagCount);
+  }
+
   await c.env.DB.batch([
-    c.env.DB.prepare(`UPDATE lots SET qty_kg = qty_kg - ? WHERE id = ? AND mill_id = ? AND qty_kg >= ?`).bind(Math.round(splitQty.base), parentId, mill.id, Math.round(splitQty.base)),
-    c.env.DB.prepare(`INSERT INTO lots (id, mill_id, code, godown_id, item_id, qty_kg, in_date, note, disposition, parent_lot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(childId, mill.id, childCode, godownId, parent.item_id, Math.round(splitQty.base), istToday(), `Split from ${parent.code}`, disposition, parentId),
-    c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by) VALUES (?, ?, 'OUT', ?, ?, ?, ?, ?, ?, 'KG', 'LOT_SPLIT', ?, ?)`)
-      .bind(uuid(), mill.id, parent.item_id, parent.godown_id, parentId, splitQty.quantity, splitQty.unit, splitQty.base, parentId, user.id),
-    c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by) VALUES (?, ?, 'IN', ?, ?, ?, ?, ?, ?, 'KG', 'LOT_SPLIT', ?, ?)`)
-      .bind(uuid(), mill.id, parent.item_id, godownId, childId, splitQty.quantity, splitQty.unit, splitQty.base, childId, user.id),
+    c.env.DB.prepare(`UPDATE lots SET ${parentUpdates.join(', ')} WHERE id = ? AND mill_id = ? AND qty_kg >= ?`).bind(...parentVals, parentId, mill.id, splitBase),
+    c.env.DB.prepare(`INSERT INTO lots (${childColumns.join(', ')}) VALUES (${childColumns.map(() => '?').join(', ')})`).bind(...childValues),
+    c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by, bag_count) VALUES (?, ?, 'OUT', ?, ?, ?, ?, ?, ?, 'KG', 'LOT_SPLIT', ?, ?, ?)`)
+      .bind(uuid(), mill.id, parent.item_id, parent.godown_id, parentId, splitQuantity, splitUnit, splitBase, parentId, user.id, childBagCount),
+    c.env.DB.prepare(`INSERT INTO stock_movements (id, mill_id, direction, item_id, godown_id, lot_id, quantity, unit, quantity_base, base_unit, source_type, source_id, created_by, bag_count) VALUES (?, ?, 'IN', ?, ?, ?, ?, ?, ?, 'KG', 'LOT_SPLIT', ?, ?, ?)`)
+      .bind(uuid(), mill.id, parent.item_id, godownId, childId, splitQuantity, splitUnit, splitBase, childId, user.id, childBagCount),
   ]);
-  await audit(c, 'lot', childId, 'CREATE', `Split ${splitQty.base} kg from ${parent.code}`);
+  await audit(c, 'lot', childId, 'CREATE', `Split ${splitBase} kg${childBagCount != null ? ` and ${childBagCount} bags` : ''} from ${parent.code}`);
   return c.json({ id: childId, code: childCode, disposition }, 201);
+});
+
+api.get('/stock-receipts/rejected', async (c) => {
+  const denied = denyUnlessCapability(c, 'stock:view'); if (denied) return denied;
+  const { mill } = c.get('session');
+  const rows = await c.env.DB.prepare(
+    `SELECT g.*, COALESCE(g.gross_kg,0)-COALESCE(g.tare_kg,0) AS net_kg,
+            s.name AS supplier_name, i.name AS item_name, g.stock_note, g.updated_at,
+            CASE
+              WHEN g.updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')
+               AND NOT EXISTS (SELECT 1 FROM lots l WHERE l.gate_entry_id = g.id)
+              THEN 1 ELSE 0
+            END AS can_reopen
+     FROM gate_entries g
+     LEFT JOIN suppliers s ON s.id = g.supplier_id
+     LEFT JOIN items i ON i.id = g.item_id
+     WHERE g.mill_id = ?
+       AND g.direction = 'in'
+       AND g.status = 'done'
+       AND (
+         g.stock_status = 'skipped'
+         OR EXISTS (
+           SELECT 1 FROM gate_intake_lines gil
+           WHERE gil.gate_entry_id = g.id AND gil.mill_id = g.mill_id AND gil.outcome = 'REJECTED'
+         )
+       )
+     ORDER BY g.updated_at DESC
+     LIMIT 500`,
+  ).bind(mill.id).all();
+  return c.json({ rejected_receipts: rows.results });
+});
+
+api.post('/stock-receipts/:id/settle', async (c) => {
+  const denied = denyUnlessCapability(c, 'stock:receive'); if (denied) return denied;
+  const { mill, user } = c.get('session');
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
+  const table = await c.env.DB.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'gate_intake_lines'`,
+  ).first();
+  if (!table) return c.json({ error: 'Stock settlement needs the latest database migration.' }, 503);
+
+  const godownId = String(b.godown_id ?? '').trim();
+  if (!godownId) return c.json({ error: 'godown_id is required' }, 400);
+  const rawLines = Array.isArray(b.lines) ? b.lines as Record<string, unknown>[] : [];
+  const lines: SettlementLineInput[] = rawLines.map((line) => ({
+    outcome: line.outcome === 'ACCEPTED' ? 'ACCEPTED' : 'REJECTED',
+    bags: line.bags == null ? undefined : Number(line.bags),
+    quantity: line.quantity == null ? undefined : Number(line.quantity),
+    unit: line.unit == null ? undefined : String(line.unit),
+    rate_inr: line.rate_inr == null ? undefined : Number(line.rate_inr),
+    rate_unit: line.rate_unit === 'BAG' || line.rate_unit === 'QTL' ? line.rate_unit : undefined,
+    reason: line.reason == null ? undefined : String(line.reason),
+  }));
+
+  const gate = await c.env.DB.prepare(
+    `SELECT COALESCE(g.rate_paise_per_qtl, sa.rate_paise_per_qtl, 0) AS default_rate_paise_per_qtl
+     FROM gate_entries g
+     LEFT JOIN saudas sa ON sa.id = g.sauda_id
+     WHERE g.id = ? AND g.mill_id = ?`,
+  ).bind(c.req.param('id'), mill.id).first<{ default_rate_paise_per_qtl: number }>();
+
+  const result = await settleGateIntake({
+    db: c.env.DB,
+    millId: mill.id,
+    userId: user.id,
+    gateEntryId: c.req.param('id'),
+    godownId,
+    lines,
+    uuid,
+    nextCode,
+    istToday,
+    defaultRatePaisePerQtl: gate?.default_rate_paise_per_qtl ?? 0,
+  });
+  if (!result.ok) return c.json({ error: result.error }, 400);
+  await audit(c, 'gate_entry', c.req.param('id'), 'UPDATE', 'Stock intake settled');
+  return c.json({ ok: true, lot_codes: result.lot_codes });
 });
 
 api.post('/stock-receipts/:id/skip', async (c) => {
   const denied = denyUnlessCapability(c, 'stock:receive'); if (denied) return denied;
   const { mill } = c.get('session');
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const receiptId = c.req.param('id');
+  const rejectRemaining = b.reject_remaining === true;
+  const gate = await c.env.DB.prepare(
+    `SELECT id, stock_status, COALESCE(gross_kg,0)-COALESCE(tare_kg,0) AS net_kg
+     FROM gate_entries
+     WHERE id = ? AND mill_id = ? AND direction = 'in' AND status = 'done'`,
+  ).bind(receiptId, mill.id).first<{ id: string; stock_status: string; net_kg: number }>();
+  if (!gate) return c.json({ error: 'incoming truck is not pending for stock' }, 404);
+
+  const allocated = await gateAllocatedKg(c.env.DB, mill.id, receiptId);
+  const net = Math.max(0, Math.round(gate.net_kg));
+  const remaining = Math.max(0, net - allocated);
+
+  if (rejectRemaining || gate.stock_status === 'partial') {
+    if (remaining <= 0) return c.json({ error: 'no remaining quantity to reject' }, 400);
+    const note = (b.note as string) || `Rejected ${remaining} kg remaining from stock receipt`;
+    const nextStatus = allocated > 0 ? 'added' : 'skipped';
+    const res = await c.env.DB.prepare(
+      `UPDATE gate_entries
+       SET stock_status = ?, stock_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE id = ? AND mill_id = ? AND direction = 'in' AND status = 'done'
+         AND stock_status IN ('pending', 'partial')`,
+    )
+      .bind(nextStatus, note, receiptId, mill.id)
+      .run();
+    if (!res.meta.changes) return c.json({ error: 'incoming truck is not pending for stock' }, 404);
+    return c.json({ ok: true, rejected_qty_kg: remaining });
+  }
+
+  if (allocated > 0) return c.json({ error: 'reject remaining quantity instead of the full truck' }, 400);
   const res = await c.env.DB.prepare(
     `UPDATE gate_entries
      SET stock_status = 'skipped', stock_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      WHERE id = ? AND mill_id = ? AND direction = 'in' AND status = 'done' AND stock_status = 'pending'`,
   )
-    .bind((b.note as string) || null, c.req.param('id'), mill.id)
+    .bind((b.note as string) || null, receiptId, mill.id)
     .run();
   if (!res.meta.changes) return c.json({ error: 'incoming truck is not pending for stock' }, 404);
   return c.json({ ok: true });
@@ -1224,7 +1540,7 @@ api.get('/payments/:id/print', async (c) => {
 const MASTERS: Record<string, { table: string; cols: string[] }> = {
   suppliers: { table: 'suppliers', cols: ['name', 'type', 'place', 'phone'] },
   buyers: { table: 'buyers', cols: ['name', 'type', 'location', 'phone'] },
-  items: { table: 'items', cols: ['name', 'category', 'category_code', 'hsn', 'unit', 'base_unit', 'display_unit', 'package_unit', 'package_quantity_base', 'typical_otr_pct'] },
+  items: { table: 'items', cols: ['name', 'category', 'category_code', 'hsn', 'unit', 'base_unit', 'display_unit', 'package_unit', 'package_quantity_base', 'typical_otr_pct', 'tracking_mode', 'gate_bag_count_required', 'default_rate_unit'] },
   godowns: { table: 'godowns', cols: ['name', 'capacity_qtl', 'capacity_qty', 'capacity_unit', 'location', 'description', 'notes'] },
 };
 
@@ -1252,9 +1568,8 @@ function normalizeMasterPayload(master: string, body: Record<string, unknown>, c
     if (creating && body.unit == null) body.unit = preferredUnit;
     if (body.display_unit != null && !DISPLAY_UNITS.includes(String(body.display_unit))) return 'invalid display unit';
     if (body.unit != null && !DISPLAY_UNITS.includes(String(body.unit).trim().toUpperCase())) return 'invalid transaction unit';
-    if (body.package_unit != null) body.package_unit = String(body.package_unit).toUpperCase();
-    if (body.package_unit && !['BAG', 'PIECE'].includes(String(body.package_unit))) return 'package_unit must be BAG or PIECE';
-    if (body.package_unit && !(Number(body.package_quantity_base) > 0)) return 'package_quantity_base is required for package units';
+    const trackingError = normalizeItemTrackingPayload(body, creating);
+    if (trackingError) return trackingError;
   }
   if (master === 'godowns') {
     if (body.capacity_qty == null && body.capacity_qtl != null) body.capacity_qty = Number(body.capacity_qtl);
@@ -1397,9 +1712,13 @@ api.patch('/saudas/:id/restore', async (c) => {
 api.get('/team', async (c) => {
   const denied = denyUnlessCapability(c, 'team:view'); if (denied) return denied;
   const { mill } = c.get('session');
-  const result = await c.env.DB.prepare(`SELECT id, name, email, phone, COALESCE(role_code, role) AS role, active, created_at FROM users WHERE mill_id = ? ORDER BY name`).bind(mill.id).all();
+  const result = await c.env.DB.prepare(`SELECT id, name, email, phone, role, role_code, active, created_at FROM users WHERE mill_id = ? ORDER BY datetime(created_at) DESC, name`).bind(mill.id).all();
   return c.json({ members: result.results });
 });
+
+function teamLegacyRole(role: string): string {
+  return role === 'admin' || role === 'manager' ? 'manager' : role === 'accountant' ? 'accountant' : 'operator';
+}
 
 api.post('/team/invite', async (c) => {
   const denied = denyUnlessCapability(c, 'team:manage'); if (denied) return denied;
@@ -1410,16 +1729,25 @@ api.post('/team/invite', async (c) => {
   const role = String(b.role ?? 'viewer').toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email) || !name) return c.json({ error: 'name and valid email are required' }, 400);
   if (!canAssignRole(user, role)) return c.json({ error: 'invalid role' }, 400);
-  const legacyRole = role === 'admin' || role === 'manager' ? 'manager' : role === 'accountant' ? 'accountant' : 'operator';
-  const existing = await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first();
-  if (existing) return c.json({ error: 'an account with this email already exists' }, 409);
+  const legacyRole = teamLegacyRole(role);
+  const existing = await c.env.DB.prepare(`SELECT id, mill_id, active FROM users WHERE email = ?`).bind(email).first<{ id: string; mill_id: string; active: number }>();
   const token = crypto.randomUUID() + crypto.randomUUID().replaceAll('-', '');
+  const tokenHash = await hashToken(token);
+  const inviteUrl = `/app?invite=${encodeURIComponent(token)}`;
+  if (existing) {
+    if (existing.mill_id !== mill.id) return c.json({ error: 'this email is already registered with another mill' }, 409);
+    if (existing.active === 1) return c.json({ error: 'this person already has an active account on your team' }, 409);
+    await c.env.DB.prepare(`UPDATE users SET name = ?, role = ?, role_code = ?, active = 0, invited_by = ?, invite_token_hash = ?, invite_expires_at = datetime('now', '+7 days') WHERE id = ? AND mill_id = ?`)
+      .bind(name, legacyRole, role, user.id, tokenHash, existing.id, mill.id).run();
+    await audit(c, 'user', existing.id, 'INVITE', 'Re-sent invitation');
+    return c.json({ id: existing.id, invite_token: token, invite_url: inviteUrl, resent: true });
+  }
   const temporary = await hashPassword(crypto.randomUUID());
   const id = uuid();
   await c.env.DB.prepare(`INSERT INTO users (id, mill_id, name, email, role, role_code, pass_hash, pass_salt, active, invited_by, invite_token_hash, invite_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now', '+7 days'))`)
-    .bind(id, mill.id, name, email, legacyRole, role, temporary.hash, temporary.salt, user.id, await hashToken(token)).run();
+    .bind(id, mill.id, name, email, legacyRole, role, temporary.hash, temporary.salt, user.id, tokenHash).run();
   await audit(c, 'user', id, 'INVITE');
-  return c.json({ id, invite_token: token, invite_url: `/app?invite=${encodeURIComponent(token)}` }, 201);
+  return c.json({ id, invite_token: token, invite_url: inviteUrl }, 201);
 });
 
 api.post('/team/account', async (c) => {
@@ -1434,9 +1762,17 @@ api.post('/team/account', async (c) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) return c.json({ error: 'name and valid email are required' }, 400);
   if (password.length < 8) return c.json({ error: 'password must be at least 8 characters' }, 400);
   if (!allowedRoles.includes(role) || !canAssignRole(user, role)) return c.json({ error: 'invalid role' }, 400);
-  if (await c.env.DB.prepare(`SELECT id FROM users WHERE email = ?`).bind(email).first()) return c.json({ error: 'an account with this email already exists' }, 409);
-  const legacyRole = role === 'admin' ? 'manager' : role === 'manager' ? 'manager' : ['accountant'].includes(role) ? 'accountant' : 'operator';
+  const legacyRole = teamLegacyRole(role);
   const credentials = await hashPassword(password);
+  const existing = await c.env.DB.prepare(`SELECT id, mill_id, active FROM users WHERE email = ?`).bind(email).first<{ id: string; mill_id: string; active: number }>();
+  if (existing) {
+    if (existing.mill_id !== mill.id) return c.json({ error: 'this email is already registered with another mill' }, 409);
+    if (existing.active === 1) return c.json({ error: 'this person already has an active account on your team' }, 409);
+    await c.env.DB.prepare(`UPDATE users SET name = ?, role = ?, role_code = ?, pass_hash = ?, pass_salt = ?, active = 1, invited_by = ?, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ? AND mill_id = ?`)
+      .bind(name, legacyRole, role, credentials.hash, credentials.salt, user.id, existing.id, mill.id).run();
+    await audit(c, 'user', existing.id, 'CREATE', 'Activated invited account');
+    return c.json({ id: existing.id, activated: true }, 200);
+  }
   const id = uuid();
   await c.env.DB.prepare(`INSERT INTO users (id, mill_id, name, email, role, role_code, pass_hash, pass_salt, active, invited_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`)
     .bind(id, mill.id, name, email, legacyRole, role, credentials.hash, credentials.salt, user.id).run();

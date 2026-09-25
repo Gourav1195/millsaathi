@@ -83,6 +83,11 @@ export type DropdownProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, 'child
   /** When false, a portaled menu stays pinned on open. */
   trackScroll?: boolean;
   menuClassName?: string;
+  searchable?: boolean;
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
 };
 
 export function Dropdown({
@@ -98,6 +103,11 @@ export function Dropdown({
   menuPlacement = 'portal',
   trackScroll = true,
   menuClassName = '',
+  searchable = false,
+  searchValue = '',
+  onSearchChange,
+  searchPlaceholder = 'Search…',
+  emptyMessage = 'No matches',
   'aria-label': ariaLabel,
 }: DropdownProps) {
   const options = parseOptions(children);
@@ -106,6 +116,8 @@ export function Dropdown({
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const generatedId = useId();
   const listboxId = id ? `${id}-listbox` : `${generatedId}-listbox`;
@@ -125,6 +137,7 @@ export function Dropdown({
   function close() {
     setOpen(false);
     setHighlighted(-1);
+    onSearchChange?.('');
   }
 
   function selectOption(option: DropdownOption) {
@@ -153,12 +166,22 @@ export function Dropdown({
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (rootRef.current?.contains(target) || listRef.current?.contains(target)) return;
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return;
       close();
     };
     window.addEventListener('mousedown', onPointerDown);
     return () => window.removeEventListener('mousedown', onPointerDown);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !searchable) return;
+    searchRef.current?.focus({ preventScroll: true });
+  }, [open, searchable]);
+
+  useEffect(() => {
+    if (!open) return;
+    setHighlighted(options.length ? nextEnabledIndex(options, -1, 1) : -1);
+  }, [open, searchValue, options.length]);
 
   useLayoutEffect(() => {
     if (!open || menuPlacement !== 'portal') return;
@@ -228,34 +251,68 @@ export function Dropdown({
   ].filter(Boolean).join(' ');
 
   const menu = open ? (
-    <ul
-      ref={listRef}
-      id={listboxId}
-      role="listbox"
+    <div
+      ref={menuRef}
       className={menuClass}
       style={menuPlacement === 'portal' ? { visibility: menuStyle.position ? 'visible' : 'hidden', ...menuStyle } : undefined}
-      aria-label={ariaLabel}
     >
-      {options.map((option, index) => {
-        const isSelected = option.value === String(currentValue);
-        const isHighlighted = index === highlighted;
-        return (
-          <li
-            key={`${option.value}-${index}`}
-            role="option"
-            aria-selected={isSelected}
-            aria-disabled={option.disabled || undefined}
-            className={`ui-dropdown-option${isSelected ? ' selected' : ''}${isHighlighted ? ' highlighted' : ''}${option.disabled ? ' disabled' : ''}`}
-            onMouseEnter={() => !option.disabled && setHighlighted(index)}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => selectOption(option)}
-          >
-            <span className="ui-dropdown-option-label">{option.label}</span>
-            {isSelected ? <span className="ui-dropdown-option-check" aria-hidden="true">✓</span> : null}
-          </li>
-        );
-      })}
-    </ul>
+      {searchable ? (
+        <div className="ui-dropdown-search">
+          <span aria-hidden="true">⌕</span>
+          <input
+            ref={searchRef}
+            value={searchValue}
+            placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
+            onChange={(event) => onSearchChange?.(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setHighlighted((current) => nextEnabledIndex(options, current, 1));
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setHighlighted((current) => nextEnabledIndex(options, current, -1));
+              } else if (event.key === 'Enter' && highlighted >= 0 && options[highlighted]) {
+                event.preventDefault();
+                selectOption(options[highlighted]);
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                close();
+                triggerRef.current?.focus({ preventScroll: true });
+              }
+            }}
+          />
+        </div>
+      ) : null}
+      <ul
+        ref={listRef}
+        id={listboxId}
+        role="listbox"
+        aria-label={ariaLabel}
+      >
+        {options.length ? options.map((option, index) => {
+          const isSelected = option.value === String(currentValue);
+          const isHighlighted = index === highlighted;
+          return (
+            <li
+              key={`${option.value}-${index}`}
+              role="option"
+              aria-selected={isSelected}
+              aria-disabled={option.disabled || undefined}
+              className={`ui-dropdown-option${isSelected ? ' selected' : ''}${isHighlighted ? ' highlighted' : ''}${option.disabled ? ' disabled' : ''}`}
+              onMouseEnter={() => !option.disabled && setHighlighted(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectOption(option)}
+            >
+              <span className="ui-dropdown-option-label">{option.label}</span>
+              {isSelected ? <span className="ui-dropdown-option-check" aria-hidden="true">✓</span> : null}
+            </li>
+          );
+        }) : (
+          <li className="ui-dropdown-empty">{emptyMessage}</li>
+        )}
+      </ul>
+    </div>
   ) : null;
 
   return (

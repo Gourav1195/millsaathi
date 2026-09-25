@@ -29,12 +29,16 @@ import {
   TableEditModeButton,
 } from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
-import { baseToDisplay } from '../lib/chain-run';
 import { filterRows, paginate, PAGE_SIZE } from '../lib/list-view';
 import { can } from '../lib/permissions';
 import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
+import {
+  formatDualQuantity,
+  trackingModeLabel,
+  type TrackingMode,
+} from '../../../shared/quantity';
 
 type Item = {
   id: string;
@@ -45,6 +49,11 @@ type Item = {
   unit?: string | null;
   base_unit?: string | null;
   display_unit?: string | null;
+  tracking_mode?: TrackingMode | null;
+  gate_bag_count_required?: number | null;
+  default_rate_unit?: string | null;
+  package_unit?: string | null;
+  package_quantity_base?: number | null;
   typical_otr_pct?: number | null;
   stock_kg?: number | null;
 };
@@ -53,17 +62,21 @@ type ItemForm = {
   name: string;
   category: string;
   hsn: string;
+  tracking_mode: TrackingMode;
   display_unit: string;
+  gate_bag_count_required: boolean;
+  package_quantity_base: string;
+  default_rate_unit: string;
   typical_otr_pct: string;
 };
 
 const ITEM_COLUMNS_BASE = [
   { id: 'item', label: 'Item' },
   { id: 'category', label: 'Category' },
+  { id: 'tracking', label: 'Measured as' },
   { id: 'hsn', label: 'HSN' },
   { id: 'stock', label: 'Stock' },
   { id: 'otr', label: 'Typical OTR' },
-  { id: 'unit', label: 'Unit' },
 ];
 
 const CATEGORY_OPTIONS = [
@@ -94,8 +107,31 @@ const CATEGORY_CODE_TO_FORM: Record<string, string> = {
 };
 
 const DISPLAY_UNITS = ['KG', 'QUINTAL', 'TONNE'];
+const TRACKING_MODE_OPTIONS: { value: TrackingMode; label: string; helper: string }[] = [
+  { value: 'WEIGHT_ONLY', label: 'Weight only', helper: 'Stock is recorded in kg, quintals, or tonnes.' },
+  { value: 'VARIABLE_BAG', label: 'Bags with variable weight', helper: 'Every receipt is weighed; bag count is recorded separately.' },
+  { value: 'FIXED_PACKAGE', label: 'Fixed-weight bags or packs', helper: 'Each pack has the same declared weight.' },
+  { value: 'COUNT_ONLY', label: 'Pieces / count only', helper: 'Stock is recorded as a whole count.' },
+];
 
-const emptyForm = (): ItemForm => ({ name: '', category: 'paddy', hsn: '', display_unit: 'QUINTAL', typical_otr_pct: '' });
+const RATE_UNIT_OPTIONS: Record<TrackingMode, { value: string; label: string }[]> = {
+  WEIGHT_ONLY: [{ value: 'QTL', label: 'Per quintal' }, { value: 'KG', label: 'Per kg' }],
+  VARIABLE_BAG: [{ value: 'QTL', label: 'Per quintal' }, { value: 'BAG', label: 'Per bag' }],
+  FIXED_PACKAGE: [{ value: 'BAG', label: 'Per bag' }, { value: 'QTL', label: 'Per quintal' }],
+  COUNT_ONLY: [{ value: 'PIECE', label: 'Per piece' }],
+};
+
+const emptyForm = (): ItemForm => ({
+  name: '',
+  category: 'paddy',
+  hsn: '',
+  tracking_mode: 'WEIGHT_ONLY',
+  display_unit: 'QUINTAL',
+  gate_bag_count_required: true,
+  package_quantity_base: '',
+  default_rate_unit: 'QTL',
+  typical_otr_pct: '',
+});
 
 function formCategoryFromItem(item: Item): string {
   if (item.category_code && CATEGORY_CODE_TO_FORM[item.category_code]) {
@@ -108,7 +144,11 @@ const formFromItem = (item: Item): ItemForm => ({
   name: item.name,
   category: formCategoryFromItem(item),
   hsn: item.hsn ?? '',
+  tracking_mode: (item.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode,
   display_unit: item.display_unit ?? item.unit ?? 'QUINTAL',
+  gate_bag_count_required: item.gate_bag_count_required !== 0,
+  package_quantity_base: item.package_quantity_base == null ? '' : String(item.package_quantity_base),
+  default_rate_unit: item.default_rate_unit ?? 'QTL',
   typical_otr_pct: item.typical_otr_pct == null ? '' : String(item.typical_otr_pct),
 });
 
@@ -136,10 +176,119 @@ function categoryTone(item: Item): 'warning' | 'success' | 'neutral' | 'gold' {
 }
 
 function stockLabel(item: Item) {
-  const unit = (item.display_unit ?? item.unit ?? 'QUINTAL').toUpperCase();
-  const qty = baseToDisplay(item.stock_kg ?? 0, unit);
-  const suffix = unit === 'QUINTAL' ? 'qtl' : unit.toLowerCase();
-  return `${qty.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${suffix}`;
+  const mode = (item.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode;
+  if (mode === 'COUNT_ONLY') {
+    return formatDualQuantity({ trackingMode: mode, pieceCount: item.stock_kg ?? 0 });
+  }
+  return formatDualQuantity({
+    weightKg: item.stock_kg ?? 0,
+    displayUnit: item.display_unit ?? 'QUINTAL',
+    trackingMode: mode,
+  });
+}
+
+function itemPayload(form: ItemForm) {
+  const payload: Record<string, unknown> = {
+    name: form.name.trim(),
+    category: form.category,
+    hsn: form.hsn,
+    tracking_mode: form.tracking_mode,
+    default_rate_unit: form.default_rate_unit,
+    typical_otr_pct: form.typical_otr_pct === '' ? undefined : Number(form.typical_otr_pct),
+  };
+  if (form.tracking_mode === 'WEIGHT_ONLY' || form.tracking_mode === 'VARIABLE_BAG') {
+    payload.display_unit = form.display_unit;
+  }
+  if (form.tracking_mode === 'VARIABLE_BAG') {
+    payload.gate_bag_count_required = form.gate_bag_count_required;
+  }
+  if (form.tracking_mode === 'FIXED_PACKAGE') {
+    payload.package_unit = 'BAG';
+    payload.package_quantity_base = Number(form.package_quantity_base);
+    payload.display_unit = form.display_unit;
+  }
+  return payload;
+}
+
+function TrackingModeFields({
+  form,
+  setForm,
+  showOtr,
+}: {
+  form: ItemForm;
+  setForm: (next: ItemForm) => void;
+  showOtr: boolean;
+}) {
+  const selected = TRACKING_MODE_OPTIONS.find((option) => option.value === form.tracking_mode);
+  return (
+    <>
+      <Field label="How is this item measured?">
+        <Select
+          value={form.tracking_mode}
+          onChange={(e) => {
+            const mode = e.target.value as TrackingMode;
+            setForm({
+              ...form,
+              tracking_mode: mode,
+              default_rate_unit: RATE_UNIT_OPTIONS[mode][0]?.value ?? 'QTL',
+            });
+          }}
+        >
+          {TRACKING_MODE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </Select>
+        {selected ? <small className="muted">{selected.helper}</small> : null}
+      </Field>
+
+      {(form.tracking_mode === 'WEIGHT_ONLY' || form.tracking_mode === 'VARIABLE_BAG' || form.tracking_mode === 'FIXED_PACKAGE') && (
+        <Field label="How should weight normally be shown?">
+          <Select value={form.display_unit} onChange={(e) => setForm({ ...form, display_unit: e.target.value })}>
+            {DISPLAY_UNITS.map((unit) => <option key={unit}>{unit}</option>)}
+          </Select>
+        </Field>
+      )}
+
+      {form.tracking_mode === 'VARIABLE_BAG' && (
+        <Field label="Require bag count at Gate">
+          <Select
+            value={form.gate_bag_count_required ? 'yes' : 'no'}
+            onChange={(e) => setForm({ ...form, gate_bag_count_required: e.target.value === 'yes' })}
+          >
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </Select>
+          <small className="muted">Average bag weight is calculated from each receipt&apos;s measured weight.</small>
+        </Field>
+      )}
+
+      {form.tracking_mode === 'FIXED_PACKAGE' && (
+        <Field label="Declared weight per bag/pack (kg)">
+          <Input
+            required
+            inputMode="decimal"
+            value={form.package_quantity_base}
+            onChange={(e) => setForm({ ...form, package_quantity_base: e.target.value })}
+          />
+          <small className="muted">Count times declared pack weight is used because the package is fixed.</small>
+        </Field>
+      )}
+
+      <Field label="How do you usually quote the rate?">
+        <Select value={form.default_rate_unit} onChange={(e) => setForm({ ...form, default_rate_unit: e.target.value })}>
+          {RATE_UNIT_OPTIONS[form.tracking_mode].map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </Select>
+      </Field>
+
+      {showOtr && (
+        <Field label="Typical OTR %">
+          <Input inputMode="decimal" value={form.typical_otr_pct} onChange={(e) => setForm({ ...form, typical_otr_pct: e.target.value })} />
+        </Field>
+      )}
+    </>
+  );
 }
 
 export function ItemsApp() {
@@ -177,10 +326,7 @@ export function ItemsApp() {
     event.preventDefault();
     if (!form.name.trim()) return setError('Item name is required.');
     try {
-      await api('/api/items', json('POST', {
-        ...form,
-        typical_otr_pct: form.typical_otr_pct === '' ? undefined : Number(form.typical_otr_pct),
-      }));
+      await api('/api/items', json('POST', itemPayload(form)));
       setForm(emptyForm());
       await load();
     } catch (cause) {
@@ -204,13 +350,7 @@ export function ItemsApp() {
     setSaving(true);
     setError(null);
     try {
-      await api(`/api/items/${itemId}`, json('PATCH', {
-        name: editForm.name.trim(),
-        category: editForm.category,
-        hsn: editForm.hsn,
-        display_unit: editForm.display_unit,
-        typical_otr_pct: editForm.typical_otr_pct === '' ? null : Number(editForm.typical_otr_pct),
-      }));
+      await api(`/api/items/${itemId}`, json('PATCH', itemPayload(editForm)));
       setEditingId(null);
       await load();
     } catch (cause) {
@@ -281,7 +421,7 @@ export function ItemsApp() {
       <section className="workspace">
         <PageHeader
           title="Items"
-          subtitle="Raw materials, finished goods and by-products. Output ratio tracks expected yield."
+          subtitle="Configure how each material is measured, displayed, and quoted."
           date={headerMeta.date}
           season={headerMeta.season}
           actions={
@@ -311,14 +451,11 @@ export function ItemsApp() {
               <Field label="HSN">
                 <Input value={form.hsn} onChange={(e) => setForm({ ...form, hsn: e.target.value })} />
               </Field>
-              <Field label="Display unit">
-                <Select value={form.display_unit} onChange={(e) => setForm({ ...form, display_unit: e.target.value })}>
-                  {DISPLAY_UNITS.map((unit) => <option key={unit}>{unit}</option>)}
-                </Select>
-              </Field>
-              <Field label="Typical OTR %">
-                <Input inputMode="decimal" value={form.typical_otr_pct} onChange={(e) => setForm({ ...form, typical_otr_pct: e.target.value })} />
-              </Field>
+              <TrackingModeFields
+                form={form}
+                setForm={setForm}
+                showOtr={form.category === 'paddy'}
+              />
               <FormActions>
                 <Button type="submit">Create item</Button>
               </FormActions>
@@ -372,6 +509,7 @@ export function ItemsApp() {
           <DataTable columns={itemColumns}>
             {pageData.rows.length ? pageData.rows.map((item) => {
               const editing = editingId === item.id;
+              const mode = (item.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode;
               return (
                 <tr key={item.id} className={editing ? 'table-row-editing' : undefined}>
                   {tableEdit.editMode && canArchive && (
@@ -410,6 +548,20 @@ export function ItemsApp() {
                   </td>
                   <td>
                     {editing ? (
+                      <Select
+                        value={editForm.tracking_mode}
+                        onChange={(e) => setEditForm({ ...editForm, tracking_mode: e.target.value as TrackingMode })}
+                      >
+                        {TRACKING_MODE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </Select>
+                    ) : (
+                      trackingModeLabel(mode)
+                    )}
+                  </td>
+                  <td>
+                    {editing ? (
                       <Input
                         value={editForm.hsn}
                         onChange={(e) => setEditForm({ ...editForm, hsn: e.target.value })}
@@ -430,19 +582,6 @@ export function ItemsApp() {
                       />
                     ) : (
                       item.typical_otr_pct == null ? '—' : `${item.typical_otr_pct}%`
-                    )}
-                  </td>
-                  <td>
-                    {editing ? (
-                      <Select
-                        value={editForm.display_unit}
-                        onChange={(e) => setEditForm({ ...editForm, display_unit: e.target.value })}
-                        aria-label={`Edit display unit for ${item.name}`}
-                      >
-                        {DISPLAY_UNITS.map((unit) => <option key={unit}>{unit}</option>)}
-                      </Select>
-                    ) : (
-                      (item.display_unit ?? item.unit ?? '—').toUpperCase()
                     )}
                   </td>
                   {canEdit && (

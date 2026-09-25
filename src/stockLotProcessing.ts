@@ -1,11 +1,19 @@
 // Stock lot grouping and processing input consumption with transactional safety.
 
+function itemUsesVariableBags(mode: string | null | undefined): boolean {
+  return String(mode ?? '').trim().toUpperCase() === 'VARIABLE_BAG';
+}
+
 export type StockLotRow = {
   id: string;
   code: string;
   item_id: string;
   item_name: string;
   qty_kg: number;
+  bag_count?: number | null;
+  received_bag_count?: number | null;
+  consumed_bag_count?: number | null;
+  tracking_mode?: string | null;
   received_qty_kg?: number | null;
   consumed_qty_kg?: number | null;
   godown_id?: string | null;
@@ -127,6 +135,14 @@ export function validateInputAllocations(params: {
     if (qtyBase > lot.qty_kg) {
       return { ok: false, error: `${lot.code} only has ${(lot.qty_kg / 100).toFixed(2)} quintal available in ${lot.godown_name ?? 'storage'}.` };
     }
+    if (itemUsesVariableBags(lot.tracking_mode)) {
+      if (qtyBase !== lot.qty_kg) {
+        return {
+          ok: false,
+          error: 'This item uses variable-weight bags, so processing uses the complete lot. Split and weigh that portion first.',
+        };
+      }
+    }
     if (!permissiveItems && allowedItemIds && allowedItemIds.size > 0 && !allowedItemIds.has(lot.item_id)) {
       return { ok: false, error: `${lot.item_name} is not accepted by this process.` };
     }
@@ -153,9 +169,10 @@ export async function loadProcessingStockLots(
   options?: { itemId?: string; godownId?: string },
 ): Promise<StockLotRow[]> {
   let query = `
-    SELECT l.id, l.code, l.item_id, l.qty_kg, l.received_qty_kg, l.consumed_qty_kg,
+    SELECT l.id, l.code, l.item_id, l.qty_kg, l.bag_count, l.received_bag_count, l.consumed_bag_count,
+           l.received_qty_kg, l.consumed_qty_kg,
            l.godown_id, l.sauda_id, l.gate_entry_id, l.disposition, l.allocation_status,
-           i.name AS item_name, g.name AS godown_name, sa.code AS sauda_code,
+           i.name AS item_name, i.tracking_mode, g.name AS godown_name, sa.code AS sauda_code,
            ge.token_no AS gate_token_no,
            COALESCE(sup_sa.name, sup_ge.name) AS supplier_name
     FROM lots l
@@ -273,4 +290,53 @@ export async function syncGateStockStatus(db: D1Database, millId: string, gateEn
   await db.prepare(
     `UPDATE gate_entries SET stock_status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND mill_id = ?`,
   ).bind(status, gateEntryId, millId).run();
+}
+
+export async function undoGateLotAccept(
+  db: D1Database,
+  millId: string,
+  lotId: string,
+  userId: string,
+): Promise<{ ok: true; gate_entry_id: string; code: string } | { ok: false; error: string }> {
+  const lot = await db.prepare(
+    `SELECT id, code, gate_entry_id, consumed_qty_kg, qty_kg
+     FROM lots WHERE id = ? AND mill_id = ?`,
+  ).bind(lotId, millId).first<{
+    id: string;
+    code: string;
+    gate_entry_id: string | null;
+    consumed_qty_kg: number;
+    qty_kg: number;
+  }>();
+  if (!lot) return { ok: false, error: 'lot not found' };
+  if (!lot.gate_entry_id) return { ok: false, error: 'this lot was not created from a truck acceptance' };
+  if ((lot.consumed_qty_kg ?? 0) > 0 || lot.qty_kg <= 0) {
+    return { ok: false, error: 'this lot has already been used and cannot be undone' };
+  }
+  const settlementLine = await db.prepare(
+    `SELECT id FROM gate_intake_lines WHERE mill_id = ? AND lot_id = ? LIMIT 1`,
+  ).bind(millId, lotId).first();
+  if (settlementLine) return { ok: false, error: 'only one-click truck accepts can be undone here' };
+  const consumed = await db.prepare(
+    `SELECT id FROM processing_input_consumptions WHERE mill_id = ? AND lot_id = ? LIMIT 1`,
+  ).bind(millId, lotId).first();
+  if (consumed) return { ok: false, error: 'this lot has already been used and cannot be undone' };
+
+  const gateEntryId = lot.gate_entry_id;
+  await db.batch([
+    db.prepare(
+      `UPDATE stock_movements
+       SET status = 'VOID',
+           voided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+           voided_by = ?,
+           lot_id = NULL
+       WHERE mill_id = ? AND status = 'POSTED' AND (lot_id = ? OR (source_type = 'LOT' AND source_id = ?))`,
+    ).bind(userId, millId, lotId, lotId),
+    db.prepare(
+      `UPDATE sauda_deliveries SET lot_id = NULL, godown_id = NULL WHERE mill_id = ? AND lot_id = ?`,
+    ).bind(millId, lotId),
+    db.prepare(`DELETE FROM lots WHERE id = ? AND mill_id = ?`).bind(lotId, millId),
+  ]);
+  await syncGateStockStatus(db, millId, gateEntryId);
+  return { ok: true, gate_entry_id: gateEntryId, code: lot.code };
 }

@@ -4,14 +4,14 @@ import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { hashPassword, hashToken, newSessionToken, sessionExpiry, verifyPassword } from './auth';
 import { api } from './api';
-import { capabilitiesFor, effectiveRole, ROLE_LABELS } from './permissions';
+import { capabilitiesFor, effectiveRole, isOwnerRole, ROLE_LABELS } from './permissions';
 import { billingConfigured, checkoutAvailable, handleBillingWebhook } from './billing';
 import { ensureRiceMillChainTemplates } from './chainBatch';
 import { defaultGodownCapacity, millCatalog, normalizeMillType } from './millCatalog';
 
 export type UserRow = {
   id: string; mill_id: string; name: string; email: string; role: string; role_code?: string | null;
-  preferred_unit?: string | null; theme?: string | null;
+  preferred_unit?: string | null; theme?: string | null; must_change_password?: number | null;
   pass_hash: string; pass_salt: string;
 };
 export type MillRow = {
@@ -108,7 +108,7 @@ async function verifyTurnstile(c: Context<AppEnv>, token: unknown): Promise<bool
 async function sessionFromCookie(db: D1Database, token: string | undefined) {
   if (!token) return null;
   const row = await db.prepare(
-    `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code, u.preferred_unit, u.theme,
+    `SELECT u.id, u.mill_id, u.name, u.email, u.role, u.role_code, u.preferred_unit, u.theme, u.must_change_password,
             m.id AS m_id, m.name AS m_name, m.slug AS m_slug, m.plan AS m_plan,
             m.language AS m_language, m.loss_limit_pct AS m_loss_limit_pct, m.season_label AS m_season_label,
             m.created_at AS m_created_at, m.mill_type AS m_mill_type, m.address AS m_address, m.phone AS m_phone, m.email AS m_email,
@@ -118,7 +118,7 @@ async function sessionFromCookie(db: D1Database, token: string | undefined) {
   ).bind(await hashToken(token)).first<Record<string, string | number>>();
   if (!row) return null;
   return {
-    user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, preferred_unit: row.preferred_unit ?? 'QUINTAL', theme: row.theme ?? 'light', pass_hash: '', pass_salt: '' } as UserRow,
+    user: { id: row.id, mill_id: row.mill_id, name: row.name, email: row.email, role: row.role, role_code: row.role_code ?? null, preferred_unit: row.preferred_unit ?? 'QUINTAL', theme: row.theme ?? 'light', must_change_password: Number(row.must_change_password ?? 0), pass_hash: '', pass_salt: '' } as UserRow,
     mill: { id: row.m_id, name: row.m_name, slug: row.m_slug, plan: row.m_plan, language: row.m_language,
       loss_limit_pct: row.m_loss_limit_pct, season_label: row.m_season_label, created_at: row.m_created_at,
       mill_type: String(row.m_mill_type ?? 'RICE'),
@@ -209,7 +209,7 @@ app.post('/api/auth/login', async (c) => {
     return c.json({ error: 'Wrong email or password.' }, 401);
   }
   setSessionCookie(c, await createSession(c.env.DB, user.id));
-  return c.json({ ok: true });
+  return c.json({ ok: true, must_change_password: Number(user.must_change_password ?? 0) === 1 });
 });
 
 app.post('/api/auth/logout', async (c) => {
@@ -229,8 +229,24 @@ app.post('/api/auth/accept-invite', async (c) => {
   const invited = await c.env.DB.prepare(`SELECT id FROM users WHERE invite_token_hash = ? AND active = 0 AND invite_expires_at > datetime('now')`).bind(await hashToken(token)).first<{ id: string }>();
   if (!invited) return c.json({ error: 'invite is invalid or expired' }, 400);
   const credentials = await hashPassword(password);
-  await c.env.DB.prepare(`UPDATE users SET pass_hash = ?, pass_salt = ?, active = 1, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?`).bind(credentials.hash, credentials.salt, invited.id).run();
+  await c.env.DB.prepare(`UPDATE users SET pass_hash = ?, pass_salt = ?, active = 1, must_change_password = 0, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?`).bind(credentials.hash, credentials.salt, invited.id).run();
   setSessionCookie(c, await createSession(c.env.DB, invited.id));
+  return c.json({ ok: true });
+});
+
+app.post('/api/auth/complete-reset', async (c) => {
+  const b = await c.req.json<Record<string, string>>().catch(() => ({} as Record<string, string>));
+  const token = b.token ?? '';
+  const password = b.password ?? '';
+  if (!token || password.length < 8) return c.json({ error: 'reset link and a password of at least 8 characters are required' }, 400);
+  const target = await c.env.DB.prepare(`SELECT id FROM users WHERE invite_token_hash = ? AND active = 1 AND invite_expires_at > datetime('now')`).bind(await hashToken(token)).first<{ id: string }>();
+  if (!target) return c.json({ error: 'reset link is invalid or expired' }, 400);
+  const credentials = await hashPassword(password);
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE users SET pass_hash = ?, pass_salt = ?, must_change_password = 0, invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?`).bind(credentials.hash, credentials.salt, target.id),
+    c.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(target.id),
+  ]);
+  setSessionCookie(c, await createSession(c.env.DB, target.id));
   return c.json({ ok: true });
 });
 
@@ -269,6 +285,12 @@ app.use('/api/*', async (c, next) => {
   const session = await sessionFromCookie(c.env.DB, token);
   if (!session) return c.json({ error: 'unauthenticated' }, 401);
   c.set('session', session);
+  if (Number(session.user.must_change_password ?? 0) === 1) {
+    const path = new URL(c.req.url).pathname;
+    if (path !== '/api/auth/me' && path !== '/api/auth/change-password') {
+      return c.json({ error: 'password change required', must_change_password: true }, 403);
+    }
+  }
   await next();
 });
 
@@ -284,21 +306,50 @@ app.get('/api/auth/me', (c) => {
     capabilities: capabilitiesFor(user),
     preferred_unit: user.preferred_unit || 'QUINTAL',
     theme: user.theme || 'light',
+    must_change_password: Number(user.must_change_password ?? 0) === 1,
     mill: { id: mill.id, name: mill.name, plan: mill.plan, mill_type: mill.mill_type || 'RICE', season_label: mill.season_label || '' },
   });
 });
 
+app.post('/api/auth/change-password', async (c) => {
+  const { user } = c.get('session');
+  const b = await c.req.json<Record<string, string>>().catch(() => ({} as Record<string, string>));
+  const currentPassword = b.current_password ?? '';
+  const newPassword = b.new_password ?? '';
+  if (newPassword.length < 8) return c.json({ error: 'new password must be at least 8 characters' }, 400);
+  const credentialsRow = await c.env.DB.prepare(`SELECT pass_hash, pass_salt FROM users WHERE id = ?`).bind(user.id).first<{ pass_hash: string; pass_salt: string }>();
+  if (!credentialsRow || !(await verifyPassword(currentPassword, credentialsRow.pass_salt, credentialsRow.pass_hash))) {
+    return c.json({ error: 'current password is incorrect' }, 401);
+  }
+  const credentials = await hashPassword(newPassword);
+  await c.env.DB.prepare(`UPDATE users SET pass_hash = ?, pass_salt = ?, must_change_password = 0 WHERE id = ?`).bind(credentials.hash, credentials.salt, user.id).run();
+  user.must_change_password = 0;
+  return c.json({ ok: true });
+});
+
 app.patch('/api/auth/me', async (c) => {
   const { user } = c.get('session');
+  if (Number(user.must_change_password ?? 0) === 1) return c.json({ error: 'password change required', must_change_password: true }, 403);
   const b = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>));
-  const preferredUnit = String(b.preferred_unit ?? user.preferred_unit ?? 'QUINTAL').toUpperCase();
   const theme = String(b.theme ?? user.theme ?? 'light').toLowerCase();
-  if (!['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(preferredUnit)) return c.json({ error: 'unsupported preferred unit' }, 400);
   if (!['light', 'dark'].includes(theme)) return c.json({ error: 'unsupported theme' }, 400);
-  await c.env.DB.prepare(`UPDATE users SET preferred_unit = ?, theme = ? WHERE id = ?`).bind(preferredUnit, theme, user.id).run();
-  user.preferred_unit = preferredUnit;
+
+  if (b.preferred_unit !== undefined) {
+    if (!isOwnerRole(user)) return c.json({ error: 'only the owner can change preferred unit' }, 403);
+    const preferredUnit = String(b.preferred_unit).toUpperCase();
+    if (!['KG', 'QUINTAL', 'TONNE', 'BAG', 'PIECE'].includes(preferredUnit)) return c.json({ error: 'unsupported preferred unit' }, 400);
+    await c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE users SET theme = ? WHERE id = ?`).bind(theme, user.id),
+      c.env.DB.prepare(`UPDATE users SET preferred_unit = ? WHERE mill_id = ?`).bind(preferredUnit, user.mill_id),
+    ]);
+    user.preferred_unit = preferredUnit;
+    user.theme = theme;
+    return c.json({ ok: true, preferred_unit: preferredUnit, theme });
+  }
+
+  await c.env.DB.prepare(`UPDATE users SET theme = ? WHERE id = ?`).bind(theme, user.id).run();
   user.theme = theme;
-  return c.json({ ok: true, preferred_unit: preferredUnit, theme });
+  return c.json({ ok: true, preferred_unit: user.preferred_unit || 'QUINTAL', theme });
 });
 
 app.route('/api', api);

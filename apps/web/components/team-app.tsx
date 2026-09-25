@@ -27,7 +27,7 @@ import { useTableEditMode } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 
-type Member = { id: string; name: string; email: string; role?: string; role_code?: string; active?: number | boolean; preferred_unit?: string };
+type Member = { id: string; name: string; email: string; role?: string; role_code?: string; active?: number | boolean; created_at?: string };
 type AccountForm = { name: string; email: string; role: string; password: string };
 
 const roles = ['admin', 'manager', 'accountant', 'gate_operator', 'production_operator', 'viewer'] as const;
@@ -48,7 +48,7 @@ const TEAM_COLUMNS = [
   { id: 'email', label: 'Email' },
   { id: 'role', label: 'Role' },
   { id: 'status', label: 'Status' },
-  { id: 'unit', label: 'Preferred unit' },
+  { id: 'actions', label: 'Actions' },
 ];
 
 function memberRole(member: Member): string {
@@ -57,6 +57,14 @@ function memberRole(member: Member): string {
 
 function memberActive(member: Member): boolean {
   return !(member.active === false || member.active === 0);
+}
+
+function memberStatusLabel(member: Member): string {
+  return memberActive(member) ? 'Active' : 'Invited / inactive';
+}
+
+function memberStatusTone(member: Member): 'success' | 'warning' | 'danger' {
+  return memberActive(member) ? 'success' : 'warning';
 }
 
 function memberManageable(member: Member, sessionId: string, canManage: boolean): boolean {
@@ -70,9 +78,12 @@ export function TeamApp() {
   const [mode, setMode] = useState<'account' | 'invite'>('account');
   const [form, setForm] = useState<AccountForm>(emptyAccount);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savingMemberId, setSavingMemberId] = useState<string | null>(null);
+  const [resetUrl, setResetUrl] = useState<string | null>(null);
+  const [resetMemberName, setResetMemberName] = useState<string | null>(null);
   const tableEdit = useTableEditMode();
 
   const load = async () => setMembers((await api<{ members: Member[] }>('/api/team')).members);
@@ -82,6 +93,13 @@ export function TeamApp() {
 
   const canManage = can(session, 'team:manage');
 
+  function switchMode(next: 'account' | 'invite') {
+    setMode(next);
+    setInviteUrl(null);
+    setError(null);
+    setSuccess(null);
+  }
+
   async function create(event: FormEvent) {
     event.preventDefault();
     if (!form.name.trim() || !form.email.trim() || (mode === 'account' && form.password.length < 8)) {
@@ -90,13 +108,19 @@ export function TeamApp() {
     }
     setSaving(true);
     setError(null);
+    setSuccess(null);
     setInviteUrl(null);
     try {
+      const trimmed = { name: form.name.trim(), email: form.email.trim().toLowerCase() };
       if (mode === 'account') {
-        await api('/api/team/account', json('POST', { ...form, name: form.name.trim(), email: form.email.trim() }));
+        const result = await api<{ id: string; activated?: boolean }>('/api/team/account', json('POST', { ...form, ...trimmed }));
+        setSuccess(result.activated
+          ? `${trimmed.name} was activated. They must change the temporary password on first sign-in.`
+          : `${trimmed.name} can sign in with the temporary password you set. They will be asked to choose their own password on first sign-in.`);
       } else {
-        const result = await api<{ invite_url: string }>('/api/team/invite', json('POST', { name: form.name.trim(), email: form.email.trim(), role: form.role }));
+        const result = await api<{ invite_url: string; resent?: boolean }>('/api/team/invite', json('POST', { ...trimmed, role: form.role }));
         setInviteUrl(result.invite_url);
+        setSuccess(result.resent ? `Invitation refreshed for ${trimmed.name}. Share the new link below.` : `Invitation created for ${trimmed.name}. Share the link below.`);
       }
       setForm(emptyAccount());
       await load();
@@ -130,6 +154,33 @@ export function TeamApp() {
     }
   }
 
+  async function resetPassword(member: Member) {
+    setSavingMemberId(member.id);
+    setError(null);
+    setSuccess(null);
+    setResetUrl(null);
+    setResetMemberName(null);
+    try {
+      const result = await api<{ reset_url: string }>(`/api/team/${member.id}/reset-password`, json('POST', {}));
+      setResetUrl(result.reset_url);
+      setResetMemberName(member.name);
+      setSuccess(`Password reset link created for ${member.name}. Share the link below — it expires in 7 days and signs them out everywhere.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not create password reset link');
+    } finally {
+      setSavingMemberId(null);
+    }
+  }
+
+  async function copyResetLink() {
+    if (!resetUrl) return;
+    try {
+      await navigator.clipboard.writeText(new URL(resetUrl, window.location.origin).toString());
+    } catch {
+      setError('Copy the reset link manually from the field below.');
+    }
+  }
+
   if (session === undefined) return <main className="auth-page"><p className="muted">Loading team…</p></main>;
   if (!session) {
     return (
@@ -156,14 +207,21 @@ export function TeamApp() {
         />
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
+        {success && <Alert title="Saved" level="blue">{success}</Alert>}
+
+        {!canManage && (
+          <Alert title="View only" level="amber">
+            Only owners and admins can invite or create team accounts. Ask your mill owner if you need someone added.
+          </Alert>
+        )}
 
         {canManage && (
           <Panel
             title={mode === 'account' ? 'Create active account' : 'Invite a team member'}
             actions={
               <TabRow>
-                <Tab selected={mode === 'account'} onClick={() => setMode('account')}>Create account</Tab>
-                <Tab selected={mode === 'invite'} onClick={() => setMode('invite')}>Invite link</Tab>
+                <Tab selected={mode === 'account'} onClick={() => switchMode('account')}>Create account</Tab>
+                <Tab selected={mode === 'invite'} onClick={() => switchMode('invite')}>Invite link</Tab>
               </TabRow>
             }
           >
@@ -190,7 +248,7 @@ export function TeamApp() {
                 </Button>
               </FormActions>
             </FormGrid>
-            {inviteUrl && (
+            {mode === 'invite' && inviteUrl && (
               <div className="ui-form-grid" style={{ marginTop: 14 }}>
                 <Field label="Share this invitation link">
                   <Input readOnly value={new URL(inviteUrl, typeof window === 'undefined' ? 'https://millsaathi.com' : window.location.origin).toString()} />
@@ -208,7 +266,7 @@ export function TeamApp() {
           title="Team members"
           subtitle={
             tableEdit.editMode && canManage
-              ? 'Update role or access inline. Your account and the owner stay locked.'
+              ? 'Update role or access inline, or issue a password reset link. Your account and the owner stay locked.'
               : `${members.length} member${members.length === 1 ? '' : 's'}`
           }
           actions={canManage ? (
@@ -260,10 +318,23 @@ export function TeamApp() {
                         <option value="0">Inactive</option>
                       </Select>
                     ) : (
-                      <Badge tone={active ? 'success' : 'danger'}>{active ? 'Active' : 'Inactive'}</Badge>
+                      <Badge tone={memberStatusTone(member)}>{memberStatusLabel(member)}</Badge>
                     )}
                   </td>
-                  <td>{member.preferred_unit ?? '—'}</td>
+                  <td className="table-inline-cell">
+                    {editing && active ? (
+                      <Button
+                        type="button"
+                        className="secondary"
+                        disabled={rowSaving}
+                        onClick={() => void resetPassword(member)}
+                      >
+                        Reset password
+                      </Button>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                 </tr>
               );
             }) : (
@@ -274,6 +345,16 @@ export function TeamApp() {
               </tr>
             )}
           </DataTable>
+          {resetUrl && resetMemberName && (
+            <div className="ui-form-grid" style={{ marginTop: 14 }}>
+              <Field label={`Password reset link for ${resetMemberName}`}>
+                <Input readOnly value={new URL(resetUrl, typeof window === 'undefined' ? 'https://millsaathi.com' : window.location.origin).toString()} />
+              </Field>
+              <FormActions>
+                <Button className="secondary" type="button" onClick={() => void copyResetLink()}>Copy link</Button>
+              </FormActions>
+            </div>
+          )}
         </TableCard>
       </section>
     </main>

@@ -12,14 +12,19 @@ export type Session = {
   capabilities?: string[];
   theme?: Theme;
   preferred_unit?: string;
+  must_change_password?: boolean;
   mill: { id: string; name: string; season_label?: string };
 };
+
+export const PREFERRED_UNITS = ['QUINTAL', 'KG', 'TONNE', 'BAG', 'PIECE'] as const;
+export type PreferredUnit = (typeof PREFERRED_UNITS)[number];
 
 type SessionContextValue = {
   session: Session | null | undefined;
   setSession: (session: Session | null) => void;
   sessionError: string | null;
   updateTheme: (theme: Theme) => Promise<void>;
+  updatePreferredUnit: (preferredUnit: PreferredUnit) => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -56,8 +61,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     applyTheme(result.theme);
   }, []);
 
+  const updatePreferredUnit = useCallback(async (preferredUnit: PreferredUnit) => {
+    const result = await api<{ preferred_unit: PreferredUnit }>('/api/auth/me', json('PATCH', { preferred_unit: preferredUnit }));
+    setSession((current) => current ? { ...current, preferred_unit: result.preferred_unit } : current);
+  }, []);
+
   return (
-    <SessionContext.Provider value={{ session, setSession, sessionError, updateTheme }}>
+    <SessionContext.Provider value={{ session, setSession, sessionError, updateTheme, updatePreferredUnit }}>
       {children}
     </SessionContext.Provider>
   );

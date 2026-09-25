@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './app-header';
 import { AuthApp } from './auth-app';
 import { millHeaderMeta } from '../lib/app-meta';
-import { canViewFinance } from '../lib/permissions';
+import { canViewFinance, isOwnerRole } from '../lib/permissions';
 import { useSession } from '../lib/session';
 import { Button, Card } from './ui';
 
@@ -21,33 +21,45 @@ type GateEntry = {
   status?: string;
 };
 
+type MassBalance = {
+  in_kg: number;
+  rice_kg: number;
+  bran_kg: number;
+  husk_kg: number;
+  broken_kg: number;
+  unexplained_kg: number;
+  unexplained_pct: number;
+};
+
+const EMPTY_MASS_BALANCE: MassBalance = {
+  in_kg: 0,
+  rice_kg: 0,
+  bran_kg: 0,
+  husk_kg: 0,
+  broken_kg: 0,
+  unexplained_kg: 0,
+  unexplained_pct: 0,
+};
+
 type Overview = {
   today: string;
-  mill: { loss_limit_pct: number };
-  kpis: Record<string, number | undefined>;
-  mass_balance: {
-    in_kg: number;
-    rice_kg: number;
-    bran_kg: number;
-    husk_kg: number;
-    broken_kg: number;
-    unexplained_kg: number;
-    unexplained_pct: number;
-  };
-  alerts: { level: 'red' | 'amber' | 'blue'; title: string; body: string }[];
-  stock_by_item: { item_name: string; quantity_base: number }[];
-  item_flows: { item_name: string; incoming_base: number; outgoing_base: number }[];
-  processing_summary: { line_type: string; quantity_base: number }[];
-  processing_today: { line_type: string; quantity_base: number }[];
-  trend: { range: TrendRange; label: string; data: { date: string; in_kg: number; out_kg: number }[] };
-  gate: GateEntry[];
-  godowns: unknown[];
-  suppliers: unknown[];
-  buyers: unknown[];
-  items: unknown[];
-  saudas: unknown[];
-  lots: unknown[];
-  onboarding: { gate_count?: number };
+  mill: { loss_limit_pct?: number };
+  kpis?: Record<string, number | undefined>;
+  mass_balance?: MassBalance;
+  alerts?: { level: 'red' | 'amber' | 'blue'; title: string; body: string }[];
+  stock_by_item?: { item_name: string; quantity_base: number }[];
+  item_flows?: { item_name: string; incoming_base: number; outgoing_base: number }[];
+  processing_summary?: { line_type: string; quantity_base: number }[];
+  processing_today?: { line_type: string; quantity_base: number }[];
+  trend?: { range: TrendRange; label: string; data: { date: string; in_kg: number; out_kg: number }[] };
+  gate?: GateEntry[];
+  godowns?: unknown[];
+  suppliers?: unknown[];
+  buyers?: unknown[];
+  items?: unknown[];
+  saudas?: unknown[];
+  lots?: unknown[];
+  onboarding?: { gate_count?: number };
 };
 
 const STATUS_LABELS: Record<string, [string, string, string]> = {
@@ -115,7 +127,7 @@ function MassBalanceCard({
   massBalance,
   lossLimit,
 }: {
-  massBalance: Overview['mass_balance'];
+  massBalance: MassBalance;
   lossLimit: number;
 }) {
   const input = massBalance.in_kg || 0;
@@ -199,7 +211,7 @@ function MassBalanceCard({
   );
 }
 
-function ProcessingBalanceCard({ summary }: { summary: Overview['processing_today'] }) {
+function ProcessingBalanceCard({ summary }: { summary: { line_type: string; quantity_base: number }[] }) {
   const totals: Record<string, number> = {};
   summary.forEach((row) => {
     totals[row.line_type] = Number(row.quantity_base) || 0;
@@ -270,11 +282,11 @@ function persistOnboardingDismissed(millKey: string) {
 
 function OnboardingCard({ overview, millKey }: { overview: Overview; millKey: string }) {
   const steps = [
-    { title: 'Add parties', done: overview.suppliers.length > 0 && overview.buyers.length > 0, detail: 'Buyers, sellers, and brokers in one directory.', href: '/app/parties' },
-    { title: 'Check items', done: overview.items.length > 0, detail: 'Raw material, finished goods and by-products.', href: '/app/items' },
-    { title: 'Create a sauda', done: overview.saudas.length > 0, detail: 'Record the purchase deal before the truck arrives.', href: '/app/purchase' },
-    { title: 'Record gate entry', done: (overview.onboarding.gate_count ?? overview.gate.length) > 0, detail: 'Enter incoming/outgoing trucks and weights.', href: '/app/gate' },
-    { title: 'Move to stock', done: overview.lots.length > 0, detail: 'Add completed incoming trucks into a godown lot.', href: '/app/stock' },
+    { title: 'Add parties', done: (overview.suppliers?.length ?? 0) > 0 && (overview.buyers?.length ?? 0) > 0, detail: 'Buyers, sellers, and brokers in one directory.', href: '/app/parties' },
+    { title: 'Check items', done: (overview.items?.length ?? 0) > 0, detail: 'Raw material, finished goods and by-products.', href: '/app/items' },
+    { title: 'Create a sauda', done: (overview.saudas?.length ?? 0) > 0, detail: 'Record the purchase deal before the truck arrives.', href: '/app/purchase' },
+    { title: 'Record gate entry', done: (overview.onboarding?.gate_count ?? overview.gate?.length ?? 0) > 0, detail: 'Enter incoming/outgoing trucks and weights.', href: '/app/gate' },
+    { title: 'Move to stock', done: (overview.lots?.length ?? 0) > 0, detail: 'Add completed incoming trucks into a godown lot.', href: '/app/stock' },
   ];
   const done = steps.every((step) => step.done);
   const [celebrationVisible, setCelebrationVisible] = useState(() => !readOnboardingDismissed(millKey));
@@ -355,9 +367,9 @@ export function DashboardApp() {
 
   const kpis = useMemo(() => {
     if (!overview || !session) return [];
-    const k = overview.kpis;
-    const mb = overview.mass_balance;
-    const lossLimit = overview.mill.loss_limit_pct;
+    const k = overview.kpis ?? {};
+    const mb = overview.mass_balance ?? EMPTY_MASS_BALANCE;
+    const lossLimit = overview.mill.loss_limit_pct ?? 0;
     if (!canViewFinance(session)) {
       return [
         { label: 'In gate queue', value: String(k.trucks_in_queue ?? 0), detail: 'trucks now inside' },
@@ -401,7 +413,7 @@ export function DashboardApp() {
       {
         label: 'Stock value',
         value: rupees(k.stock_value_paise),
-        detail: `across ${overview.godowns.length} godowns`,
+        detail: `across ${overview.godowns?.length ?? 0} godowns`,
       },
     ];
   }, [overview, session]);
@@ -427,7 +439,7 @@ export function DashboardApp() {
   );
 
   const trendMax = useMemo(() => {
-    const data = overview?.trend.data ?? [];
+    const data = overview?.trend?.data ?? [];
     return Math.max(...data.map((point) => Math.max(point.in_kg, point.out_kg, 1)), 1);
   }, [overview]);
 
@@ -484,7 +496,9 @@ export function DashboardApp() {
 
         {overview && (
           <>
-            <OnboardingCard overview={overview} millKey={session.mill.id || session.mill.name} />
+            {isOwnerRole(session) ? (
+              <OnboardingCard overview={overview} millKey={session.mill.id || session.mill.name} />
+            ) : null}
 
             <div className="kpi-grid dashboard-kpis">
               {kpis.map((kpi) => (
@@ -538,9 +552,9 @@ export function DashboardApp() {
               </Card>
 
               {hasProcessingToday ? (
-                <ProcessingBalanceCard summary={overview.processing_today} />
+                <ProcessingBalanceCard summary={overview.processing_today ?? []} />
               ) : (
-                <MassBalanceCard massBalance={overview.mass_balance} lossLimit={overview.mill.loss_limit_pct} />
+                <MassBalanceCard massBalance={overview.mass_balance ?? EMPTY_MASS_BALANCE} lossLimit={overview.mill.loss_limit_pct ?? 0} />
               )}
             </div>
 
@@ -632,8 +646,8 @@ export function DashboardApp() {
                     <h2>Needs your eyes</h2>
                   </div>
                 </div>
-                {overview.alerts.length ? (
-                  overview.alerts.map((alert) => (
+                {(overview.alerts?.length ?? 0) ? (
+                  (overview.alerts ?? []).map((alert) => (
                     <article className="alert-row" key={`${alert.title}-${alert.body}`}>
                       <span className={`alert-dot ${alert.level}`} />
                       <div className="alert-copy">

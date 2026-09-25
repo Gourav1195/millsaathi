@@ -80,6 +80,8 @@ export type AvailableLot = {
   item_id: string;
   item_name: string;
   qty_kg: number;
+  bag_count?: number | null;
+  tracking_mode?: string | null;
   godown_id?: string | null;
   godown_name?: string | null;
   sauda_id?: string | null;
@@ -437,11 +439,29 @@ export function formatChainRunLinesSummary(run: ChainRunListItem) {
   return parts.join(' · ');
 }
 
-export async function splitLot(lotId: string, quantity: number, unit: string, disposition: 'FOR_SALE' | 'FOR_REUSE' | 'STOCK', godownId?: string) {
+export async function splitLot(
+  lotId: string,
+  payload: {
+    quantity?: number;
+    unit?: string;
+    child_kg?: number;
+    child_bag_count?: number;
+    note?: string;
+    disposition?: 'FOR_SALE' | 'FOR_REUSE' | 'STOCK';
+    godown_id?: string;
+  },
+) {
   return apiJson<{ id: string; code: string; disposition: string }>(`/api/lots/${encodeURIComponent(lotId)}/split`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ quantity, unit, disposition, godown_id: godownId }),
+    body: JSON.stringify({
+      disposition: payload.disposition ?? 'STOCK',
+      godown_id: payload.godown_id,
+      note: payload.note,
+      ...(payload.child_kg != null
+        ? { child_kg: payload.child_kg, child_bag_count: payload.child_bag_count }
+        : { quantity: payload.quantity, unit: payload.unit ?? 'QUINTAL' }),
+    }),
   });
 }
 

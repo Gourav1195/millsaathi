@@ -1,7 +1,7 @@
 'use client';
 
 import { AppLink } from './app-link';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './app-header';
 import {
   Alert,
@@ -10,7 +10,6 @@ import {
   DataTable,
   EmptyState,
   Field,
-  FormActions,
   FormGrid,
   Input,
   PageHeader,
@@ -21,10 +20,10 @@ import {
   Tab,
   TabRow,
 } from './ui';
-import { TableEditCell, TableEditModeButton } from './table-edit-mode';
+import { TableEditModeButton } from './table-edit-mode';
 import { millHeaderMeta } from '../lib/app-meta';
 import { can } from '../lib/permissions';
-import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
+import { useTableEditMode } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 import { fetchGunnyOverview, type GunnyOverview } from '../lib/mill-intelligence';
@@ -37,6 +36,27 @@ import {
   VEHICLE_NUMBER_MAX_LENGTH,
   VEHICLE_NUMBER_PLACEHOLDER,
 } from '../../../shared/vehicle-number';
+import { deriveAverageKgPerBag, gateRequiresBagCount, itemUsesVariableBags, type TrackingMode } from '../../../shared/quantity';
+import { formatSaudaCode } from '../lib/format';
+import { SaudaTruckTable } from './sauda-truck-table';
+
+type Sauda = {
+  id: string;
+  code?: string;
+  direction?: 'in' | 'out';
+  status?: string;
+  fulfilment_status?: string;
+  supplier_id?: string | null;
+  buyer_id?: string | null;
+  item_id?: string | null;
+  supplier_name?: string;
+  buyer_name?: string;
+  item_name?: string;
+  qty_kg?: number;
+  agreed_quantity?: number | null;
+  agreed_unit?: string | null;
+  fulfilled_qty_base?: number;
+};
 
 type GateEntry = {
   id: string;
@@ -44,21 +64,32 @@ type GateEntry = {
   vehicle_no?: string;
   direction?: 'in' | 'out';
   status?: string;
+  item_id?: string | null;
   item_name?: string;
   supplier_name?: string;
   buyer_name?: string;
+  sauda_id?: string | null;
   net_kg?: number;
   gross_kg?: number | null;
   tare_kg?: number | null;
+  observed_bag_count?: number | null;
   moisture_pct?: number | null;
   quality_json?: string | null;
+  stock_status?: string;
 };
 
-type Reference = { id: string; name: string };
+type Reference = {
+  id: string;
+  name: string;
+  tracking_mode?: string | null;
+  gate_bag_count_required?: number | null;
+  package_quantity_base?: number | null;
+};
 
 type GateEditForm = {
   gross_kg: string;
   tare_kg: string;
+  observed_bag_count: string;
   moisture_pct: string;
   broken_pct: string;
   foreign_matter_pct: string;
@@ -76,8 +107,60 @@ const GATE_STATUSES = [
   { value: 'done', label: 'Done' },
 ];
 
+const TABLE_SELECT_PROPS = {
+  className: 'table-inline-field',
+  menuClassName: 'ui-dropdown-menu--table',
+  menuPlacement: 'inline' as const,
+};
+
+const GATE_COLUMNS_VIEW = [
+  { id: 'vehicle', label: 'Vehicle' },
+  { id: 'direction', label: 'Direction' },
+  { id: 'sauda', label: 'Sauda' },
+  { id: 'party', label: 'Party' },
+  { id: 'material', label: 'Material' },
+  { id: 'net', label: 'Net weight' },
+  { id: 'status', label: 'Status' },
+];
+
+const GATE_COLUMNS_EDIT = [
+  { id: 'vehicle', label: 'Vehicle' },
+  { id: 'direction', label: 'Direction' },
+  { id: 'sauda', label: 'Sauda' },
+  { id: 'party', label: 'Party' },
+  { id: 'material', label: 'Material' },
+  { id: 'gross', label: 'Gross kg' },
+  { id: 'tare', label: 'Tare kg' },
+  { id: 'net', label: 'Net' },
+  { id: 'moisture', label: 'Moisture %' },
+  { id: 'status', label: 'Status' },
+  { id: 'save', label: '' },
+];
+
 const qtl = (kg?: number) => `${((kg ?? 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} qtl`;
 const wholeKg = (value: string) => (/^\d+$/.test(value) ? Number(value) : null);
+
+function saudaRemainingKg(sauda: Sauda) {
+  const total = Number(sauda.qty_kg ?? 0);
+  const delivered = Number(sauda.fulfilled_qty_base ?? 0);
+  return Math.max(0, total - delivered);
+}
+
+function saudaIsOpen(sauda: Sauda) {
+  if (String(sauda.status ?? '').toLowerCase() === 'disputed') return false;
+  if (String(sauda.fulfilment_status ?? '').toUpperCase() === 'FULFILLED') return false;
+  return saudaRemainingKg(sauda) > 0;
+}
+
+function blankGateForm() {
+  return {
+    sauda_id: '',
+    vehicle_no: '',
+    gross_kg: '',
+    tare_kg: '',
+    observed_bag_count: '',
+  };
+}
 
 function parseQuality(qualityJson?: string | null) {
   if (!qualityJson) return {};
@@ -93,6 +176,7 @@ function editFormFromEntry(entry: GateEntry): GateEditForm {
   return {
     gross_kg: entry.gross_kg == null ? '' : String(entry.gross_kg),
     tare_kg: entry.tare_kg == null ? '' : String(entry.tare_kg),
+    observed_bag_count: entry.observed_bag_count == null ? '' : String(entry.observed_bag_count),
     moisture_pct: entry.moisture_pct == null ? '' : String(entry.moisture_pct),
     broken_pct: quality.broken_pct == null ? '' : String(quality.broken_pct),
     foreign_matter_pct: quality.foreign_matter_pct == null ? '' : String(quality.foreign_matter_pct),
@@ -102,42 +186,36 @@ function editFormFromEntry(entry: GateEntry): GateEditForm {
   };
 }
 
-const GATE_COLUMNS_BASE = [
-  { id: 'vehicle', label: 'Vehicle' },
-  { id: 'direction', label: 'Direction' },
-  { id: 'party', label: 'Party' },
-  { id: 'material', label: 'Material' },
-  { id: 'net', label: 'Net weight' },
-  { id: 'status', label: 'Status' },
-];
+function statusLabel(status?: string) {
+  return GATE_STATUSES.find((option) => option.value === status)?.label ?? status ?? '—';
+}
 
 export function GateApp() {
   const { session, sessionError } = useSession();
   const headerMeta = millHeaderMeta(session);
   const [screen, setScreen] = useState<'weighbridge' | 'gunny'>('weighbridge');
   const [entries, setEntries] = useState<GateEntry[]>([]);
+  const [saudas, setSaudas] = useState<Sauda[]>([]);
   const [gunny, setGunny] = useState<GunnyOverview | null>(null);
-  const [suppliers, setSuppliers] = useState<Reference[]>([]);
-  const [buyers, setBuyers] = useState<Reference[]>([]);
   const [items, setItems] = useState<Reference[]>([]);
   const [filter, setFilter] = useState<'all' | 'in' | 'out'>('all');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ direction: 'in', vehicle_no: '', party_id: '', item_id: '', gross_kg: '', tare_kg: '' });
-  const [editing, setEditing] = useState<GateEntry | null>(null);
-  const [editForm, setEditForm] = useState<GateEditForm | null>(null);
-  const editDialogRef = useRef<HTMLDialogElement>(null);
+  const [savingEntryId, setSavingEntryId] = useState<string | null>(null);
+  const [form, setForm] = useState(blankGateForm);
+  const [saudaQuery, setSaudaQuery] = useState('');
+  const [drafts, setDrafts] = useState<Record<string, GateEditForm>>({});
   const tableEdit = useTableEditMode();
 
   const canCreate = can(session, 'gate:create');
   const canEdit = can(session, 'gate:edit');
   const canViewGunny = can(session, 'gate:view');
+  const editing = tableEdit.editMode && canEdit;
 
   const load = async () => {
-    const body = await api<{ gate: GateEntry[]; suppliers: Reference[]; buyers: Reference[]; items: Reference[] }>('/api/overview');
+    const body = await api<{ gate: GateEntry[]; saudas?: Sauda[]; items: Reference[] }>('/api/overview');
     setEntries(body.gate);
-    setSuppliers(body.suppliers);
-    setBuyers(body.buyers);
+    setSaudas(body.saudas ?? []);
     setItems(body.items);
   };
 
@@ -155,17 +233,90 @@ export function GateApp() {
   }, [session, screen]);
 
   useEffect(() => {
-    const dialog = editDialogRef.current;
-    if (!dialog) return;
-    if (editing && editForm && !dialog.open) dialog.showModal();
-    if (!editing && dialog.open) dialog.close();
-  }, [editing, editForm]);
+    if (!editing) {
+      setDrafts({});
+      return;
+    }
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const entry of entries) {
+        if (!next[entry.id]) next[entry.id] = editFormFromEntry(entry);
+      }
+      return next;
+    });
+  }, [editing, entries]);
 
   const visible = useMemo(() => entries.filter((e) => filter === 'all' || e.direction === filter), [entries, filter]);
-  const parties = form.direction === 'in' ? suppliers : buyers;
+  const columns = editing ? GATE_COLUMNS_EDIT : GATE_COLUMNS_VIEW;
+  const saudaById = useMemo(() => new Map(saudas.map((sauda) => [sauda.id, sauda])), [saudas]);
+  const eligibleSaudas = useMemo(() => saudas.filter(saudaIsOpen), [saudas]);
+  const filteredEligibleSaudas = useMemo(() => {
+    const query = saudaQuery.trim().toLowerCase();
+    const filtered = !query
+      ? eligibleSaudas
+      : eligibleSaudas.filter((sauda) => {
+          const haystack = [
+            formatSaudaCode(sauda.code, sauda.direction),
+            sauda.supplier_name,
+            sauda.buyer_name,
+            sauda.item_name,
+          ].join(' ').toLowerCase();
+          return haystack.includes(query);
+        });
+    if (form.sauda_id && !filtered.some((sauda) => sauda.id === form.sauda_id)) {
+      const selected = saudaById.get(form.sauda_id);
+      if (selected) return [selected, ...filtered];
+    }
+    return filtered;
+  }, [eligibleSaudas, saudaQuery, form.sauda_id, saudaById]);
+  const trucksBySauda = useMemo(() => {
+    const map = new Map<string, GateEntry[]>();
+    for (const entry of entries) {
+      if (!entry.sauda_id) continue;
+      map.set(entry.sauda_id, [...(map.get(entry.sauda_id) ?? []), entry]);
+    }
+    return map;
+  }, [entries]);
+  const selectedSauda = form.sauda_id ? saudaById.get(form.sauda_id) ?? null : null;
+  const selectedItem = selectedSauda?.item_id ? items.find((item) => item.id === selectedSauda.item_id) ?? null : null;
+  const linkedTrucks = form.sauda_id ? trucksBySauda.get(form.sauda_id) ?? [] : [];
+  const formNetKg = (() => {
+    const gross = wholeKg(form.gross_kg);
+    const tare = wholeKg(form.tare_kg);
+    if (gross == null || tare == null) return null;
+    return Math.max(0, gross - tare);
+  })();
+
+  function applySauda(saudaId: string) {
+    setForm((current) => ({ ...current, sauda_id: saudaId }));
+  }
+
+  function entrySaudaLabel(entry: GateEntry) {
+    if (!entry.sauda_id) return '—';
+    const sauda = saudaById.get(entry.sauda_id);
+    if (!sauda) return entry.sauda_id.slice(0, 8);
+    return formatSaudaCode(sauda.code, sauda.direction);
+  }
+
+  function updateDraft(entryId: string, patch: Partial<GateEditForm>) {
+    setDrafts((current) => ({
+      ...current,
+      [entryId]: { ...current[entryId], ...patch },
+    }));
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const sauda = selectedSauda;
+    if (!sauda) {
+      setError('Select a sauda.');
+      return;
+    }
+    const partyId = sauda.direction === 'out' ? sauda.buyer_id : sauda.supplier_id;
+    if (!partyId || !sauda.item_id) {
+      setError('This sauda is missing party or item details.');
+      return;
+    }
     const gross = wholeKg(form.gross_kg);
     const tare = wholeKg(form.tare_kg);
     const vehicleNo = normalizeVehicleNumber(form.vehicle_no);
@@ -173,17 +324,35 @@ export function GateApp() {
       setError(VEHICLE_NUMBER_ERROR);
       return;
     }
-    if (!form.party_id || gross == null || tare == null || gross < tare) {
-      setError('Select a party and enter whole-kilogram gross and tare weights (gross must be at least tare).');
+    if (gross == null || tare == null || gross < tare) {
+      setError('Enter whole-kilogram gross and tare weights (gross must be at least tare).');
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      const party = form.direction === 'in' ? { supplier_id: form.party_id } : { buyer_id: form.party_id };
-      const created = await api<{ id: string }>('/api/gate', json('POST', { direction: form.direction, vehicle_no: vehicleNo, item_id: form.item_id || undefined, ...party }));
-      await api(`/api/gate/${created.id}`, json('PATCH', { gross_kg: gross, tare_kg: tare, status: 'weighed' }));
-      setForm({ ...form, vehicle_no: '', party_id: '', item_id: '', gross_kg: '', tare_kg: '' });
+      const direction = sauda.direction === 'out' ? 'out' : 'in';
+      const party = direction === 'in' ? { supplier_id: partyId } : { buyer_id: partyId };
+      const created = await api<{ id: string }>('/api/gate', json('POST', {
+        direction,
+        vehicle_no: vehicleNo,
+        item_id: sauda.item_id,
+        sauda_id: sauda.id,
+        ...party,
+      }));
+      const patch: Record<string, unknown> = { gross_kg: gross, tare_kg: tare, status: 'weighed' };
+      if (selectedItem && gateRequiresBagCount({ tracking_mode: (selectedItem.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode, gate_bag_count_required: selectedItem.gate_bag_count_required })) {
+        const bags = Number(form.observed_bag_count);
+        if (!Number.isInteger(bags) || bags <= 0) {
+          setError('Bag count is required for this item.');
+          setSaving(false);
+          return;
+        }
+        patch.observed_bag_count = bags;
+      }
+      await api(`/api/gate/${created.id}`, json('PATCH', patch));
+      setForm(blankGateForm());
+      setSaudaQuery('');
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save gate entry');
@@ -192,22 +361,10 @@ export function GateApp() {
     }
   }
 
-  function startEdit(entry: GateEntry) {
-    setEditing(entry);
-    setEditForm(editFormFromEntry(entry));
-  }
-
-  function closeEdit() {
-    if (saving) return;
-    setEditing(null);
-    setEditForm(null);
-  }
-
-  async function saveEdit(event: FormEvent) {
-    event.preventDefault();
-    if (!editing || !editForm) return;
+  async function saveEntry(entry: GateEntry) {
+    const editForm = drafts[entry.id] ?? editFormFromEntry(entry);
     const body: Record<string, unknown> = { status: editForm.status };
-    if (editing.status !== 'done') {
+    if (entry.status !== 'done') {
       const gross = editForm.gross_kg === '' ? null : wholeKg(editForm.gross_kg);
       const tare = editForm.tare_kg === '' ? null : wholeKg(editForm.tare_kg);
       if (editForm.gross_kg !== '' && gross == null) return setError('Gross weight must be a whole number of kg.');
@@ -221,19 +378,35 @@ export function GateApp() {
     if (editForm.foreign_matter_pct !== '') body.foreign_matter_pct = Number(editForm.foreign_matter_pct);
     if (editForm.damaged_pct !== '') body.damaged_pct = Number(editForm.damaged_pct);
     if (editForm.grade !== '') body.grade = editForm.grade;
+    if (editForm.observed_bag_count !== '') {
+      const bags = Number(editForm.observed_bag_count);
+      if (!Number.isInteger(bags) || bags <= 0) return setError('Bag count must be a positive whole number.');
+      body.observed_bag_count = bags;
+    }
 
-    setSaving(true);
+    setSavingEntryId(entry.id);
     setError(null);
     try {
-      await api(`/api/gate/${editing.id}`, json('PATCH', body));
-      setEditing(null);
-      setEditForm(null);
+      await api(`/api/gate/${entry.id}`, json('PATCH', body));
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not update gate entry');
     } finally {
-      setSaving(false);
+      setSavingEntryId(null);
     }
+  }
+
+  function itemForEntry(entry: GateEntry) {
+    return items.find((item) => item.id === entry.item_id) ?? null;
+  }
+
+  function draftNetKg(entry: GateEntry) {
+    const draft = drafts[entry.id];
+    if (!draft) return entry.net_kg ?? 0;
+    const gross = draft.gross_kg === '' ? null : wholeKg(draft.gross_kg);
+    const tare = draft.tare_kg === '' ? null : wholeKg(draft.tare_kg);
+    if (gross == null || tare == null) return entry.net_kg ?? 0;
+    return Math.max(0, gross - tare);
   }
 
   if (session === undefined) return <main className="auth-page"><p className="muted">Loading gate entries…</p></main>;
@@ -292,123 +465,97 @@ export function GateApp() {
         {canCreate && (
           <Panel title="Add New gate entry">
             <FormGrid onSubmit={submit}>
-              <Field label="Direction">
-                <Select value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value, party_id: '' })}>
-                  <option value="in">Arriving</option>
-                  <option value="out">Dispatching</option>
-                </Select>
-              </Field>
-              <Field label="Vehicle">
-                <Input
+              <Field label="Sauda">
+                <Select
                   required
-                  autoCapitalize="characters"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  maxLength={VEHICLE_NUMBER_MAX_LENGTH}
-                  placeholder={VEHICLE_NUMBER_PLACEHOLDER}
-                  value={form.vehicle_no}
-                  onChange={(e) => setForm({ ...form, vehicle_no: sanitizeVehicleNumber(e.target.value) })}
-                />
-              </Field>
-              <Field label="Party">
-                <Select required value={form.party_id} onChange={(e) => setForm({ ...form, party_id: e.target.value })}>
-                  <option value="">Select</option>
-                  {parties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  value={form.sauda_id}
+                  onChange={(e) => applySauda(e.target.value)}
+                  searchable
+                  searchValue={saudaQuery}
+                  onSearchChange={setSaudaQuery}
+                  searchPlaceholder="Search by code, party, or item…"
+                  emptyMessage={saudaQuery.trim() ? 'No saudas match this search' : 'No open saudas'}
+                >
+                  <option value="">Select sauda</option>
+                  {filteredEligibleSaudas.map((sauda) => (
+                    <option key={sauda.id} value={sauda.id}>{formatSaudaCode(sauda.code, sauda.direction)}</option>
+                  ))}
                 </Select>
               </Field>
-              <Field label="Item">
-                <Select value={form.item_id} onChange={(e) => setForm({ ...form, item_id: e.target.value })}>
-                  <option value="">Not specified</option>
-                  {items.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-                </Select>
-              </Field>
-              <Field label="Gross kg">
-                <Input required inputMode="numeric" value={form.gross_kg} onChange={(e) => setForm({ ...form, gross_kg: e.target.value })} />
-              </Field>
-              <Field label="Tare kg">
-                <Input required inputMode="numeric" value={form.tare_kg} onChange={(e) => setForm({ ...form, tare_kg: e.target.value })} />
-              </Field>
+
+              {selectedSauda ? (
+                <div className="gate-sauda-summary">
+                  <dl className="gate-sauda-summary-grid">
+                    <div><dt>Sauda</dt><dd>{formatSaudaCode(selectedSauda.code, selectedSauda.direction)}</dd></div>
+                    <div><dt>Direction</dt><dd>{selectedSauda.direction === 'out' ? 'Sale' : 'Purchase'}</dd></div>
+                    <div><dt>Party</dt><dd>{selectedSauda.direction === 'out' ? selectedSauda.buyer_name : selectedSauda.supplier_name ?? '—'}</dd></div>
+                    <div><dt>Item</dt><dd>{selectedSauda.item_name ?? '—'}</dd></div>
+                    <div><dt>Agreed</dt><dd>{qtl(selectedSauda.qty_kg)}</dd></div>
+                    <div><dt>Delivered</dt><dd>{qtl(selectedSauda.fulfilled_qty_base)}</dd></div>
+                    <div><dt>Remaining</dt><dd>{qtl(saudaRemainingKg(selectedSauda))}</dd></div>
+                    <div><dt>Status</dt><dd>{selectedSauda.fulfilment_status ?? selectedSauda.status ?? '—'}</dd></div>
+                    {formNetKg != null ? (
+                      <div><dt>This truck</dt><dd>{formNetKg.toLocaleString('en-IN')} kg · {qtl(formNetKg)}</dd></div>
+                    ) : null}
+                  </dl>
+                  <SaudaTruckTable trucks={linkedTrucks} />
+                </div>
+              ) : null}
+
+              <div className="gate-weigh-fields">
+                <Field label="Vehicle">
+                  <Input
+                    required
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    maxLength={VEHICLE_NUMBER_MAX_LENGTH}
+                    placeholder={VEHICLE_NUMBER_PLACEHOLDER}
+                    value={form.vehicle_no}
+                    onChange={(e) => setForm({ ...form, vehicle_no: sanitizeVehicleNumber(e.target.value) })}
+                  />
+                </Field>
+                <Field label="Gross kg">
+                  <Input required inputMode="numeric" value={form.gross_kg} onChange={(e) => setForm({ ...form, gross_kg: e.target.value })} />
+                </Field>
+                <Field label="Tare kg">
+                  <Input required inputMode="numeric" value={form.tare_kg} onChange={(e) => setForm({ ...form, tare_kg: e.target.value })} />
+                </Field>
+                {selectedItem && gateRequiresBagCount({ tracking_mode: (selectedItem.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode, gate_bag_count_required: selectedItem.gate_bag_count_required }) ? (
+                  <Field label="Bags">
+                    <Input required inputMode="numeric" value={form.observed_bag_count} onChange={(e) => setForm({ ...form, observed_bag_count: e.target.value })} />
+                  </Field>
+                ) : null}
+              </div>
+
+              {(() => {
+                if (!selectedItem || !gateRequiresBagCount({ tracking_mode: (selectedItem.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode, gate_bag_count_required: selectedItem.gate_bag_count_required })) return null;
+                const net = formNetKg;
+                const bags = form.observed_bag_count === '' ? null : Number(form.observed_bag_count);
+                const average = net != null && bags != null && Number.isInteger(bags) && bags > 0 ? deriveAverageKgPerBag(net, bags) : null;
+                if (net == null || average == null) return null;
+                return (
+                  <Field label="Receipt summary">
+                    <p className="muted">Net material: {net.toLocaleString('en-IN')} kg / {(net / 100).toFixed(2)} qtl · Average filled bag: {average.toFixed(2)} kg</p>
+                  </Field>
+                );
+              })()}
+
               <div className="form-actions">
-                <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save weighment'}</Button>
+                <Button type="submit" disabled={saving || !form.sauda_id}>{saving ? 'Saving…' : 'Save weighment'}</Button>
               </div>
             </FormGrid>
           </Panel>
         )}
 
-        <dialog
-          ref={editDialogRef}
-          className="app-dialog"
-          onClose={() => {
-            if (!saving) closeEdit();
-          }}
-          onCancel={(event) => {
-            event.preventDefault();
-            closeEdit();
-          }}
-        >
-          {editing && editForm ? (
-            <>
-              <div className="app-dialog-head">
-                <div>
-                  <h2>Update {editing.token_no ?? formatVehicleNumber(editing.vehicle_no) ?? 'gate entry'}</h2>
-                  <p>
-                    <strong>{formatVehicleNumber(editing.vehicle_no)}</strong>
-                    {editing.item_name ? ` · ${editing.item_name}` : ''}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="app-dialog-close ms-focus-ring"
-                  aria-label="Close update gate dialog"
-                  onClick={closeEdit}
-                  disabled={saving}
-                >
-                  ×
-                </button>
-              </div>
-              <FormGrid className="ui-form-grid--compact" onSubmit={saveEdit}>
-                {editing.status !== 'done' && (
-                  <>
-                    <Field label="Gross kg">
-                      <Input inputMode="numeric" value={editForm.gross_kg} onChange={(e) => setEditForm({ ...editForm, gross_kg: e.target.value })} />
-                    </Field>
-                    <Field label="Tare kg">
-                      <Input inputMode="numeric" value={editForm.tare_kg} onChange={(e) => setEditForm({ ...editForm, tare_kg: e.target.value })} />
-                    </Field>
-                  </>
-                )}
-                <Field label="Moisture %">
-                  <Input type="number" min="0" max="100" step="0.1" value={editForm.moisture_pct} onChange={(e) => setEditForm({ ...editForm, moisture_pct: e.target.value })} />
-                </Field>
-                <Field label="Broken %">
-                  <Input type="number" min="0" max="100" step="0.1" value={editForm.broken_pct} onChange={(e) => setEditForm({ ...editForm, broken_pct: e.target.value })} />
-                </Field>
-                <Field label="Foreign matter %">
-                  <Input type="number" min="0" max="100" step="0.1" value={editForm.foreign_matter_pct} onChange={(e) => setEditForm({ ...editForm, foreign_matter_pct: e.target.value })} />
-                </Field>
-                <Field label="Damaged %">
-                  <Input type="number" min="0" max="100" step="0.1" value={editForm.damaged_pct} onChange={(e) => setEditForm({ ...editForm, damaged_pct: e.target.value })} />
-                </Field>
-                <Field label="Grade / quality note">
-                  <Input value={editForm.grade} onChange={(e) => setEditForm({ ...editForm, grade: e.target.value })} />
-                </Field>
-                <Field label="Status">
-                  <Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
-                    {GATE_STATUSES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </Select>
-                </Field>
-                <FormActions>
-                  <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
-                  <Button className="secondary" type="button" onClick={closeEdit} disabled={saving}>Cancel</Button>
-                </FormActions>
-              </FormGrid>
-            </>
-          ) : null}
-        </dialog>
-
         <TableCard
+          className={editing ? 'gate-table-editing' : ''}
           title="Gate entries"
-          subtitle={`${visible.length} entr${visible.length === 1 ? 'y' : 'ies'}`}
+          subtitle={
+            editing
+              ? 'Update weights, moisture, and status inline. Mark arriving trucks Done to send them to Stock.'
+              : `${visible.length} entr${visible.length === 1 ? 'y' : 'ies'}`
+          }
           toolbar={
             <ScreenToolbar>
               <TabRow role="group" aria-label="Gate direction">
@@ -419,24 +566,134 @@ export function GateApp() {
             </ScreenToolbar>
           }
         >
-          <DataTable columns={withEditModeColumns(GATE_COLUMNS_BASE, tableEdit.editMode, { canEdit })}>
-            {visible.length ? visible.map((entry) => (
-              <tr key={entry.id}>
-                {tableEdit.editMode && canEdit && (
-                  entry.status !== 'done'
-                    ? <TableEditCell label={formatVehicleNumber(entry.vehicle_no) ?? 'gate entry'} onClick={() => startEdit(entry)} />
-                    : <td className="table-edit-col" />
-                )}
-                <td><strong>{formatVehicleNumber(entry.vehicle_no)}</strong></td>
-                <td>{entry.direction === 'in' ? 'Arriving' : 'Dispatching'}</td>
-                <td>{entry.direction === 'in' ? entry.supplier_name ?? '—' : entry.buyer_name ?? '—'}</td>
-                <td>{entry.item_name ?? '—'}</td>
-                <td><strong>{qtl(entry.net_kg)}</strong></td>
-                <td><Badge tone={entry.status === 'done' ? 'success' : 'warning'}>{entry.status ?? '—'}</Badge></td>
-              </tr>
-            )) : (
+          <DataTable columns={columns}>
+            {visible.length ? visible.map((entry) => {
+              const draft = drafts[entry.id] ?? editFormFromEntry(entry);
+              const rowSaving = savingEntryId === entry.id;
+              const weightsLocked = entry.status === 'done';
+              return (
+                <tr key={entry.id} className={rowSaving ? 'table-row-saving' : undefined}>
+                  <td><strong>{formatVehicleNumber(entry.vehicle_no)}</strong></td>
+                  <td>{entry.direction === 'in' ? 'Arriving' : 'Dispatching'}</td>
+                  <td>{entrySaudaLabel(entry)}</td>
+                  <td>{entry.direction === 'in' ? entry.supplier_name ?? '—' : entry.buyer_name ?? '—'}</td>
+                  <td>{entry.item_name ?? '—'}</td>
+                  {editing ? (
+                    <>
+                      <td className="table-inline-cell">
+                        {weightsLocked ? (
+                          <span className="muted">{entry.gross_kg ?? '—'}</span>
+                        ) : (
+                          <Input
+                            inputMode="numeric"
+                            className="table-inline-input"
+                            aria-label={`Gross kg for ${formatVehicleNumber(entry.vehicle_no)}`}
+                            value={draft.gross_kg}
+                            disabled={rowSaving}
+                            onChange={(event) => updateDraft(entry.id, { gross_kg: event.target.value })}
+                          />
+                        )}
+                      </td>
+                      <td className="table-inline-cell">
+                        {weightsLocked ? (
+                          <span className="muted">{entry.tare_kg ?? '—'}</span>
+                        ) : (
+                          <Input
+                            inputMode="numeric"
+                            className="table-inline-input"
+                            aria-label={`Tare kg for ${formatVehicleNumber(entry.vehicle_no)}`}
+                            value={draft.tare_kg}
+                            disabled={rowSaving}
+                            onChange={(event) => updateDraft(entry.id, { tare_kg: event.target.value })}
+                          />
+                        )}
+                      </td>
+                      <td>
+                        <strong>{qtl(draftNetKg(entry))}</strong>
+                        {(() => {
+                          const item = itemForEntry(entry);
+                          if (!item || !itemUsesVariableBags(item.tracking_mode)) return null;
+                          const bags = draft.observed_bag_count === '' ? null : Number(draft.observed_bag_count);
+                          const average = deriveAverageKgPerBag(draftNetKg(entry), Number.isInteger(bags) ? bags : null);
+                          return average != null ? <small className="muted">Avg {average.toFixed(2)} kg/bag</small> : null;
+                        })()}
+                      </td>
+                      {(() => {
+                        const item = itemForEntry(entry);
+                        if (!item || !gateRequiresBagCount({ tracking_mode: (item.tracking_mode ?? 'WEIGHT_ONLY') as TrackingMode, gate_bag_count_required: item.gate_bag_count_required })) return null;
+                        return (
+                          <td className="table-inline-cell">
+                            <Input
+                              inputMode="numeric"
+                              className="table-inline-input"
+                              aria-label={`Bags for ${formatVehicleNumber(entry.vehicle_no)}`}
+                              value={draft.observed_bag_count}
+                              disabled={rowSaving}
+                              onChange={(event) => updateDraft(entry.id, { observed_bag_count: event.target.value })}
+                            />
+                          </td>
+                        );
+                      })()}
+                      <td className="table-inline-cell">
+                        <Input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          className="table-inline-input"
+                          aria-label={`Moisture for ${formatVehicleNumber(entry.vehicle_no)}`}
+                          value={draft.moisture_pct}
+                          disabled={rowSaving}
+                          onChange={(event) => updateDraft(entry.id, { moisture_pct: event.target.value })}
+                        />
+                      </td>
+                      <td className="table-inline-cell">
+                        <Select
+                          {...TABLE_SELECT_PROPS}
+                          aria-label={`Status for ${formatVehicleNumber(entry.vehicle_no)}`}
+                          value={draft.status}
+                          disabled={rowSaving}
+                          onChange={(event) => updateDraft(entry.id, { status: event.target.value })}
+                        >
+                          {GATE_STATUSES.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </Select>
+                      </td>
+                      <td className="table-inline-cell table-inline-actions">
+                        <Button
+                          type="button"
+                          className="quiet"
+                          disabled={rowSaving}
+                          onClick={() => void saveEntry(entry)}
+                        >
+                          {rowSaving ? 'Saving…' : 'Save'}
+                        </Button>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td>
+                        <strong>{qtl(entry.net_kg)}</strong>
+                        {entry.observed_bag_count != null ? (
+                          <small className="muted">
+                            {entry.observed_bag_count} bags
+                            {deriveAverageKgPerBag(entry.net_kg ?? 0, entry.observed_bag_count) != null
+                              ? ` · avg ${deriveAverageKgPerBag(entry.net_kg ?? 0, entry.observed_bag_count)!.toFixed(2)} kg`
+                              : ''}
+                          </small>
+                        ) : itemForEntry(entry) && itemUsesVariableBags(itemForEntry(entry)?.tracking_mode)
+                          ? <small className="muted">Bag count was not recorded</small>
+                          : null}
+                      </td>
+                      <td><Badge tone={entry.status === 'done' ? 'success' : 'warning'}>{statusLabel(entry.status)}</Badge></td>
+                    </>
+                  )}
+                </tr>
+              );
+            }) : (
               <tr>
-                <td colSpan={withEditModeColumns(GATE_COLUMNS_BASE, tableEdit.editMode, { canEdit }).length}><EmptyState>No gate entries in this view.</EmptyState></td>
+                <td colSpan={columns.length}><EmptyState>No gate entries in this view.</EmptyState></td>
               </tr>
             )}
           </DataTable>

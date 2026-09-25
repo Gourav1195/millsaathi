@@ -22,6 +22,7 @@
     "test:smoke": "node scripts/smoke-local.mjs",
     "test:authz": "node scripts/authz-tests.mjs",
     "test:processing-input": "node --experimental-strip-types scripts/processing-input-tests.mjs",
+    "test:quantity": "node --experimental-strip-types scripts/quantity-tests.mjs",
     "razorpay:plans": "node scripts/razorpay-create-plans.mjs",
     "db:migrate:local": "wrangler d1 migrations apply millsaathi --local",
     "db:migrate:remote": "wrangler d1 migrations apply millsaathi --remote",

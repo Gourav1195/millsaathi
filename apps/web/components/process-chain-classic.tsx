@@ -23,6 +23,7 @@ import {
   type CatalogItem,
 } from '../lib/process-chain-classic';
 import type { ProcessingChainRecord } from '../lib/process-studio';
+import { formatDualQuantity, itemUsesVariableBags } from '../../../shared/quantity';
 import {
   baseToDisplay,
   createChainRun,
@@ -274,6 +275,7 @@ function StepInputSlot({
           {inputAllocations.map((entry) => {
             const lot = availableLots.find((candidate) => candidate.id === entry.lot_id);
             const maxDisplay = lot ? baseToDisplay(lot.qty_kg, unit) : 0;
+            const variableBagLot = lot ? itemUsesVariableBags(lot.tracking_mode) : false;
             const remainingDisplay = lot ? baseToDisplay(lot.qty_kg - displayToBase(Number(entry.quantity_display), unit), unit) : null;
             return (
               <div key={entry.lot_id} className="chain-stock-selection">
@@ -286,13 +288,20 @@ function StepInputSlot({
                   ) : null}
                 </div>
                 <label className="chain-stock-selection-qty">
-                  <span>Entered</span>
-                  <input type="number" min="0" step="0.01" max={maxDisplay || undefined} disabled={!canEdit} value={entry.quantity_display}
+                  <span>{variableBagLot ? 'Whole lot' : 'Entered'}</span>
+                  <input type="number" min="0" step="0.01" max={maxDisplay || undefined} disabled={!canEdit || variableBagLot} readOnly={variableBagLot} value={entry.quantity_display}
                     aria-label={`Quantity from ${lot?.code ?? entry.lot_id}`}
                     onChange={(event) => onToggleAllocation(entry.lot_id, maxDisplay, true, event.target.value)} />
                   <span className="chain-stock-selection-unit">{unit}</span>
                 </label>
-                <small>Available {maxDisplay} {unit} · Remaining after posting {remainingDisplay ?? '—'} {unit}</small>
+                {variableBagLot && lot ? (
+                  <small>
+                    {formatDualQuantity({ weightKg: lot.qty_kg, bagCount: lot.bag_count, trackingMode: 'VARIABLE_BAG' })}
+                    {' · '}This item uses variable-weight bags, so processing uses the complete lot.
+                  </small>
+                ) : (
+                  <small>Available {maxDisplay} {unit} · Remaining after posting {remainingDisplay ?? '—'} {unit}</small>
+                )}
               </div>
             );
           })}
@@ -857,7 +866,8 @@ function ClassicChainMap({
     onError(null);
     setInputAllocations((current) => {
       if (!enabled) return current.filter((entry) => entry.lot_id !== lotId);
-      const nextQty = quantityDisplay ?? String(maxDisplay);
+      const forceWholeLot = lot ? itemUsesVariableBags(lot.tracking_mode) : false;
+      const nextQty = forceWholeLot ? String(maxDisplay) : (quantityDisplay ?? String(maxDisplay));
       const existingIndex = current.findIndex((entry) => entry.lot_id === lotId);
       if (existingIndex >= 0) {
         return current.map((entry) => (
@@ -1294,7 +1304,7 @@ function ClassicChainMap({
     const qty = window.prompt('Quantity to mark (in display unit):');
     if (!qty || !Number(qty)) return;
     try {
-      await splitLot(lotId, Number(qty), unit, disposition);
+      await splitLot(lotId, { quantity: Number(qty), unit, disposition });
       if (run?.id && selectedStep?.id) {
         const mats = await loadAvailableInputs(run.id, selectedStep.id);
         setMaterials({

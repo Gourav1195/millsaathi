@@ -240,6 +240,7 @@ export const NAV_MODULE_CAPABILITY: Record<NavModule, Capability> = {
 export type SessionUser = { role: string; role_code?: string | null };
 
 export function effectiveRole(user: SessionUser): Role | 'unknown' {
+  if (String(user.role ?? '').toLowerCase() === 'owner') return 'owner';
   const role = String(user.role_code || user.role || '').toLowerCase();
   return (ROLES as readonly string[]).includes(role) ? (role as Role) : 'unknown';
 }

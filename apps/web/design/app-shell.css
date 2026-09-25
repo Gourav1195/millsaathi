@@ -215,6 +215,7 @@
 }
 
 .app-sidebar-user-meta {
+  flex: 1;
   min-width: 0;
 }
 
@@ -225,6 +226,36 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.app-sidebar-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--side-mut);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.app-sidebar-logout-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.app-sidebar-logout-btn:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.app-sidebar-logout-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .app-sidebar-user-role {
@@ -486,7 +517,8 @@
   }
 
   .app-sidebar[data-collapsed='true'] .app-sidebar-user {
-    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
     padding: 14px 12px;
   }
 }

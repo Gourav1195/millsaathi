@@ -405,8 +405,38 @@
 .process-material-allocation input[type='number'] { width: 88px; }
 .chain-materials-filters { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-bottom: var(--space-3); }
 .chain-actuals-allocations { display: grid; gap: 4px; margin: var(--space-2) 0; }
-.sauda-truck-row td { background: var(--muted-bg); font-size: 13px; }
+.sauda-truck-row td { background: var(--muted-bg); font-size: 13px; padding: var(--space-2) var(--space-3); }
 .sauda-truck-row small { color: var(--muted); }
+.sauda-truck-table-wrap { margin-top: var(--space-2); }
+.sauda-truck-table-title { margin: 0 0 var(--space-2); font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.sauda-truck-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.sauda-truck-table th,
+.sauda-truck-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.sauda-truck-table th { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.sauda-truck-table tbody tr:last-child td { border-bottom: 0; }
+.gate-sauda-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--muted-bg);
+}
+.gate-sauda-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-2) var(--space-4);
+}
+.gate-sauda-summary-grid dt { margin: 0; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.gate-sauda-summary-grid dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.gate-weigh-fields {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+}
 .stock-group-panel { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
 .stock-group-card { border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-3); background: #fff; }
 .stock-group-card summary { cursor: pointer; font-weight: 700; list-style: none; }
@@ -478,6 +508,43 @@
 }
 
 /* Stock & lots */
+.stock-accept-undo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--panel-buyer-border);
+  border-left: 4px solid var(--green);
+  border-radius: var(--radius-md);
+  background: var(--row-buyer-bg);
+}
+
+.stock-accept-undo-copy {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.stock-accept-undo-btn.ui-button,
+.stock-lot-undo-btn.ui-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stock-lot-row--just-accepted {
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.stock-lot-undo-btn {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
 .stock-godown-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -773,8 +840,39 @@
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
-  padding: 2px 2px 0;
+  padding: 8px 2px 0;
+  margin-top: 4px;
+}
+
+.receipt-queue-footer {
+  width: 100%;
+  padding: 10px 12px;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.receipt-queue-status {
+  color: var(--ink);
+}
+
+.gate-table-editing table.dashboard-table {
+  min-width: 960px;
+}
+
+.table-inline-input {
+  min-width: 5.5rem;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.table-inline-actions {
+  width: 1%;
+  white-space: nowrap;
 }
 
 .receipt-more--split {
@@ -784,8 +882,15 @@
 .receipt-more-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: min(100%, 220px);
+}
+
+.receipt-more--split .receipt-more-right {
+  margin-left: auto;
 }
 
 .receipt-controls {
@@ -793,7 +898,45 @@
   margin: -10px 0 18px;
 }
 
+.receipt-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.receipt-expand-chevron {
+  display: inline-flex;
+  width: 1.1em;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.rejected-trucks-panel {
+  margin-bottom: 18px;
+}
+
 .rejected-receipts { margin-bottom: 18px; padding: 0; overflow: hidden; }
+
+.rejected-trucks-page-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.rejected-trucks-page-link:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
 
 .rejected-receipt-list { display: flex; flex-direction: column; }
 
@@ -808,6 +951,91 @@
 
 .rejected-receipt strong { display: block; color: var(--ink); font-size: 13px; }
 .rejected-receipt span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 600; }
+
+.rejected-receipt-note,
+.rejected-receipt-date {
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+}
+
+.stock-settlement-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.stock-settlement-hint {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+}
+
+.stock-settlement-toolbar {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.stock-settlement-default-rate {
+  margin: 0;
+  font-size: 12px;
+}
+
+.stock-settlement-lines {
+  display: grid;
+  gap: 12px;
+}
+
+.stock-settlement-line {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--surface);
+}
+
+.stock-settlement-line-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.stock-settlement-line-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stock-settlement-line-spacer {
+  display: none;
+}
+
+.stock-settlement-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.stock-settlement-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.stock-settlement-summary .ok { color: var(--green); }
+.stock-settlement-summary .warn { color: var(--gold-fg); }
+
+@media (max-width: 700px) {
+  .stock-settlement-line-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
 .help-widget {
   position: fixed;

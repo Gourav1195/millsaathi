@@ -35,6 +35,10 @@ import { useTableEditMode, withEditModeColumns } from '../lib/table-edit-mode';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 import { groupLotsForDisplay } from '../lib/stock-groups';
+import { stockReceiptBagInfo, stockReceiptRemainingKg } from '../lib/stock-receipts';
+import { splitLot } from '../lib/chain-run';
+import { formatDualQuantity, itemUsesVariableBags } from '../../../shared/quantity';
+import { StockSettlementDialog } from './stock-settlement-dialog';
 import { StockLedger } from './stock-ledger';
 
 type Lot = {
@@ -43,6 +47,7 @@ type Lot = {
   item_id?: string;
   item_name?: string;
   qty_kg?: number;
+  bag_count?: number | null;
   entered_quantity?: number | null;
   entered_unit?: string | null;
   godown_id?: string | null;
@@ -57,7 +62,14 @@ type Lot = {
 };
 
 type Godown = { id: string; name: string; stock_kg?: number; capacity_kg?: number };
-type Item = { id: string; name: string };
+type Item = {
+  id: string;
+  name: string;
+  tracking_mode?: string | null;
+  package_unit?: string | null;
+  package_quantity_base?: number | null;
+  gate_bag_count_required?: number | null;
+};
 type Receipt = {
   id: string;
   token_no?: string;
@@ -65,8 +77,15 @@ type Receipt = {
   item_name?: string;
   item_id?: string;
   net_kg?: number;
+  allocated_qty_kg?: number;
+  allocated_bag_count?: number;
+  observed_bag_count?: number | null;
+  stock_status?: string;
   moisture_pct?: number | null;
   sauda_rate_paise_per_qtl?: number;
+  gate_rate_paise_per_qtl?: number;
+  stock_note?: string | null;
+  can_reopen?: number | boolean;
 };
 
 type Overview = {
@@ -94,6 +113,15 @@ type NewLotForm = {
   value: string;
   note: string;
 };
+
+type AcceptUndo = {
+  lotId: string;
+  lotCode: string;
+  tokenNo?: string;
+};
+
+const ACCEPT_UNDO_SECONDS = 10;
+const ACCEPT_UNDO_START = ACCEPT_UNDO_SECONDS - 1;
 
 const pct = (value: number | null | undefined) =>
   value == null ? '—' : `${value.toLocaleString('en-IN', { maximumFractionDigits: 1 })}%`;
@@ -124,8 +152,13 @@ function godownFill(stockKg: number, capacityKg: number) {
   return { fill, tone: 'success' as const };
 }
 
-function receiptValue(receipt: Receipt) {
-  return Math.round(Math.max(0, receipt.net_kg ?? 0) * ((receipt.sauda_rate_paise_per_qtl ?? 0) / 100));
+function receiptValue(receipt: Receipt, qtyKg?: number) {
+  const quantityKg = qtyKg ?? stockReceiptRemainingKg(receipt);
+  return Math.round(Math.max(0, quantityKg) * ((receipt.sauda_rate_paise_per_qtl ?? 0) / 100));
+}
+
+function ExpandChevron({ expanded }: { expanded: boolean }) {
+  return <span className="receipt-expand-chevron" aria-hidden="true">{expanded ? '⌃' : '⌄'}</span>;
 }
 
 export function StockApp() {
@@ -141,12 +174,19 @@ export function StockApp() {
   const [showNew, setShowNew] = useState(false);
   const [newForm, setNewForm] = useState<NewLotForm>(() => emptyNewForm());
   const [receiptGodowns, setReceiptGodowns] = useState<Record<string, string>>({});
+  const [settlementReceipt, setSettlementReceipt] = useState<Receipt | null>(null);
   const [receiptsExpanded, setReceiptsExpanded] = useState(false);
   const [rejectedOpen, setRejectedOpen] = useState(false);
   const [rejectedExpanded, setRejectedExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [acceptUndo, setAcceptUndo] = useState<AcceptUndo | null>(null);
+  const [acceptUndoCountdown, setAcceptUndoCountdown] = useState<number | null>(null);
+  const [splitChildKg, setSplitChildKg] = useState('');
+  const [splitChildBags, setSplitChildBags] = useState('');
+  const [splitNote, setSplitNote] = useState('');
   const editDialogRef = useRef<HTMLDialogElement>(null);
+  const acceptUndoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const tableEdit = useTableEditMode();
 
   const load = async () => {
@@ -174,6 +214,37 @@ export function StockApp() {
     if (editing && editForm && !dialog.open) dialog.showModal();
     if (!editing && dialog.open) dialog.close();
   }, [editing, editForm]);
+
+  useEffect(() => () => {
+    if (acceptUndoIntervalRef.current) clearInterval(acceptUndoIntervalRef.current);
+  }, []);
+
+  function clearAcceptUndoTimers() {
+    if (acceptUndoIntervalRef.current) clearInterval(acceptUndoIntervalRef.current);
+    acceptUndoIntervalRef.current = null;
+  }
+
+  function scheduleAcceptUndo(next: AcceptUndo) {
+    clearAcceptUndoTimers();
+    setAcceptUndo(next);
+    setAcceptUndoCountdown(ACCEPT_UNDO_START);
+    acceptUndoIntervalRef.current = setInterval(() => {
+      setAcceptUndoCountdown((current) => {
+        if (current == null || current <= 0) {
+          clearAcceptUndoTimers();
+          setAcceptUndo(null);
+          return null;
+        }
+        return current - 1;
+      });
+    }, 1000);
+  }
+
+  function clearAcceptUndo() {
+    clearAcceptUndoTimers();
+    setAcceptUndo(null);
+    setAcceptUndoCountdown(null);
+  }
 
   const canMoney = canViewFinance(session ?? { role: '' });
   const canCreate = can(session, 'stock:create');
@@ -239,6 +310,40 @@ export function StockApp() {
     setShowNew(false);
     setEditing(lot);
     setEditForm(initialEditForm(lot));
+    setSplitChildKg('');
+    setSplitChildBags('');
+    setSplitNote('');
+  }
+
+  async function splitForProcessing() {
+    if (!editing) return;
+    const item = overview?.items.find((entry) => entry.id === editing.item_id);
+    if (!item || !itemUsesVariableBags(item.tracking_mode)) return;
+    const childKg = Math.round(Number(splitChildKg));
+    const childBags = Math.round(Number(splitChildBags));
+    if (!Number.isInteger(childKg) || childKg <= 0 || childKg >= (editing.qty_kg ?? 0)) {
+      setError('Enter a measured child weight less than the lot remaining weight.');
+      return;
+    }
+    if (!Number.isInteger(childBags) || childBags <= 0) {
+      setError('Enter a positive whole child bag count.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await splitLot(editing.id, {
+        child_kg: childKg,
+        child_bag_count: childBags,
+        note: splitNote.trim() || 'Split for processing',
+      });
+      closeEdit();
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not split lot');
+    } finally {
+      setSaving(false);
+    }
   }
 
   function clearFilters() {
@@ -334,20 +439,32 @@ export function StockApp() {
       setError('Choose a godown before accepting.');
       return;
     }
+    const remainingKg = stockReceiptRemainingKg(receipt);
+    const bagInfo = stockReceiptBagInfo(receipt, overview?.items ?? []);
     setSaving(true);
     setError(null);
     try {
-      await api(
+      const created = await api<{ id: string; code: string }>(
         '/api/lots',
         json('POST', {
           gate_entry_id: receipt.id,
           godown_id: godownId,
           item_id: receipt.item_id || null,
-          qty_kg: Math.round(receipt.net_kg ?? 0),
+          qty_kg: remainingKg,
+          ...(bagInfo?.usesVariableBags && bagInfo.remainingBags != null
+            ? { bag_count: bagInfo.remainingBags, weight_source: 'WEIGHED' }
+            : bagInfo?.usesFixedBags
+              ? { quantity: bagInfo.remainingBags, unit: 'BAG' }
+              : {}),
           moisture_pct: receipt.moisture_pct ?? null,
-          value_paise: receiptValue(receipt),
+          value_paise: receiptValue(receipt, remainingKg),
         }),
       );
+      scheduleAcceptUndo({
+        lotId: created.id,
+        lotCode: created.code,
+        tokenNo: receipt.token_no,
+      });
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not accept truck into stock');
@@ -356,17 +473,24 @@ export function StockApp() {
     }
   }
 
-  async function rejectReceipt(receiptId: string) {
+  async function undoAccept() {
+    if (!acceptUndo) return;
     setSaving(true);
     setError(null);
     try {
-      await api(`/api/stock-receipts/${receiptId}/skip`, json('POST', { note: 'Rejected from stock page' }));
+      await api(`/api/lots/${acceptUndo.lotId}/undo-accept`, json('POST', {}));
+      clearAcceptUndo();
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not reject truck');
+      setError(cause instanceof Error ? cause.message : 'Could not undo truck accept');
     } finally {
       setSaving(false);
     }
+  }
+
+  function openSettlement(receipt: Receipt) {
+    setError(null);
+    setSettlementReceipt(receipt);
   }
 
   async function reopenReceipt(receiptId: string) {
@@ -415,6 +539,20 @@ export function StockApp() {
 
         {error && <Alert title="Action failed" level="red">{error}</Alert>}
 
+        {acceptUndo && acceptUndoCountdown != null ? (
+          <article className="stock-accept-undo" aria-live="polite">
+            <p className="stock-accept-undo-copy">
+              <strong>{acceptUndo.lotCode}</strong>
+              {acceptUndo.tokenNo ? ` from truck ${acceptUndo.tokenNo}` : ''} added to stock.
+            </p>
+            {canCreate ? (
+              <Button type="button" className="quiet stock-accept-undo-btn" disabled={saving} onClick={() => void undoAccept()}>
+                Undo {acceptUndoCountdown}
+              </Button>
+            ) : null}
+          </article>
+        ) : null}
+
         <div className="stock-godown-grid">
           {(overview?.godowns ?? []).map((godown) => {
             const stockKg = godown.stock_kg ?? 0;
@@ -444,56 +582,72 @@ export function StockApp() {
           })}
         </div>
 
+        <div className={`${rejected.length && rejectedOpen ? 'rejected-trucks-panel rejected-trucks-panel--open' : ''}`}>
         {pending.length ? (
           <div className="receipt-list">
-            {shownReceipts.map((receipt) => (
-              <article key={receipt.id} className="receipt-toast">
-                <div className="receipt-toast-copy">
-                  <p className="receipt-toast-title">Add incoming truck to stock?</p>
-                  <p className="receipt-toast-detail">
-                    {receipt.token_no ?? 'Truck'} · {receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(receipt.net_kg)}
-                    {receipt.moisture_pct != null ? ` · ${pct(receipt.moisture_pct)}` : ''}
-                  </p>
-                  <p className="receipt-toast-hint">Choose the godown before accepting. This creates a linked lot and keeps the truck traceable.</p>
-                </div>
-                <div className="receipt-toast-actions">
-                  {(overview?.godowns.length ?? 0) > 0 ? (
-                    <label className="receipt-godown stock-godown-picker">
-                      <span>Godown</span>
-                      <Select
-                        value={receiptGodowns[receipt.id] ?? overview?.godowns[0]?.id ?? ''}
-                        onChange={(event) => setReceiptGodowns({ ...receiptGodowns, [receipt.id]: event.target.value })}
-                      >
-                        {(overview?.godowns ?? []).map((godown) => (
-                          <option key={godown.id} value={godown.id}>{godown.name}</option>
-                        ))}
-                      </Select>
-                    </label>
-                  ) : null}
-                  {canCreate ? (
-                    <Button type="button" className="quiet receipt-action" disabled={saving} onClick={() => void acceptReceipt(receipt)}>Accept</Button>
-                  ) : null}
-                  {canEdit ? (
-                    <Button type="button" className="secondary receipt-action" disabled={saving} onClick={() => void rejectReceipt(receipt.id)}>Reject</Button>
-                  ) : null}
-                </div>
-              </article>
-            ))}
+            {shownReceipts.map((receipt) => {
+              const bagInfo = stockReceiptBagInfo(receipt, overview?.items ?? []);
+              const remainingKg = stockReceiptRemainingKg(receipt);
+              return (
+                <article key={receipt.id} className="receipt-toast">
+                  <div className="receipt-toast-copy">
+                    <p className="receipt-toast-title">
+                      {receipt.stock_status === 'partial' ? 'Finish stock intake for this truck?' : 'Add incoming truck to stock?'}
+                    </p>
+                    <p className="receipt-toast-detail">
+                      {receipt.token_no ?? 'Truck'} · {receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(remainingKg || receipt.net_kg)}
+                      {bagInfo ? ` · ${bagInfo.remainingBags} bag${bagInfo.remainingBags === 1 ? '' : 's'} left` : ''}
+                      {receipt.moisture_pct != null ? ` · ${pct(receipt.moisture_pct)}` : ''}
+                    </p>
+                    <p className="receipt-toast-hint">
+                      Accept takes the full remaining truck into stock. Use Reject to split rejected bags and accepted bags at different rates.
+                    </p>
+                  </div>
+                  <div className="receipt-toast-actions">
+                    {(overview?.godowns.length ?? 0) > 0 ? (
+                      <label className="receipt-godown stock-godown-picker">
+                        <span>Godown</span>
+                        <Select
+                          value={receiptGodowns[receipt.id] ?? overview?.godowns[0]?.id ?? ''}
+                          onChange={(event) => setReceiptGodowns({ ...receiptGodowns, [receipt.id]: event.target.value })}
+                        >
+                          {(overview?.godowns ?? []).map((godown) => (
+                            <option key={godown.id} value={godown.id}>{godown.name}</option>
+                          ))}
+                        </Select>
+                      </label>
+                    ) : null}
+                    {canCreate ? (
+                      <Button type="button" className="quiet receipt-action" disabled={saving} onClick={() => void acceptReceipt(receipt)}>
+                        Accept
+                      </Button>
+                    ) : null}
+                    {canEdit ? (
+                      <Button type="button" className="secondary receipt-action" disabled={saving} onClick={() => openSettlement(receipt)}>
+                        Reject
+                      </Button>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
             {pending.length > 1 ? (
-              <div className={`receipt-more${rejected.length ? ' receipt-more--split' : ''}`}>
+              <div className={`receipt-more receipt-queue-footer${rejected.length ? ' receipt-more--split' : ''}`}>
                 {rejected.length ? (
-                  <Button type="button" className="quiet" onClick={() => setRejectedOpen((value) => !value)}>
-                    {rejectedOpen ? 'Hide rejected trucks' : `See rejected trucks (${rejected.length})`}
+                  <Button type="button" className="quiet receipt-expand-btn rejected-trucks-toggle" onClick={() => setRejectedOpen((value) => !value)}>
+                    <span>{rejectedOpen ? 'Hide rejected trucks' : `See rejected trucks (${rejected.length})`}</span>
+                    <ExpandChevron expanded={rejectedOpen} />
                   </Button>
                 ) : null}
                 <div className="receipt-more-right">
-                  <span className="hint">
+                  <span className="hint receipt-queue-status">
                     {receiptsExpanded
-                      ? `Showing all ${pending.length}`
-                      : `${pending.length - 1} more truck${pending.length > 2 ? 's' : ''} waiting for stock`}
+                      ? `Showing all ${pending.length} trucks`
+                      : `${pending.length} trucks waiting`}
                   </span>
-                  <Button type="button" className="quiet" onClick={() => setReceiptsExpanded((value) => !value)}>
-                    {receiptsExpanded ? 'Show less' : `Show all ${pending.length}`}
+                  <Button type="button" className="quiet receipt-expand-btn" onClick={() => setReceiptsExpanded((value) => !value)}>
+                    <span>{receiptsExpanded ? 'Show less' : `Show all ${pending.length}`}</span>
+                    <ExpandChevron expanded={receiptsExpanded} />
                   </Button>
                 </div>
               </div>
@@ -508,40 +662,65 @@ export function StockApp() {
 
         {rejected.length && pending.length <= 1 ? (
           <div className="receipt-controls">
-            <Button type="button" className="quiet" onClick={() => setRejectedOpen((value) => !value)}>
-              {rejectedOpen ? 'Hide rejected trucks' : `See rejected trucks (${rejected.length})`}
+            <Button type="button" className="quiet receipt-expand-btn rejected-trucks-toggle" onClick={() => setRejectedOpen((value) => !value)}>
+              <span>{rejectedOpen ? 'Hide rejected trucks' : `See rejected trucks (${rejected.length})`}</span>
+              <ExpandChevron expanded={rejectedOpen} />
             </Button>
           </div>
         ) : null}
 
         {rejected.length && rejectedOpen ? (
-          <TableCard title="Recently rejected trucks" subtitle="A rejection can be reopened for two days, then it is kept as an audit decision." className="rejected-receipts">
-            <div className="rejected-receipt-list">
-              {shownRejected.map((receipt) => (
-                <div key={receipt.id} className="rejected-receipt">
-                  <div>
-                    <strong>{receipt.token_no ?? 'Truck'}</strong>
-                    <span>{receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(receipt.net_kg)}</span>
+            <TableCard
+              title="Recently rejected trucks"
+              subtitle="A rejection can be reopened for two days, then it is kept as an audit decision."
+              className="rejected-receipts"
+              actions={
+                <AppLink href="/app/stock/rejected" className="rejected-trucks-page-link" aria-label="Open all rejected trucks">
+                  →
+                </AppLink>
+              }
+            >
+              <div className="rejected-receipt-list">
+                {shownRejected.map((receipt) => (
+                  <div key={receipt.id} className="rejected-receipt">
+                    <div>
+                      <strong>{receipt.token_no ?? 'Truck'}</strong>
+                      <span>{receipt.supplier_name ?? 'Supplier'} · {receipt.item_name ?? 'Item'} · {formatQtl(receipt.net_kg)}</span>
+                      {receipt.stock_note ? <span className="rejected-receipt-note">{receipt.stock_note}</span> : null}
+                    </div>
+                    {canEdit && receipt.can_reopen ? (
+                      <Button type="button" className="quiet" disabled={saving} onClick={() => void reopenReceipt(receipt.id)}>
+                        Restore to stock
+                      </Button>
+                    ) : null}
                   </div>
-                  {canEdit ? (
-                    <Button type="button" className="quiet" disabled={saving} onClick={() => void reopenReceipt(receipt.id)}>
-                      Restore to stock
-                    </Button>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            {rejected.length > 3 ? (
-              <div className="receipt-more">
-                <span className="hint">
-                  {rejectedExpanded ? `Showing all ${rejected.length}` : `${rejected.length - 3} more rejected truck${rejected.length > 4 ? 's' : ''}`}
-                </span>
-                <Button type="button" className="quiet" onClick={() => setRejectedExpanded((value) => !value)}>
-                  {rejectedExpanded ? 'Show less' : `Show all ${rejected.length}`}
-                </Button>
+                ))}
               </div>
-            ) : null}
-          </TableCard>
+              {rejected.length > 3 ? (
+                <div className="receipt-more">
+                  <span className="hint">
+                    {rejectedExpanded ? `Showing all ${rejected.length}` : `${rejected.length - 3} more rejected truck${rejected.length > 4 ? 's' : ''}`}
+                  </span>
+                  <Button type="button" className="quiet receipt-expand-btn" onClick={() => setRejectedExpanded((value) => !value)}>
+                    <span>{rejectedExpanded ? 'Show less' : `Show all ${rejected.length}`}</span>
+                    <ExpandChevron expanded={rejectedExpanded} />
+                  </Button>
+                </div>
+              ) : null}
+            </TableCard>
+        ) : null}
+        </div>
+
+        {settlementReceipt ? (
+          <StockSettlementDialog
+            receipt={settlementReceipt}
+            items={overview?.items ?? []}
+            godowns={overview?.godowns ?? []}
+            godownId={receiptGodowns[settlementReceipt.id] ?? overview?.godowns[0]?.id ?? ''}
+            canViewFinance={canMoney}
+            onClose={() => setSettlementReceipt(null)}
+            onSaved={load}
+          />
         ) : null}
 
         {showNew && (
@@ -648,6 +827,39 @@ export function StockApp() {
                 <Field label="Note">
                   <Textarea value={editForm.note} onChange={(e) => setEditForm({ ...editForm, note: e.target.value })} />
                 </Field>
+                {(() => {
+                  const item = overview?.items.find((entry) => entry.id === editing.item_id);
+                  if (!item || !itemUsesVariableBags(item.tracking_mode)) return null;
+                  return (
+                    <div className="full-width stock-split-panel">
+                      <h3>Split for processing</h3>
+                      <p className="muted">Need only part of this lot? Split and weigh that portion first.</p>
+                      <p className="muted">
+                        {formatDualQuantity({
+                          weightKg: editing.qty_kg ?? 0,
+                          bagCount: editing.bag_count,
+                          trackingMode: 'VARIABLE_BAG',
+                        })}
+                      </p>
+                      <FormGrid className="ui-form-grid--compact">
+                        <Field label="Measured child weight (kg)">
+                          <Input inputMode="numeric" value={splitChildKg} onChange={(e) => setSplitChildKg(e.target.value)} />
+                        </Field>
+                        <Field label="Child bag count">
+                          <Input inputMode="numeric" value={splitChildBags} onChange={(e) => setSplitChildBags(e.target.value)} />
+                        </Field>
+                        <Field label="Reason / note">
+                          <Input value={splitNote} onChange={(e) => setSplitNote(e.target.value)} />
+                        </Field>
+                        <FormActions>
+                          <Button type="button" className="secondary" disabled={saving} onClick={() => void splitForProcessing()}>
+                            Split weighed portion
+                          </Button>
+                        </FormActions>
+                      </FormGrid>
+                    </div>
+                  );
+                })()}
                 <FormActions className="stock-edit-dialog-actions">
                   <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
                   <Button className="secondary" type="button" onClick={closeEdit} disabled={saving}>Cancel</Button>
@@ -656,31 +868,6 @@ export function StockApp() {
             </>
           ) : null}
         </dialog>
-
-        <Panel title="Inventory by purchase & material" className="stock-group-panel">
-          <p className="muted">Grouped stock for processing selection. Expand a group to see godown-wise lots.</p>
-          {stockGroups.length ? stockGroups.map((group) => (
-            <details key={group.group_key} className="stock-group-card">
-              <summary>
-                {group.item_name}
-                {group.sauda_code ? ` · ${group.sauda_code}` : ' · Unlinked stock'}
-                {' · '}{formatQtl(group.total_qty_kg)} total
-              </summary>
-              <div className="stock-group-lots">
-                {group.lots.map((lot) => (
-                  <div key={lot.id} className="line">
-                    <span>
-                      <strong>{lot.code}</strong>
-                      {' · '}{lot.godown_name ?? 'No godown'}
-                      {' · '}{formatQtl(lot.qty_kg)}
-                      {lot.gate_token_no ? ` · truck ${lot.gate_token_no}` : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          )) : <EmptyState>No grouped stock in this view.</EmptyState>}
-        </Panel>
 
         <TableCard
           title="Lots on hand"
@@ -728,11 +915,23 @@ export function StockApp() {
 
           <DataTable columns={columns}>
             {pageData.rows.length ? pageData.rows.map((lot) => (
-              <tr key={lot.id}>
+              <tr key={lot.id} className={acceptUndo?.lotId === lot.id ? 'stock-lot-row--just-accepted' : undefined}>
                 {tableEdit.editMode && canEdit && (
                   <TableEditCell label={lot.code} onClick={() => startEdit(lot)} />
                 )}
-                <td><strong className="dashboard-token">{lot.code}</strong></td>
+                <td>
+                  <strong className="dashboard-token">{lot.code}</strong>
+                  {acceptUndo?.lotId === lot.id && acceptUndoCountdown != null && canCreate ? (
+                    <Button
+                      type="button"
+                      className="quiet stock-lot-undo-btn"
+                      disabled={saving}
+                      onClick={() => void undoAccept()}
+                    >
+                      Undo {acceptUndoCountdown}
+                    </Button>
+                  ) : null}
+                </td>
                 <td>{lot.godown_name ?? '—'}</td>
                 <td>{lot.item_name ?? '—'}</td>
                 <td><strong>{formatQtl(lot.qty_kg)}</strong></td>
@@ -756,6 +955,32 @@ export function StockApp() {
             onNext={() => setPage((value) => value + 1)}
           />
         </TableCard>
+
+        <Panel title="Inventory by purchase & material" className="stock-group-panel">
+          <p className="muted">Grouped stock for processing selection. Expand a group to see godown-wise lots.</p>
+          {stockGroups.length ? stockGroups.map((group) => (
+            <details key={group.group_key} className="stock-group-card">
+              <summary>
+                {group.item_name}
+                {group.sauda_code ? ` · ${group.sauda_code}` : ' · Unlinked stock'}
+                {' · '}{formatQtl(group.total_qty_kg)} total
+              </summary>
+              <div className="stock-group-lots">
+                {group.lots.map((lot) => (
+                  <div key={lot.id} className="line">
+                    <span>
+                      <strong>{lot.code}</strong>
+                      {' · '}{lot.godown_name ?? 'No godown'}
+                      {' · '}{formatQtl(lot.qty_kg)}
+                      {lot.gate_token_no ? ` · truck ${lot.gate_token_no}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )) : <EmptyState>No grouped stock in this view.</EmptyState>}
+        </Panel>
+
         {overview && <StockLedger items={overview.items} />}
       </section>
     </main>

@@ -46,6 +46,15 @@ import { saudaDetailRows } from '../lib/row-details';
 import { useSession } from '../lib/session';
 import { api, json } from '../lib/api';
 import { TableCellDetail, TableClampedText } from './table-cell-detail';
+import { SaudaTruckTable } from './sauda-truck-table';
+import {
+  commercialQuantityStep,
+  commercialQuantityUnitsForItem,
+  commercialRateLabel,
+  defaultCommercialQuantityUnit,
+  formatCommercialQuantity,
+  type ItemTrackingConfigInput,
+} from '../../../shared/quantity';
 
 type Sauda = {
   id: string;
@@ -55,8 +64,11 @@ type Sauda = {
   fulfilment_status?: string;
   supplier_name?: string;
   buyer_name?: string;
+  item_id?: string;
   item_name?: string;
   qty_kg?: number;
+  agreed_quantity?: number | null;
+  agreed_unit?: string | null;
   fulfilled_qty_base?: number;
   rate_paise_per_qtl?: number;
   broker_name?: string | null;
@@ -71,11 +83,12 @@ type Sauda = {
   commission_paise?: number | null;
 };
 type Reference = { id: string; name: string };
+type ItemRef = Reference & ItemTrackingConfigInput;
 type Overview = {
   saudas: Sauda[];
   suppliers: Reference[];
   buyers: Reference[];
-  items: Reference[];
+  items: ItemRef[];
   godowns: Reference[];
   gate?: GateEntry[];
 };
@@ -84,7 +97,11 @@ type GateEntry = {
   sauda_id?: string | null;
   token_no?: string;
   vehicle_no?: string;
+  gross_kg?: number | null;
+  tare_kg?: number | null;
   net_kg?: number;
+  observed_bag_count?: number | null;
+  moisture_pct?: number | null;
   status?: string;
   stock_status?: string;
   entry_date?: string;
@@ -94,6 +111,20 @@ type AgreementForm = { direction: 'in' | 'out'; party_id: string; item_id: strin
 
 const qtl = (kg: number | undefined) => `${((kg ?? 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })} qtl`;
 const money = (paise: number | undefined) => paise == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(paise / 100);
+const formatSaudaAgreed = (sauda: Sauda) => {
+  const unit = String(sauda.agreed_unit ?? '').trim().toUpperCase();
+  if (sauda.agreed_quantity != null && unit) return formatCommercialQuantity(sauda.agreed_quantity, unit);
+  return qtl(sauda.qty_kg);
+};
+const formatSaudaFulfilled = (sauda: Sauda) => {
+  const unit = String(sauda.agreed_unit ?? '').trim().toUpperCase();
+  if (unit === 'BAG' || unit === 'PIECE') return formatCommercialQuantity(sauda.fulfilled_qty_base, unit);
+  return qtl(sauda.fulfilled_qty_base);
+};
+const formatDeliveryQuantity = (entry: Delivery) => {
+  if (entry.actual_qty != null && entry.actual_unit) return formatCommercialQuantity(entry.actual_qty, entry.actual_unit);
+  return qtl(entry.actual_qty_base);
+};
 const today = () => new Date().toISOString().slice(0, 10);
 const blankAgreement = (): AgreementForm => ({ direction: 'in', party_id: '', item_id: '', quantity: '', unit: 'QUINTAL', rate: '', agreement_date: today(), delivery_start: '', delivery_end: '', tolerance: '5', broker: 'Direct', note: '' });
 const blankDelivery = () => ({ quantity: '', unit: 'KG', actual_date: today(), godown_id: '', notes: '' });
@@ -179,8 +210,27 @@ export function PurchaseApp() {
     if (!statusEdit && dialog.open) dialog.close();
   }, [statusEdit]);
   const parties = agreement.direction === 'in' ? overview?.suppliers ?? [] : overview?.buyers ?? [];
+  const agreementItem = useMemo(
+    () => (overview?.items ?? []).find((item) => item.id === agreement.item_id) ?? null,
+    [overview?.items, agreement.item_id],
+  );
+  const agreementUnits = useMemo(() => commercialQuantityUnitsForItem(agreementItem), [agreementItem]);
+  const agreementQtyStep = commercialQuantityStep(agreement.unit);
+  const deliveryItem = useMemo(
+    () => (overview?.items ?? []).find((item) => item.id === deliveryFor?.item_id) ?? null,
+    [overview?.items, deliveryFor?.item_id],
+  );
+  const deliveryUnits = useMemo(() => commercialQuantityUnitsForItem(deliveryItem), [deliveryItem]);
+  const deliveryQtyStep = commercialQuantityStep(delivery.unit);
   const agreementPanelClass = `party-add-panel party-add-panel--${agreement.direction === 'in' ? 'seller' : 'buyer'}`;
   const saudaCode = (sauda: Sauda) => formatSaudaCode(sauda.code, sauda.direction);
+
+  function openDeliveryForm(sauda: Sauda) {
+    const item = (overview?.items ?? []).find((entry) => entry.id === sauda.item_id) ?? null;
+    const unit = String(sauda.agreed_unit ?? '').trim().toUpperCase() || defaultCommercialQuantityUnit(item);
+    setDelivery({ ...blankDelivery(), unit });
+    setDeliveryFor(sauda);
+  }
 
   async function createAgreement(event: FormEvent) {
     event.preventDefault();
@@ -367,22 +417,32 @@ export function PurchaseApp() {
                 </Select>
               </Field>
               <Field label="Item">
-                <Select required value={agreement.item_id} onChange={(e) => setAgreement({ ...agreement, item_id: e.target.value })}>
+                <Select
+                  required
+                  value={agreement.item_id}
+                  onChange={(e) => {
+                    const itemId = e.target.value;
+                    const item = (overview?.items ?? []).find((entry) => entry.id === itemId) ?? null;
+                    setAgreement({
+                      ...agreement,
+                      item_id: itemId,
+                      unit: defaultCommercialQuantityUnit(item),
+                    });
+                  }}
+                >
                   <option value="">Select</option>
                   {(overview?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </Select>
               </Field>
               <Field label="Quantity">
-                <Input required type="number" min="0.001" step="0.001" value={agreement.quantity} onChange={(e) => setAgreement({ ...agreement, quantity: e.target.value })} />
+                <Input required type="number" min={agreementQtyStep.min} step={agreementQtyStep.step} value={agreement.quantity} onChange={(e) => setAgreement({ ...agreement, quantity: e.target.value })} />
               </Field>
               <Field label="Unit">
                 <Select value={agreement.unit} onChange={(e) => setAgreement({ ...agreement, unit: e.target.value })}>
-                  <option>KG</option>
-                  <option>QUINTAL</option>
-                  <option>TONNE</option>
+                  {agreementUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                 </Select>
               </Field>
-              <Field label="Rate ₹ / qtl">
+              <Field label={commercialRateLabel(agreement.unit)}>
                 <Input required type="number" min="0" step="0.01" value={agreement.rate} onChange={(e) => setAgreement({ ...agreement, rate: e.target.value })} />
               </Field>
               <Field label="Agreement date">
@@ -414,13 +474,11 @@ export function PurchaseApp() {
           <Panel title={`Manual delivery · ${saudaCode(deliveryFor)}`}>
             <FormGrid onSubmit={addDelivery}>
               <Field label="Quantity">
-                <Input required type="number" min="0.001" step="0.001" value={delivery.quantity} onChange={(e) => setDelivery({ ...delivery, quantity: e.target.value })} />
+                <Input required type="number" min={deliveryQtyStep.min} step={deliveryQtyStep.step} value={delivery.quantity} onChange={(e) => setDelivery({ ...delivery, quantity: e.target.value })} />
               </Field>
               <Field label="Unit">
                 <Select value={delivery.unit} onChange={(e) => setDelivery({ ...delivery, unit: e.target.value })}>
-                  <option>KG</option>
-                  <option>QUINTAL</option>
-                  <option>TONNE</option>
+                  {deliveryUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
                 </Select>
               </Field>
               <Field label="Date">
@@ -451,7 +509,7 @@ export function PurchaseApp() {
             {deliveries.length ? deliveries.map((entry) => (
               <div className="line" key={entry.id}>
                 <span>
-                  {entry.actual_date ?? '—'} · {qtl(entry.actual_qty_base)}
+                  {entry.actual_date ?? '—'} · {formatDeliveryQuantity(entry)}
                   {entry.lot_code ? ` · ${entry.lot_code}` : ''}
                   {entry.gate_entry_id ? ' · Gate-linked' : ''}
                 </span>
@@ -550,8 +608,8 @@ export function PurchaseApp() {
                   <td>{sauda.direction === 'out' ? 'Sale' : 'Purchase'}</td>
                   <td>{sauda.direction === 'out' ? sauda.buyer_name ?? '—' : sauda.supplier_name ?? '—'}</td>
                   <td>{sauda.item_name ?? '—'}</td>
-                  <td>{qtl(sauda.qty_kg)}</td>
-                  <td>{qtl(sauda.fulfilled_qty_base)}</td>
+                  <td>{formatSaudaAgreed(sauda)}</td>
+                  <td>{formatSaudaFulfilled(sauda)}</td>
                   <td><Badge tone="gold">{sauda.fulfilment_status ?? sauda.status ?? '—'}</Badge></td>
                   <td className="table-note-col"><TableClampedText text={sauda.note} /></td>
                   <td>
@@ -563,23 +621,18 @@ export function PurchaseApp() {
                       ) : null}
                       <Button type="button" className="secondary" onClick={() => void openHistory(sauda)}>History</Button>
                       {canCreate && (
-                        <Button type="button" className="secondary" onClick={() => setDeliveryFor(sauda)}>Delivery</Button>
+                        <Button type="button" className="secondary" onClick={() => openDeliveryForm(sauda)}>Delivery</Button>
                       )}
                     </TableActions>
                   </td>
                 </tr>,
-                ...(expanded ? trucks.map((truck) => (
-                  <tr key={`${sauda.id}-${truck.id}`} className="sauda-truck-row">
+                ...(expanded ? [(
+                  <tr key={`${sauda.id}-trucks`} className="sauda-truck-row">
                     <td colSpan={colSpan}>
-                      <strong>{truck.token_no ?? 'Truck'}</strong>
-                      {' · '}{truck.vehicle_no ?? '—'}
-                      {' · '}{qtl(truck.net_kg)}
-                      {' · '}{truck.status ?? '—'}
-                      {truck.stock_status ? <> · stock {truck.stock_status}</> : null}
-                      {truck.entry_date ? <small> · {truck.entry_date}</small> : null}
+                      <SaudaTruckTable trucks={trucks} />
                     </td>
                   </tr>
-                )) : []),
+                )] : []),
               ];
             }) : (
               <tr>

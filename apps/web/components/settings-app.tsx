@@ -10,6 +10,7 @@ import {
   EmptyState,
   PageHeader,
   Panel,
+  Select,
   TableActions,
   TableCard,
   Tab,
@@ -18,7 +19,7 @@ import {
 import { millHeaderMeta } from '../lib/app-meta';
 import { formatDate } from '../lib/format';
 import { can, isOwnerRole } from '../lib/permissions';
-import { useSession } from '../lib/session';
+import { PREFERRED_UNITS, useSession, type PreferredUnit } from '../lib/session';
 import { api, json } from '../lib/api';
 import type { Theme } from '../lib/theme';
 
@@ -92,8 +93,16 @@ function archivedLabel(value?: string | null) {
   return value ? formatDate(value) : '—';
 }
 
+function preferredUnitLabel(unit: string) {
+  if (unit === 'KG') return 'Kilogram (kg)';
+  if (unit === 'TONNE') return 'Tonne';
+  if (unit === 'BAG') return 'Bag';
+  if (unit === 'PIECE') return 'Piece';
+  return 'Quintal';
+}
+
 export function SettingsApp() {
-  const { session, sessionError, updateTheme } = useSession();
+  const { session, sessionError, updateTheme, updatePreferredUnit } = useSession();
   const headerMeta = millHeaderMeta(session);
   const [section, setSection] = useState<SettingsSection>('general');
   const [tab, setTab] = useState<ArchivedTab>('parties');
@@ -101,7 +110,9 @@ export function SettingsApp() {
   const [error, setError] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [savingTheme, setSavingTheme] = useState(false);
+  const [savingPreferredUnit, setSavingPreferredUnit] = useState(false);
   const theme = session?.theme ?? 'light';
+  const preferredUnit = (session?.preferred_unit ?? 'QUINTAL') as PreferredUnit;
 
   const load = async () => {
     const body = await api<ArchivedData>('/api/archived');
@@ -133,6 +144,19 @@ export function SettingsApp() {
       setError(cause instanceof Error ? cause.message : 'Could not update theme');
     } finally {
       setSavingTheme(false);
+    }
+  }
+
+  async function setPreferredUnit(nextUnit: PreferredUnit) {
+    if (nextUnit === preferredUnit) return;
+    setSavingPreferredUnit(true);
+    setError(null);
+    try {
+      await updatePreferredUnit(nextUnit);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not update preferred unit');
+    } finally {
+      setSavingPreferredUnit(false);
     }
   }
 
@@ -192,15 +216,43 @@ export function SettingsApp() {
         </TabRow>
 
         {section === 'general' && (
-          <Panel title="Appearance">
-            <p className="muted" style={{ marginTop: 0 }}>
-              Choose how MillSaathi looks on this device. Your preference is saved to your account.
-            </p>
-            <TabRow aria-label="Color mode">
-              <Tab selected={theme === 'light'} disabled={savingTheme} onClick={() => void setTheme('light')}>Light</Tab>
-              <Tab selected={theme === 'dark'} disabled={savingTheme} onClick={() => void setTheme('dark')}>Dark</Tab>
-            </TabRow>
-          </Panel>
+          <>
+            <Panel title="Preferred unit">
+              <p className="muted" style={{ marginTop: 0 }}>
+                Default unit for quantities across your mill. Processing, items, and stock screens use this as the starting unit.
+              </p>
+              {isOwner ? (
+                <label style={{ display: 'grid', gap: 8, maxWidth: 320 }}>
+                  <span className="muted">Mill unit</span>
+                  <Select
+                    value={preferredUnit}
+                    disabled={savingPreferredUnit}
+                    aria-label="Preferred unit"
+                    onChange={(event) => void setPreferredUnit(event.target.value as PreferredUnit)}
+                  >
+                    {PREFERRED_UNITS.map((unit) => (
+                      <option key={unit} value={unit}>{preferredUnitLabel(unit)}</option>
+                    ))}
+                  </Select>
+                </label>
+              ) : (
+                <p style={{ margin: 0 }}>
+                  <strong>{preferredUnitLabel(preferredUnit)}</strong>
+                  <span className="muted"> · Only the mill owner can change this.</span>
+                </p>
+              )}
+            </Panel>
+
+            <Panel title="Appearance">
+              <p className="muted" style={{ marginTop: 0 }}>
+                Choose how MillSaathi looks on this device. Your preference is saved to your account.
+              </p>
+              <TabRow aria-label="Color mode">
+                <Tab selected={theme === 'light'} disabled={savingTheme} onClick={() => void setTheme('light')}>Light</Tab>
+                <Tab selected={theme === 'dark'} disabled={savingTheme} onClick={() => void setTheme('dark')}>Dark</Tab>
+              </TabRow>
+            </Panel>
+          </>
         )}
 
         {section === 'archived' && (
